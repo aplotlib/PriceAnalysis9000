@@ -350,7 +350,7 @@ def generate_ad_spend_scenarios(current_price, proposed_price, current_ad_spend,
 # Main app function
 def main():
     # Display header
-    st.markdown("<h1 class='main-header'>TariffSight Pro: Import & Marketing ROI Calculator</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-header'>TariffSight Pro: Import & Marketing ROI Calculator (use light mode browser, display issues for dark mode)</h1>", unsafe_allow_html=True)
     st.markdown("""
     <div class='info-box'>
     Calculate how tariffs and advertising spend impact your product profitability. Model different scenarios to optimize your pricing and marketing strategy.
