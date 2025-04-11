@@ -7,7 +7,7 @@ from datetime import datetime
 
 # App configuration
 st.set_page_config(
-    page_title="TariffSight Pro: Import & Marketing ROI Calculator",
+    page_title="TariffSight Pro: Import & Marketing ROI Calculator (use light mode browser, display issues for dark mode)",
     page_icon="🧮",
     layout="wide",
     initial_sidebar_state="expanded"
