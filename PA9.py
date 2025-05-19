@@ -38,7 +38,7 @@ if not st.session_state.auth_ok:
     if st.button("Login"):
         if pwd == _PASSWORD:
             st.session_state.auth_ok = True
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Incorrect password – try again")
     st.stop()
@@ -427,10 +427,10 @@ def ai_chat_page():
             except Exception as e:
                 resp=f"Error: {e}"
             st.session_state.ai_chat_history.append(dict(role='assistant',content=resp))
-        st.experimental_rerun()
+        st.rerun()
     if st.button("Clear chat"):
         st.session_state.ai_chat_history=[]
-        st.experimental_rerun()
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # PAGE ROUTER
