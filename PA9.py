@@ -529,31 +529,148 @@ def chat_with_ai(results, issue_description, chat_history=None):
     
     return chat_history
 
-# --- PASSWORD VERIFICATION ---
-def verify_password(password):
-    """Temporary simplified password check"""
-    return password == "MPFvive8955@#@"  # Just check direct equality
+# --- SALES ANALYSIS FUNCTIONS ---
 
-# --- API KEY HANDLING ---
-try:
-    api_key = st.secrets["openai_api_key"]
-except (FileNotFoundError, KeyError):
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+def load_sales_data():
+    """
+    Load sample sales data or return placeholder if not available
+    In a real application, this would load from a database or file
+    """
+    try:
+        # Placeholder for actual data loading
+        # In a real app, this would connect to your data source
+        data = {
+            "date": pd.date_range(start="2023-01-01", periods=365, freq="D"),
+            "sales": np.random.randint(100, 1000, 365),
+            "channel": np.random.choice(["Amazon", "Website", "Retail"], 365),
+            "product_category": np.random.choice(["Health", "Wellness", "Medical", "Fitness"], 365),
+        }
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Error loading sales data: {e}")
+        return pd.DataFrame()
 
-# Initialize OpenAI client
-client = initialize_openai_client(api_key)
+def analyze_sales_trends(df):
+    """Analyze sales trends from the dataframe"""
+    if df.empty:
+        return None
+    
+    # Group by date and calculate daily sales
+    daily_sales = df.groupby("date")["sales"].sum().reset_index()
+    
+    # Calculate 7-day moving average
+    daily_sales["7d_moving_avg"] = daily_sales["sales"].rolling(window=7).mean()
+    
+    # Calculate month-to-date sales
+    daily_sales["month"] = daily_sales["date"].dt.month
+    daily_sales["year"] = daily_sales["date"].dt.year
+    monthly_sales = daily_sales.groupby(["year", "month"])["sales"].sum().reset_index()
+    
+    # Calculate sales by channel
+    channel_sales = df.groupby("channel")["sales"].sum().reset_index()
+    
+    # Calculate sales by product category
+    category_sales = df.groupby("product_category")["sales"].sum().reset_index()
+    
+    return {
+        "daily_sales": daily_sales,
+        "monthly_sales": monthly_sales,
+        "channel_sales": channel_sales,
+        "category_sales": category_sales
+    }
 
-def display_dashboard():
-    st.markdown('<div class="main-header">Business Overview Dashboard</div>', unsafe_allow_html=True)
-    # Your existing dashboard code here
+# --- INVENTORY MANAGEMENT FUNCTIONS ---
 
-def display_sales_analysis():
-    st.markdown('<div class="main-header">Sales Analysis</div>', unsafe_allow_html=True)
-    # Your existing sales analysis code here
+def load_inventory_data():
+    """
+    Load sample inventory data or return placeholder if not available
+    In a real application, this would load from a database or file
+    """
+    try:
+        # Placeholder for actual data loading
+        # In a real app, this would connect to your data source
+        data = {
+            "sku": [f"VH-{i:04d}" for i in range(1, 51)],
+            "product_name": [f"Product {i}" for i in range(1, 51)],
+            "category": np.random.choice(["Health", "Wellness", "Medical", "Fitness"], 50),
+            "in_stock": np.random.randint(0, 100, 50),
+            "reorder_point": np.random.randint(10, 30, 50),
+            "lead_time_days": np.random.randint(7, 45, 50),
+            "cost": np.random.uniform(10, 100, 50).round(2),
+            "last_ordered": pd.date_range(end=pd.Timestamp.now(), periods=50, freq="D")
+        }
+        df = pd.DataFrame(data)
+        df["status"] = df.apply(lambda x: "Low Stock" if x["in_stock"] <= x["reorder_point"] else "OK", axis=1)
+        return df
+    except Exception as e:
+        st.error(f"Error loading inventory data: {e}")
+        return pd.DataFrame()
 
-def display_inventory_management():
-    st.markdown('<div class="main-header">Inventory Management</div>', unsafe_allow_html=True)
-    # Your existing inventory management code here
+def analyze_inventory_status(df):
+    """Analyze inventory status from the dataframe"""
+    if df.empty:
+        return None
+    
+    # Calculate inventory metrics
+    low_stock_items = df[df["status"] == "Low Stock"]
+    stock_out_risk = len(low_stock_items) / len(df) * 100 if len(df) > 0 else 0
+    
+    # Calculate inventory value
+    df["inventory_value"] = df["in_stock"] * df["cost"]
+    total_inventory_value = df["inventory_value"].sum()
+    
+    # Calculate inventory by category
+    category_inventory = df.groupby("category")["inventory_value"].sum().reset_index()
+    
+    return {
+        "low_stock_items": low_stock_items,
+        "stock_out_risk": stock_out_risk,
+        "total_inventory_value": total_inventory_value,
+        "category_inventory": category_inventory
+    }
+
+# --- DASHBOARD FUNCTIONS ---
+
+def load_dashboard_data():
+    """
+    Load data for the dashboard overview
+    Combines data from different sources to create a comprehensive dashboard
+    """
+    # Load sales data
+    sales_df = load_sales_data()
+    sales_analysis = analyze_sales_trends(sales_df)
+    
+    # Load inventory data
+    inventory_df = load_inventory_data()
+    inventory_analysis = analyze_inventory_status(inventory_df)
+    
+    # Combine data for the dashboard
+    if sales_analysis and inventory_analysis:
+        # Calculate key performance indicators
+        recent_sales = sales_df[sales_df["date"] >= (sales_df["date"].max() - pd.Timedelta(days=30))]
+        monthly_revenue = recent_sales["sales"].sum()
+        
+        # Calculate profit (simplified as 30% of sales)
+        monthly_profit = monthly_revenue * 0.3
+        
+        # Calculate inventory turnover (simplified)
+        inventory_turnover = monthly_revenue / inventory_analysis["total_inventory_value"] if inventory_analysis["total_inventory_value"] > 0 else 0
+        
+        return {
+            "monthly_revenue": monthly_revenue,
+            "monthly_profit": monthly_profit,
+            "inventory_turnover": inventory_turnover,
+            "stock_out_risk": inventory_analysis["stock_out_risk"],
+            "low_stock_items": inventory_analysis["low_stock_items"],
+            "sales_trend": sales_analysis["daily_sales"],
+            "sales_by_channel": sales_analysis["channel_sales"],
+            "sales_by_category": sales_analysis["category_sales"],
+            "inventory_by_category": inventory_analysis["category_inventory"]
+        }
+    
+    return None
+
+# --- PAGE DISPLAY FUNCTIONS ---
 
 def display_quality_manager():
     st.markdown('<div class="main-header">Quality ROI Analysis</div>', unsafe_allow_html=True)
@@ -986,6 +1103,445 @@ def display_quality_manager():
                 st.session_state.salvage_results = None
                 st.session_state.salvage_submitted = False
                 st.experimental_rerun()
+
+def display_dashboard():
+    st.markdown('<div class="main-header">Business Overview Dashboard</div>', unsafe_allow_html=True)
+    
+    # Load dashboard data
+    dashboard_data = load_dashboard_data()
+    
+    if dashboard_data:
+        # Display KPIs in cards
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="metric-label">Monthly Revenue</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-value">${dashboard_data["monthly_revenue"]:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="metric-label">Monthly Profit</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-value">${dashboard_data["monthly_profit"]:,.2f}</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="metric-label">Inventory Turnover</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-value">{dashboard_data["inventory_turnover"]:.2f}x</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="metric-label">Stock-Out Risk</div>', unsafe_allow_html=True)
+            risk_color = "#EF4444" if dashboard_data["stock_out_risk"] > 20 else "#10B981"
+            st.markdown(f'<div class="metric-value" style="color:{risk_color}">{dashboard_data["stock_out_risk"]:.1f}%</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Sales trend chart
+        st.markdown('<div class="sub-header">Sales Trend</div>', unsafe_allow_html=True)
+        
+        sales_fig = px.line(
+            dashboard_data["sales_trend"], 
+            x="date", 
+            y=["sales", "7d_moving_avg"],
+            labels={"value": "Amount ($)", "variable": "Metric"},
+            color_discrete_map={"sales": "#3B82F6", "7d_moving_avg": "#10B981"}
+        )
+        
+        sales_fig.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Sales ($)",
+            legend_title="",
+            height=400,
+            margin=dict(l=20, r=20, t=20, b=20),
+        )
+        
+        st.plotly_chart(sales_fig, use_container_width=True)
+        
+        # Sales breakdown and inventory status
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown('<div class="sub-header">Sales by Channel</div>', unsafe_allow_html=True)
+            
+            channel_fig = px.pie(
+                dashboard_data["sales_by_channel"],
+                values="sales",
+                names="channel",
+                hole=0.4
+            )
+            
+            channel_fig.update_layout(
+                height=300,
+                margin=dict(l=20, r=20, t=20, b=20),
+            )
+            
+            st.plotly_chart(channel_fig, use_container_width=True)
+        
+        with col2:
+            st.markdown('<div class="sub-header">Sales by Category</div>', unsafe_allow_html=True)
+            
+            category_fig = px.bar(
+                dashboard_data["sales_by_category"],
+                x="product_category",
+                y="sales",
+                color="product_category",
+                labels={"product_category": "Category", "sales": "Sales ($)"}
+            )
+            
+            category_fig.update_layout(
+                xaxis_title="",
+                showlegend=False,
+                height=300,
+                margin=dict(l=20, r=20, t=20, b=20),
+            )
+            
+            st.plotly_chart(category_fig, use_container_width=True)
+        
+        # Low stock items
+        st.markdown('<div class="sub-header">Low Stock Items</div>', unsafe_allow_html=True)
+        
+        if len(dashboard_data["low_stock_items"]) > 0:
+            st.dataframe(
+                dashboard_data["low_stock_items"][["sku", "product_name", "category", "in_stock", "reorder_point", "lead_time_days"]],
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.info("No items are currently below reorder point.")
+    else:
+        st.error("Unable to load dashboard data. Please check your data sources.")
+
+def display_sales_analysis():
+    st.markdown('<div class="main-header">Sales Analysis</div>', unsafe_allow_html=True)
+    
+    # Load sales data
+    sales_df = load_sales_data()
+    
+    if not sales_df.empty:
+        # Date filter
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            start_date = st.date_input(
+                "Start Date",
+                min(sales_df["date"]).date(),
+                min_value=min(sales_df["date"]).date(),
+                max_value=max(sales_df["date"]).date()
+            )
+        
+        with col2:
+            end_date = st.date_input(
+                "End Date",
+                max(sales_df["date"]).date(),
+                min_value=min(sales_df["date"]).date(),
+                max_value=max(sales_df["date"]).date()
+            )
+        
+        # Filter data based on date range
+        filtered_df = sales_df[
+            (sales_df["date"].dt.date >= start_date) & 
+            (sales_df["date"].dt.date <= end_date)
+        ]
+        
+        # Channel and category filters
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            selected_channels = st.multiselect(
+                "Filter by Channel",
+                options=sorted(sales_df["channel"].unique()),
+                default=sorted(sales_df["channel"].unique())
+            )
+        
+        with col2:
+            selected_categories = st.multiselect(
+                "Filter by Product Category",
+                options=sorted(sales_df["product_category"].unique()),
+                default=sorted(sales_df["product_category"].unique())
+            )
+        
+        # Apply additional filters
+        if selected_channels:
+            filtered_df = filtered_df[filtered_df["channel"].isin(selected_channels)]
+        
+        if selected_categories:
+            filtered_df = filtered_df[filtered_df["product_category"].isin(selected_categories)]
+        
+        # Check if we have data after filtering
+        if not filtered_df.empty:
+            # Analyze the filtered data
+            analysis_results = analyze_sales_trends(filtered_df)
+            
+            # Display summary metrics
+            st.markdown('<div class="sub-header">Sales Summary</div>', unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                total_sales = filtered_df["sales"].sum()
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="metric-label">Total Sales</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-value">${total_sales:,.2f}</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col2:
+                avg_daily_sales = filtered_df.groupby("date")["sales"].sum().mean()
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="metric-label">Average Daily Sales</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-value">${avg_daily_sales:,.2f}</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col3:
+                sales_growth = 0
+                # Calculate growth if we have enough data
+                if len(analysis_results["monthly_sales"]) > 1:
+                    first_month = analysis_results["monthly_sales"].iloc[0]["sales"]
+                    last_month = analysis_results["monthly_sales"].iloc[-1]["sales"]
+                    if first_month > 0:
+                        sales_growth = (last_month - first_month) / first_month * 100
+                
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="metric-label">Sales Growth</div>', unsafe_allow_html=True)
+                growth_color = "#10B981" if sales_growth >= 0 else "#EF4444"
+                st.markdown(f'<div class="metric-value" style="color:{growth_color}">{sales_growth:.1f}%</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Sales trend chart
+            st.markdown('<div class="sub-header">Sales Trend</div>', unsafe_allow_html=True)
+            
+            trend_fig = px.line(
+                analysis_results["daily_sales"], 
+                x="date", 
+                y=["sales", "7d_moving_avg"],
+                labels={"value": "Amount ($)", "variable": "Metric"},
+                color_discrete_map={"sales": "#3B82F6", "7d_moving_avg": "#10B981"}
+            )
+            
+            trend_fig.update_layout(
+                xaxis_title="Date",
+                yaxis_title="Sales ($)",
+                legend_title="",
+                height=400,
+                margin=dict(l=20, r=20, t=20, b=20),
+            )
+            
+            st.plotly_chart(trend_fig, use_container_width=True)
+            
+            # Sales breakdown
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown('<div class="sub-header">Sales by Channel</div>', unsafe_allow_html=True)
+                
+                channel_fig = px.pie(
+                    analysis_results["channel_sales"],
+                    values="sales",
+                    names="channel",
+                    hole=0.4
+                )
+                
+                channel_fig.update_layout(
+                    height=300,
+                    margin=dict(l=20, r=20, t=20, b=20),
+                )
+                
+                st.plotly_chart(channel_fig, use_container_width=True)
+            
+            with col2:
+                st.markdown('<div class="sub-header">Sales by Category</div>', unsafe_allow_html=True)
+                
+                category_fig = px.bar(
+                    analysis_results["category_sales"],
+                    x="product_category",
+                    y="sales",
+                    color="product_category",
+                    labels={"product_category": "Category", "sales": "Sales ($)"}
+                )
+                
+                category_fig.update_layout(
+                    xaxis_title="",
+                    showlegend=False,
+                    height=300,
+                    margin=dict(l=20, r=20, t=20, b=20),
+                )
+                
+                st.plotly_chart(category_fig, use_container_width=True)
+            
+            # Raw data table
+            with st.expander("Show Raw Data"):
+                st.dataframe(
+                    filtered_df.sort_values("date", ascending=False),
+                    hide_index=True,
+                    use_container_width=True
+                )
+        else:
+            st.warning("No data available for the selected filters. Please adjust your selection.")
+    else:
+        st.error("Unable to load sales data. Please check your data sources.")
+
+def display_inventory_management():
+    st.markdown('<div class="main-header">Inventory Management</div>', unsafe_allow_html=True)
+    
+    # Load inventory data
+    inventory_df = load_inventory_data()
+    
+    if not inventory_df.empty:
+        # Filter options
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            selected_categories = st.multiselect(
+                "Filter by Category",
+                options=sorted(inventory_df["category"].unique()),
+                default=sorted(inventory_df["category"].unique())
+            )
+        
+        with col2:
+            selected_status = st.multiselect(
+                "Filter by Status",
+                options=sorted(inventory_df["status"].unique()),
+                default=sorted(inventory_df["status"].unique())
+            )
+        
+        with col3:
+            sku_search = st.text_input("Search by SKU or Product Name")
+        
+        # Apply filters
+        filtered_df = inventory_df.copy()
+        
+        if selected_categories:
+            filtered_df = filtered_df[filtered_df["category"].isin(selected_categories)]
+        
+        if selected_status:
+            filtered_df = filtered_df[filtered_df["status"].isin(selected_status)]
+        
+        if sku_search:
+            filtered_df = filtered_df[
+                (filtered_df["sku"].str.contains(sku_search, case=False)) |
+                (filtered_df["product_name"].str.contains(sku_search, case=False))
+            ]
+        
+        # Check if we have data after filtering
+        if not filtered_df.empty:
+            # Analyze the filtered data
+            analysis_results = analyze_inventory_status(filtered_df)
+            
+            # Display summary metrics
+            st.markdown('<div class="sub-header">Inventory Summary</div>', unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                total_inventory = filtered_df["in_stock"].sum()
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="metric-label">Total Inventory Units</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-value">{total_inventory:,}</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col2:
+                total_value = analysis_results["total_inventory_value"]
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="metric-label">Total Inventory Value</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-value">${total_value:,.2f}</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col3:
+                low_stock_count = len(analysis_results["low_stock_items"])
+                low_stock_percent = low_stock_count / len(filtered_df) * 100 if len(filtered_df) > 0 else 0
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="metric-label">Low Stock Items</div>', unsafe_allow_html=True)
+                stock_color = "#EF4444" if low_stock_percent > 20 else "#10B981"
+                st.markdown(f'<div class="metric-value" style="color:{stock_color}">{low_stock_count} ({low_stock_percent:.1f}%)</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Inventory by category chart
+            st.markdown('<div class="sub-header">Inventory Value by Category</div>', unsafe_allow_html=True)
+            
+            category_fig = px.pie(
+                analysis_results["category_inventory"],
+                values="inventory_value",
+                names="category",
+                hole=0.4
+            )
+            
+            category_fig.update_layout(
+                height=350,
+                margin=dict(l=20, r=20, t=20, b=20),
+            )
+            
+            st.plotly_chart(category_fig, use_container_width=True)
+            
+            # Inventory Status Table
+            st.markdown('<div class="sub-header">Inventory Status</div>', unsafe_allow_html=True)
+            
+            # Add status coloring
+            status_colors = {
+                "Low Stock": "#FEF3C7",  # Amber
+                "OK": "#DCFCE7"  # Green
+            }
+            
+            # Create a styled dataframe
+            st.dataframe(
+                filtered_df.sort_values(["status", "category", "sku"]),
+                column_config={
+                    "sku": "SKU",
+                    "product_name": "Product Name",
+                    "category": "Category",
+                    "in_stock": "In Stock",
+                    "reorder_point": "Reorder Point",
+                    "lead_time_days": "Lead Time (Days)",
+                    "cost": st.column_config.NumberColumn(
+                        "Cost",
+                        format="$%.2f"
+                    ),
+                    "last_ordered": "Last Ordered",
+                    "status": st.column_config.TextColumn(
+                        "Status",
+                        help="Inventory status based on reorder point"
+                    ),
+                    "inventory_value": st.column_config.NumberColumn(
+                        "Inventory Value",
+                        format="$%.2f"
+                    )
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # Low stock items alert
+            if low_stock_count > 0:
+                st.markdown('<div class="sub-header">Low Stock Alert</div>', unsafe_allow_html=True)
+                
+                low_stock_df = analysis_results["low_stock_items"].sort_values("in_stock")
+                
+                st.warning(f"{low_stock_count} items are below reorder point and may need to be reordered soon.")
+                
+                st.dataframe(
+                    low_stock_df[["sku", "product_name", "in_stock", "reorder_point", "lead_time_days", "last_ordered"]],
+                    hide_index=True,
+                    use_container_width=True
+                )
+        else:
+            st.warning("No inventory data available for the selected filters. Please adjust your selection.")
+    else:
+        st.error("Unable to load inventory data. Please check your data sources.")
+
+# --- PASSWORD VERIFICATION ---
+def verify_password(password):
+    """Temporary simplified password check"""
+    return password == "MPFvive8955@#@"  # Just check direct equality
+
+# --- API KEY HANDLING ---
+try:
+    api_key = st.secrets["openai_api_key"]
+except (FileNotFoundError, KeyError):
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+
+# Initialize OpenAI client
+client = initialize_openai_client(api_key)
 
 def main():
     # Sidebar navigation
