@@ -2385,6 +2385,15 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
+# --- API KEY HANDLING ---
+try:
+    api_key = st.secrets["openai_api_key"]
+except (FileNotFoundError, KeyError):
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+
+# Initialize OpenAI client
+client = initialize_openai_client(api_key)
+
 if __name__ == "__main__":
     # Initialize session state variables if needed
     if "authenticated" not in st.session_state:
