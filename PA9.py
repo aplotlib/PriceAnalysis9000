@@ -818,7 +818,7 @@ def display_quality_manager():
                         )
                         
                         # Rerun to show results
-                        st.experimental_rerun()
+                        st.rerun()
         
         # Display results if available
         if st.session_state.analysis_submitted and st.session_state.quality_analysis_results:
@@ -888,14 +888,14 @@ def display_quality_manager():
                     })
                     
                     # Clear input and rerun to show updated chat
-                    st.experimental_rerun()
+                    st.rerun()
             
             # Reset button
             if st.button("Start New Analysis", key="reset_button"):
                 st.session_state.quality_analysis_results = None
                 st.session_state.analysis_submitted = False
                 st.session_state.chat_history = None
-                st.experimental_rerun()
+                st.rerun()
     
     with tab2:
         st.markdown('<div class="sub-header">Salvage Operation Analysis</div>', unsafe_allow_html=True)
@@ -979,7 +979,7 @@ def display_quality_manager():
                         st.session_state.salvage_submitted = True
                         
                         # Rerun to show results
-                        st.experimental_rerun()
+                        st.rerun()
         
         # Display results if available
         if st.session_state.salvage_submitted and st.session_state.salvage_results:
@@ -1102,7 +1102,7 @@ def display_quality_manager():
             if st.button("Start New Analysis", key="salvage_reset_button"):
                 st.session_state.salvage_results = None
                 st.session_state.salvage_submitted = False
-                st.experimental_rerun()
+                st.rerun()
 
 def display_dashboard():
     st.markdown('<div class="main-header">Business Overview Dashboard</div>', unsafe_allow_html=True)
@@ -1561,7 +1561,7 @@ def main():
             if verify_password(password):
                 st.session_state["authenticated"] = True
                 st.success("Login successful!")
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Incorrect password")
     
@@ -1587,7 +1587,7 @@ def main():
                 if verify_password(password):
                     st.session_state["authenticated"] = True
                     st.success("Login successful!")
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error("Incorrect password")
         else:
