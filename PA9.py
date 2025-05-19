@@ -1057,12 +1057,12 @@ def display_ai_assistant():
             })
             
             # Rerun to show updated chat
-            st.experimental_rerun()
+            st.rerun() 
     
     # Clear chat button
     if st.button("Start New Conversation", key="ai_assistant_clear"):
         st.session_state.ai_assistant_history = []
-        st.experimental_rerun()
+        st.rerun() 
 
 # --- SALES ANALYSIS FUNCTIONS ---
 
@@ -1370,7 +1370,7 @@ def display_quality_manager():
                             st.session_state.chat_history = None
                         
                         # Rerun to show results
-                        st.experimental_rerun()
+                        st.rerun() 
         
         # Display results if available
         if st.session_state.analysis_submitted and st.session_state.quality_analysis_results:
@@ -1419,7 +1419,7 @@ def display_quality_manager():
                         })
                         
                         # Clear input and rerun to show updated chat
-                        st.experimental_rerun()
+                        st.rerun() 
             
             # Reset button
             if st.button("Start New Analysis", key="reset_button"):
@@ -1427,7 +1427,7 @@ def display_quality_manager():
                 st.session_state.analysis_submitted = False
                 st.session_state.chat_history = None
                 st.session_state.use_ai_assistant = False
-                st.experimental_rerun()
+                st.rerun() 
     
     with tab2:
         st.markdown('<div class="sub-header">Salvage Operation Analysis</div>', unsafe_allow_html=True)
@@ -1567,7 +1567,7 @@ def display_quality_manager():
                             st.session_state.salvage_chat_history = None
                         
                         # Rerun to show results
-                        st.experimental_rerun()
+                        st.rerun() 
         
         # Display results if available
         if st.session_state.salvage_submitted and st.session_state.salvage_results:
@@ -1616,7 +1616,7 @@ def display_quality_manager():
                         })
                         
                         # Clear input and rerun to show updated chat
-                        st.experimental_rerun()
+                        st.rerun() 
             
             # Scenario modeling section
             st.markdown('<div class="sub-header">Scenario Modeling</div>', unsafe_allow_html=True)
@@ -1751,7 +1751,7 @@ def display_quality_manager():
                 st.session_state.salvage_submitted = False
                 st.session_state.salvage_ai_enabled = False
                 st.session_state.salvage_chat_history = None
-                st.experimental_rerun()
+                st.rerun() 
 
 def display_dashboard():
     st.markdown('<div class="main-header">Business Overview Dashboard</div>', unsafe_allow_html=True)
@@ -2345,7 +2345,7 @@ def main():
         # Logout button
         if st.sidebar.button("Logout"):
             st.session_state["authenticated"] = False
-            st.experimental_rerun()
+            st.rerun() 
         
         # Display selected page
         if app_mode == "Dashboard":
@@ -2369,7 +2369,7 @@ def main():
             if verify_password(password):
                 st.session_state["authenticated"] = True
                 st.success("Login successful!")
-                st.experimental_rerun()
+                st.rerun() 
             else:
                 st.error("Incorrect password")
         
