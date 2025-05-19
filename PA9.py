@@ -2319,10 +2319,71 @@ def display_inventory_management():
             st.warning("No inventory data available for the selected filters. Please adjust your selection.")
     else:
         st.info("No inventory data available. Please upload data or add entries manually.")
-
-# At the beginning of these functions, add:
-if client is None:
-    return "AI analysis is not available - No API key provided or OpenAI client initialization failed."
+def main():
+    # Check if authenticated
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+    
+    # Sidebar navigation - only shown if authenticated
+    if st.session_state["authenticated"]:
+        st.sidebar.title("QualityROI Dashboard")
+        st.sidebar.markdown("""
+        <div class="sidebar-info">
+        <p>Welcome to QualityROI. Use the navigation below to access different modules.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        app_mode = st.sidebar.selectbox(
+            "Choose the app mode",
+            ["Quality Manager", "AI Assistant", "Dashboard", "Sales Analysis", "Inventory Management"]
+        )
+        
+        # Logout button
+        if st.sidebar.button("Logout"):
+            st.session_state["authenticated"] = False
+            st.experimental_rerun()
+        
+        # Display selected page
+        if app_mode == "Dashboard":
+            display_dashboard()
+        elif app_mode == "Sales Analysis":
+            display_sales_analysis()
+        elif app_mode == "Inventory Management":
+            display_inventory_management()
+        elif app_mode == "Quality Manager":
+            display_quality_manager()
+        elif app_mode == "AI Assistant":
+            display_ai_assistant()
+    else:
+        # Login Screen
+        st.title("QualityROI - Cost-Benefit Analysis Tool")
+        st.subheader("Login")
+        
+        password = st.text_input("Enter password", type="password")
+        
+        if st.button("Login"):
+            if verify_password(password):
+                st.session_state["authenticated"] = True
+                st.success("Login successful!")
+                st.experimental_rerun()
+            else:
+                st.error("Incorrect password")
+        
+        # Information about the tool
+        st.markdown("""
+        <div class="card">
+            <h3>About QualityROI</h3>
+            <p>QualityROI is a cost-benefit analysis tool designed to help you evaluate quality issues and make data-driven decisions.</p>
+            <ul>
+                <li><strong>Quality Manager:</strong> Analyze quality issues and salvage operations</li>
+                <li><strong>AI Assistant:</strong> Get expert advice on quality issues and solutions</li>
+                <li><strong>Dashboard:</strong> Get an overview of your business metrics</li>
+                <li><strong>Sales Analysis:</strong> Analyze sales trends and patterns</li>
+                <li><strong>Inventory Management:</strong> Monitor inventory levels and identify low stock items</li>
+            </ul>
+            <p>Please login to access the application.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     # Initialize session state variables if needed
