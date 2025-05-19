@@ -6,9 +6,8 @@ import plotly.express as px
 from datetime import datetime
 import time
 import os
-import hmac
 from typing import Dict, List, Optional, Tuple, Union, Any
-from openai import OpenAI
+import json
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -263,9 +262,6 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- SESSION STATE INITIALIZATION ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-
 if 'quality_analysis_results' not in st.session_state:
     st.session_state.quality_analysis_results = None
     
@@ -274,9 +270,6 @@ if 'analysis_submitted' not in st.session_state:
     
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = None
-
-if 'openai_client' not in st.session_state:
-    st.session_state.openai_client = None
 
 # --- UTILITY FUNCTIONS ---
 
@@ -297,156 +290,47 @@ def format_percentage(value: float) -> str:
     """Format a value as percentage with % symbol"""
     return f"{value:.1f}%"
 
-# --- AUTHENTICATION HELPERS ---
+# --- AI ASSISTANT FUNCTIONS ---
 
-def check_password():
-    """Returns `True` if the user had the correct password."""
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if hmac.compare_digest(st.session_state["password"], st.secrets.get("password", "MPFvive8955@#@")):
-            st.session_state["authenticated"] = True
-            del st.session_state["password"]  # Don't store the password
-            st.rerun()
-        else:
-            st.session_state["authenticated"] = False
-            st.error("😕 Password incorrect")
-
-    # Return True if the password has been validated
-    if st.session_state.get("authenticated", False):
-        return True
-
-    # Show input for password
-    st.subheader("Please enter your password")
-    st.text_input(
-        "Password", type="password", on_change=password_entered, key="password"
-    )
-    return False
-
-# --- OPENAI API SETUP ---
-
-def initialize_openai_client() -> Optional[OpenAI]:
+def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
     """
-    Initialize the OpenAI client with the API key from Streamlit secrets
-    
-    Returns:
-        OpenAI client instance or None if initialization fails
+    Call OpenAI API with the provided messages
     """
     try:
-        # First try to get API key from Streamlit secrets
+        # Try to get the API key from Streamlit secrets
         api_key = st.secrets.get("openai_api_key", None)
         
         if not api_key:
-            # Try environment variable as fallback
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-            
-        if not api_key:
-            st.sidebar.warning("OpenAI API key is not configured. AI assistant features will be disabled.")
-            return None
+            return "AI assistant not available. API key not configured in secrets."
         
-        client = OpenAI(api_key=api_key)
+        import requests
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
         
-        # Test the connection with a minimal request
-        try:
-            test_response = client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Using a standard model for testing
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=5
-            )
-            st.sidebar.success("AI assistant connected successfully")
-            return client
-        except Exception as e:
-            error_msg = str(e)
-            if "authentication" in error_msg.lower():
-                st.sidebar.error("Authentication error: Please check your OpenAI API key.")
-            elif "rate limit" in error_msg.lower():
-                st.sidebar.warning("Rate limit exceeded. Please try again later.")
-            else:
-                st.sidebar.error(f"Error testing OpenAI connection: {error_msg}")
-            return None
-            
-    except Exception as e:
-        st.sidebar.error(f"Error initializing OpenAI client: {str(e)}")
-        return None
-
-def get_ai_analysis(
-    client: Optional[OpenAI], 
-    system_prompt: str, 
-    user_message: str,
-    model: str = "gpt-4o",  # Default to GPT-4o for best results
-    fallback_model: str = "gpt-3.5-turbo",  # Fallback model
-    messages: Optional[List[Dict[str, str]]] = None,
-    temperature: float = 0.7,
-    max_tokens: int = 2048
-) -> str:
-    """
-    Get AI analysis for quality issues using the OpenAI API
-    
-    Args:
-        client: OpenAI client instance
-        system_prompt: System prompt providing context to the AI
-        user_message: User message or query
-        model: Primary model ID to use
-        fallback_model: Fallback model if primary isn't available
-        messages: Optional list of previous messages for context
-        temperature: Controls randomness (0.0 to 1.0)
-        max_tokens: Maximum length of the response
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
         
-    Returns:
-        AI response text
-    """
-    if client is None:
-        return ("AI assistant is currently unavailable. Please check your API key configuration "
-                "or try again later.")
-
-    try:
-        # Build the messages array
-        message_list = [{"role": "system", "content": system_prompt}]
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
         
-        # Add previous messages if provided
-        if messages:
-            message_list.extend(messages)
-        
-        # Add the current user message
-        message_list.append({"role": "user", "content": user_message})
-        
-        try:
-            # Make the API call with the primary model
-            response = client.chat.completions.create(
-                model=model,
-                messages=message_list,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            return response.choices[0].message.content
-        except Exception as primary_model_error:
-            # Log the primary model error
-            print(f"Error with primary model ({model}): {primary_model_error}")
-            
-            # Try with fallback model
-            response = client.chat.completions.create(
-                model=fallback_model,
-                messages=message_list,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            
-            # Indicate fallback model was used
-            content = response.choices[0].message.content
-            return f"{content}\n\n_Note: Response provided using {fallback_model} model due to unavailability of {model}._"
-            
-    except Exception as e:
-        error_message = str(e)
-        print(f"Error getting AI analysis: {error_message}")
-        
-        # Provide a user-friendly error message
-        if "rate limit" in error_message.lower():
-            return "I'm sorry, but we've reached the OpenAI API rate limit. Please try again in a few moments."
-        elif "authentication" in error_message.lower():
-            return "There's an issue with the OpenAI API authentication. Please check your API key configuration."
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
         else:
-            return (f"I'm sorry, but I encountered an issue while analyzing this request. "
-                    f"Please try again or contact technical support if the problem persists.\n\n"
-                    f"Error details: {error_message}")
+            return f"Error from API: {response.status_code} - {response.text}"
+    
+    except Exception as e:
+        st.error(f"Error calling OpenAI API: {str(e)}")
+        return f"Error: {str(e)}"
 
 # --- QUALITY ANALYSIS FUNCTIONS ---
 
@@ -471,28 +355,6 @@ def analyze_quality_issue(
 ) -> Dict[str, Any]:
     """
     Analyze quality issue and determine cost-effectiveness of fixes
-    
-    Args:
-        sku: Product SKU
-        product_type: B2B, B2C, or Both
-        sales_30d: Units sold in last 30 days
-        returns_30d: Units returned in last 30 days
-        issue_description: Description of the quality issue
-        current_unit_cost: Current per-unit manufacturing/acquisition cost
-        fix_cost_upfront: One-time cost to implement the fix
-        fix_cost_per_unit: Additional cost per unit after implementing fix
-        asin: Amazon Standard Identification Number (optional)
-        ncx_rate: Negative customer experience rate (optional)
-        sales_365d: Units sold in last 365 days (optional)
-        returns_365d: Units returned in last 365 days (optional)
-        star_rating: Current star rating (optional)
-        total_reviews: Total number of reviews (optional)
-        fba_fee: Amazon FBA fee per unit (optional)
-        risk_level: Risk level assessment (Low, Medium, High)
-        regulatory_impact: Regulatory impact (None, Possible, Significant)
-        
-    Returns:
-        Dictionary containing analysis results
     """
     try:
         # Calculate basic metrics with error handling
@@ -507,7 +369,6 @@ def analyze_quality_issue(
         monthly_return_cost = returns_30d * current_unit_cost
         
         # Calculate reduction factor based on return rate and risk level
-        # Higher return rates and risk levels benefit more from fixes
         if risk_level == "High":
             base_reduction = 0.85  # 85% reduction for high risk
         elif risk_level == "Medium":
@@ -598,8 +459,8 @@ def analyze_quality_issue(
             potential_review_improvement = int(total_reviews * negative_reviews_ratio * reduction_factor * 0.5)
             customer_impact_metrics["potential_review_improvement"] = potential_review_improvement
         
-        # Medical device specific metrics
-        medical_impact = {
+        # Add medical impact data
+        medical_device_impact = {
             "risk_level": risk_level,
             "regulatory_impact": regulatory_impact,
             "patient_safety_impact": "High" if risk_level == "High" else ("Medium" if risk_level == "Medium" else "Low"),
@@ -638,7 +499,7 @@ def analyze_quality_issue(
             "issue_description": issue_description,
             "reduction_factor": reduction_factor * 100,  # Convert to percentage
             "customer_impact_metrics": customer_impact_metrics,
-            "medical_impact": medical_impact
+            "medical_device_impact": medical_device_impact  # Use medical_device_impact instead of medical_impact
         }
         
         return results
@@ -717,13 +578,13 @@ def display_quality_issue_results(results):
         st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["annual_return_cost"])}</div>', unsafe_allow_html=True)
         
         st.markdown('<div class="metric-label">Medical Risk Level</div>', unsafe_allow_html=True)
-        risk_level = results["medical_impact"]["risk_level"]
+        risk_level = results["medical_device_impact"]["risk_level"]  # Changed from medical_impact to medical_device_impact
         risk_color = VIVE_RED if risk_level == "High" else (VIVE_AMBER if risk_level == "Medium" else VIVE_GREEN)
         st.markdown(f'<div class="metric-value" style="color:{risk_color}">{risk_level}</div>', unsafe_allow_html=True)
         
-        if results["medical_impact"]["regulatory_impact"] != "None":
+        if results["medical_device_impact"]["regulatory_impact"] != "None":  # Changed from medical_impact to medical_device_impact
             st.markdown('<div class="metric-label">Regulatory Impact</div>', unsafe_allow_html=True)
-            reg_impact = results["medical_impact"]["regulatory_impact"]
+            reg_impact = results["medical_device_impact"]["regulatory_impact"]  # Changed from medical_impact to medical_device_impact
             reg_color = VIVE_RED if reg_impact == "Significant" else VIVE_AMBER
             st.markdown(f'<div class="metric-value" style="color:{reg_color}">{reg_impact}</div>', unsafe_allow_html=True)
         
@@ -853,21 +714,12 @@ def display_quality_issue_results(results):
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-def chat_with_ai(results, issue_description, chat_history=None, client=None):
+def chat_with_ai(results, issue_description, chat_history=None):
     """Initialize or continue chat with AI about quality issues"""
     if chat_history is None:
         chat_history = []
-        
-        if client is None:
-            # Add a placeholder message if AI is not available
-            chat_history.append({
-                "role": "assistant",
-                "content": ("AI assistant is currently unavailable. Please check your API key configuration "
-                           "or contact your administrator to enable this feature.")
-            })
-            return chat_history
             
-        # Generate initial AI analysis
+        # Generate initial AI analysis using direct API call
         system_prompt = f"""
         You are a Quality Management expert for medical devices at Vive Health. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
         
@@ -881,8 +733,8 @@ def chat_with_ai(results, issue_description, chat_history=None, client=None):
         - Monthly Return Cost: ${results["financial_impact"]["monthly_return_cost"]:.2f}
         - Estimated Savings: ${results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
         - Payback Period: {results["financial_impact"]["payback_months"]:.1f} months
-        - Medical Risk Level: {results["medical_impact"]["risk_level"]}
-        - Regulatory Impact: {results["medical_impact"]["regulatory_impact"]}
+        - Medical Risk Level: {results["medical_device_impact"]["risk_level"]}
+        - Regulatory Impact: {results["medical_device_impact"]["regulatory_impact"]}
         
         Recommendation: {results["recommendation"]}
         
@@ -897,13 +749,12 @@ def chat_with_ai(results, issue_description, chat_history=None, client=None):
         Keep your analysis concise, practical, and specific to medical devices and FDA/regulatory requirements.
         """
         
-        initial_analysis = get_ai_analysis(
-            client,
-            system_prompt,
-            "Based on the product information and quality metrics, provide your initial analysis of the issue and suggested next steps. Be specific about potential fixes, quality improvements, and regulatory considerations.",
-            model="gpt-4o",  # Try to use GPT-4o for better quality analysis
-            fallback_model="gpt-3.5-turbo"  # Fall back to GPT-3.5-Turbo if needed
-        )
+        initial_message = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Based on the product information and quality metrics, provide your initial analysis of the issue and suggested next steps. Be specific about potential fixes, quality improvements, and regulatory considerations."}
+        ]
+        
+        initial_analysis = call_openai_api(initial_message)
         
         # Add initial AI message
         chat_history.append({
@@ -918,17 +769,29 @@ def chat_with_ai(results, issue_description, chat_history=None, client=None):
 def main():
     """Main application function"""
     
-    # Initialize OpenAI client (if not already initialized)
-    if st.session_state.openai_client is None:
-        st.session_state.openai_client = initialize_openai_client()
-    
     # Set sidebar style
     st.sidebar.markdown('<div class="sidebar-title">QualityROI CBA Tool</div>', unsafe_allow_html=True)
     
-    # Authentication check
+    # Authenticate with simple password (in production you'd use more secure methods)
+    password = "MPFvive8955@#@"  # This would normally be stored securely
+    
+    # Simple password check just for demo
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
     if not st.session_state.authenticated:
-        if not check_password():
-            return
+        entered_password = st.sidebar.text_input("Enter password:", type="password")
+        if st.sidebar.button("Login"):
+            if entered_password == password:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.sidebar.error("Incorrect password")
+    
+    if not st.session_state.authenticated:
+        st.title("QualityROI CBA Tool")
+        st.write("Please login to access the tool.")
+        return
     
     # Display main application
     vive_header()
@@ -936,6 +799,12 @@ def main():
     
     # Check if analysis results exist
     if not st.session_state.analysis_submitted:
+        # New Analysis button
+        if st.button("Start New Analysis"):
+            st.session_state.quality_analysis_results = None
+            st.session_state.analysis_submitted = False
+            st.session_state.chat_history = None
+            
         with st.form("quality_issue_form"):
             st.markdown('<div class="form-section-header">Product Information</div>', unsafe_allow_html=True)
             
@@ -1055,9 +924,7 @@ def main():
                     )
             
             # Form submission
-            submit_col1, submit_col2 = st.columns([3, 1])
-            with submit_col2:
-                submit_button = st.form_submit_button("Analyze Quality Issue")
+            submit_button = st.form_submit_button("Analyze Quality Issue")
             
             if submit_button:
                 # Validate required fields
@@ -1097,8 +964,7 @@ def main():
                         # Initialize chat with AI
                         st.session_state.chat_history = chat_with_ai(
                             results, 
-                            issue_description,
-                            client=st.session_state.openai_client
+                            issue_description
                         )
                         
                         # Rerun to show results
@@ -1116,85 +982,75 @@ def main():
         # Display analysis results
         display_quality_issue_results(st.session_state.quality_analysis_results)
         
-        # Display AI chat interface
-        st.markdown('<div class="sub-header">AI Medical Device Quality Consultant</div>', unsafe_allow_html=True)
-        
-        # Chat container
-        st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
-        for message in st.session_state.chat_history:
-            if message["role"] == "user":
-                st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+        # Display AI chat interface if enabled
+        with st.expander("AI Quality Consultant", expanded=True):
+            # Chat container
+            st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
+            
+            if st.session_state.chat_history:
+                for message in st.session_state.chat_history:
+                    if message["role"] == "user":
+                        st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Input for new messages
-        user_input = st.text_area(
-            "Ask about the quality issue, potential solutions, or regulatory implications:",
-            placeholder="E.g., What could be causing this issue? What fixes do you recommend? What are the regulatory considerations?"
-        )
-        
-        # Send button
-        if st.button("Send", key="send_button"):
-            if user_input:
-                # Add user message to chat history
-                st.session_state.chat_history.append({
-                    "role": "user",
-                    "content": user_input
-                })
+                st.info("AI consultant not available or initialization failed.")
                 
-                with st.spinner("Getting AI analysis..."):
-                    # System message for medical device expert
-                    system_prompt = f"""
-                    You are a Quality Management expert specializing in medical devices for Vive Health. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
-                    
-                    Product details:
-                    - SKU: {st.session_state.quality_analysis_results["sku"]}
-                    - Type: {st.session_state.quality_analysis_results["product_type"]}
-                    - Issue: {st.session_state.quality_analysis_results["issue_description"]}
-                    
-                    Metrics:
-                    - Return Rate (30 days): {st.session_state.quality_analysis_results["current_metrics"]["return_rate_30d"]:.2f}%
-                    - Monthly Return Cost: ${st.session_state.quality_analysis_results["financial_impact"]["monthly_return_cost"]:.2f}
-                    - Estimated Savings: ${st.session_state.quality_analysis_results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
-                    - Payback Period: {st.session_state.quality_analysis_results["financial_impact"]["payback_months"]:.1f} months
-                    - Risk Level: {st.session_state.quality_analysis_results["medical_impact"]["risk_level"]}
-                    
-                    Recommendation: {st.session_state.quality_analysis_results["recommendation"]}
-                    
-                    As a Quality Management expert for medical devices, provide specific, actionable insights.
-                    Focus on:
-                    1. Root cause analysis of quality issues
-                    2. Practical solutions for medical devices
-                    3. Implementation strategies that consider FDA/regulatory compliance
-                    4. Risk assessment for the proposed solution
-                    5. Quality Management System implications
-                    
-                    Keep your responses concise, specific, and tailored to the medical device industry and its regulatory requirements.
-                    """
-                    
-                    # Get the full chat history for context
-                    messages_history = []
-                    for msg in st.session_state.chat_history:
-                        messages_history.append({"role": msg["role"], "content": msg["content"]})
-                    
-                    ai_response = get_ai_analysis(
-                        st.session_state.openai_client,
-                        system_prompt,
-                        user_input,
-                        model="gpt-4o",  # Try to use GPT-4o 
-                        fallback_model="gpt-3.5-turbo",  # Use GPT-3.5 as fallback
-                        messages=messages_history[:-1]  # Exclude the latest user message as it's passed separately
-                    )
-                    
-                    # Add AI response to chat history
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Input for new messages
+            user_input = st.text_area(
+                "Ask about the quality issue, potential solutions, or regulatory implications:",
+                placeholder="E.g., What could be causing this issue? What fixes do you recommend? What are the regulatory considerations?"
+            )
+            
+            # Send button
+            if st.button("Send", key="send_button"):
+                if user_input:
+                    # Add user message to chat history
                     st.session_state.chat_history.append({
-                        "role": "assistant",
-                        "content": ai_response
+                        "role": "user",
+                        "content": user_input
                     })
                     
-                    # Rerun to show updated chat
-                    st.rerun()
+                    with st.spinner("Getting AI analysis..."):
+                        # Build the message history for API call
+                        messages = [
+                            {"role": "system", "content": f"""
+                            You are a Quality Management expert specializing in medical devices for Vive Health. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
+                            
+                            Product details:
+                            - SKU: {st.session_state.quality_analysis_results["sku"]}
+                            - Type: {st.session_state.quality_analysis_results["product_type"]}
+                            - Issue: {st.session_state.quality_analysis_results["issue_description"]}
+                            
+                            Metrics:
+                            - Return Rate (30 days): {st.session_state.quality_analysis_results["current_metrics"]["return_rate_30d"]:.2f}%
+                            - Monthly Return Cost: ${st.session_state.quality_analysis_results["financial_impact"]["monthly_return_cost"]:.2f}
+                            - Estimated Savings: ${st.session_state.quality_analysis_results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
+                            - Payback Period: {st.session_state.quality_analysis_results["financial_impact"]["payback_months"]:.1f} months
+                            
+                            Recommendation: {st.session_state.quality_analysis_results["recommendation"]}
+                            
+                            Keep your responses concise, specific, and tailored to the medical device industry and its regulatory requirements.
+                            """}
+                        ]
+                        
+                        # Add conversation history
+                        for msg in st.session_state.chat_history:
+                            messages.append({"role": msg["role"], "content": msg["content"]})
+                        
+                        # Make the API call (excluding the last user message as it's added separately)
+                        ai_response = call_openai_api(messages[:-1])
+                        
+                        # Add AI response to chat history
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": ai_response
+                        })
+                        
+                        # Rerun to show updated chat
+                        st.rerun()
         
         # Export options
         with st.expander("Export Analysis"):
@@ -1234,8 +1090,8 @@ def main():
                         f"${st.session_state.quality_analysis_results['financial_impact']['fix_cost_per_unit']:.2f}",
                         f"${st.session_state.quality_analysis_results['financial_impact']['current_unit_cost']:.2f}",
                         st.session_state.quality_analysis_results['recommendation'],
-                        st.session_state.quality_analysis_results['medical_impact']['risk_level'],
-                        st.session_state.quality_analysis_results['medical_impact']['regulatory_impact']
+                        st.session_state.quality_analysis_results['medical_device_impact']['risk_level'],
+                        st.session_state.quality_analysis_results['medical_device_impact']['regulatory_impact']
                     ]
                 })
                 
@@ -1271,13 +1127,6 @@ def main():
             st.session_state.analysis_submitted = False
             st.session_state.chat_history = None
             st.rerun()
-    
-    # Footer with credits
-    st.markdown("""
-    <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
-        <p style="color: #666;">Vive Health QualityROI CBA Tool v1.0 | Medical Device Quality Management</p>
-    </div>
-    """, unsafe_allow_html=True)
 
 # Run the application
 if __name__ == "__main__":
