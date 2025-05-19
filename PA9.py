@@ -262,7 +262,7 @@ def analyze_quality_issue(
     current_unit_cost: float,
     fix_cost_upfront: float,
     fix_cost_per_unit: float,
-    msrp: float,  # Added MSRP as required parameter
+    sales_price: float,  # Changed from MSRP to Sales Price
     asin: Optional[str] = None,
     ncx_rate: Optional[float] = None,
     sales_365d: Optional[float] = None,
@@ -283,7 +283,7 @@ def analyze_quality_issue(
         current_unit_cost: Current landed cost per unit
         fix_cost_upfront: One-time cost to implement fix
         fix_cost_per_unit: Additional cost per unit after fix
-        msrp: Manufacturer's Suggested Retail Price
+        sales_price: Current selling price
         asin: Amazon Standard Identification Number
         ncx_rate: Negative Customer Experience rate
         sales_365d: Units sold in last 365 days
@@ -304,11 +304,11 @@ def analyze_quality_issue(
         return_rate_365d = (returns_365d / sales_365d) * 100
     
     # Calculate current financial metrics
-    current_profit_per_unit = msrp - current_unit_cost
+    current_profit_per_unit = sales_price - current_unit_cost
     if fba_fee is not None and fba_fee > 0:
         current_profit_per_unit -= fba_fee
     
-    current_margin_percentage = (current_profit_per_unit / msrp) * 100 if msrp > 0 else 0
+    current_margin_percentage = (current_profit_per_unit / sales_price) * 100 if sales_price > 0 else 0
     
     # Calculate return costs and impact
     monthly_return_cost = returns_30d * current_unit_cost
@@ -321,11 +321,11 @@ def analyze_quality_issue(
     new_unit_cost = current_unit_cost + fix_cost_per_unit
     
     # Calculate new profit metrics
-    new_profit_per_unit = msrp - new_unit_cost
+    new_profit_per_unit = sales_price - new_unit_cost
     if fba_fee is not None and fba_fee > 0:
         new_profit_per_unit -= fba_fee
     
-    new_margin_percentage = (new_profit_per_unit / msrp) * 100 if msrp > 0 else 0
+    new_margin_percentage = (new_profit_per_unit / sales_price) * 100 if sales_price > 0 else 0
     
     # Calculate monthly savings from reduced returns
     current_monthly_return_units = returns_30d
@@ -394,7 +394,7 @@ def analyze_quality_issue(
     # Check if fix makes product unprofitable
     profitability_impact = None
     if new_margin_percentage < 0:
-        profitability_impact = "Warning - Fix will make product unprofitable at current MSRP"
+        profitability_impact = "Warning - Fix will make product unprofitable at current Sales Price"
         recommendation = "Not Recommended - Fix makes product unprofitable"
         recommendation_class = "recommendation-low"
     elif new_margin_percentage < current_margin_percentage * 0.5:
@@ -408,7 +408,7 @@ def analyze_quality_issue(
         "sku": sku,
         "asin": asin,
         "product_type": product_type,
-        "msrp": msrp,
+        "sales_price": sales_price,
         "current_metrics": {
             "return_rate_30d": return_rate_30d,
             "return_rate_365d": return_rate_365d,
@@ -458,7 +458,7 @@ def analyze_salvage_operation(
     rework_cost_per_unit: float,
     expected_recovery_pct: float,
     expected_discount_pct: float,
-    msrp: float  # Added MSRP as required parameter
+    sales_price: float  # Changed from MSRP to Sales Price
 ) -> Dict[str, Any]:
     """
     Analyze potential salvage operation for affected inventory
@@ -471,14 +471,14 @@ def analyze_salvage_operation(
         rework_cost_per_unit: Cost to rework each unit
         expected_recovery_pct: Percentage of units expected to be recovered
         expected_discount_pct: Discount percentage for selling reworked units
-        msrp: Manufacturer's Suggested Retail Price
+        sales_price: Original selling price before discount
         
     Returns:
         Dict with analysis results
     """
     # Calculate salvage metrics
     expected_units_recovered = affected_inventory * (expected_recovery_pct / 100)
-    regular_price = msrp  # Use actual MSRP instead of assuming markup
+    regular_price = sales_price  # Use actual sales price
     discounted_price = regular_price * (1 - expected_discount_pct / 100)
     
     total_rework_cost = rework_cost_upfront + (rework_cost_per_unit * affected_inventory)
@@ -486,7 +486,7 @@ def analyze_salvage_operation(
     write_off_loss = (affected_inventory - expected_units_recovered) * current_unit_cost
     
     # Calculate profit metrics
-    original_profit_per_unit = msrp - current_unit_cost
+    original_profit_per_unit = sales_price - current_unit_cost
     total_original_value = affected_inventory * current_unit_cost
     salvage_cost_per_unit = (rework_cost_upfront / affected_inventory) + rework_cost_per_unit if affected_inventory > 0 else 0
     salvage_profit_per_unit = discounted_price - current_unit_cost - salvage_cost_per_unit
@@ -684,7 +684,7 @@ def display_quality_issue_results(results):
     analysis_data = {
         "SKU": results["sku"],
         "ASIN": results["asin"] if results["asin"] else "N/A",
-        "MSRP": results["msrp"],
+        "Sales Price": results["sales_price"],
         "Product Type": results["product_type"],
         "Current Unit Cost": results["financial_impact"]["current_unit_cost"],
         "New Unit Cost": results["financial_impact"]["new_unit_cost"],
@@ -756,7 +756,7 @@ def display_salvage_results(results):
         <div class="metric-card">
             <p class="metric-label">Original Product</p>
             <p class="metric-value">Original Profit: ${results["metrics"]["original_profit_per_unit"]:.2f}/unit</p>
-            <p class="metric-label">MSRP: ${results["metrics"]["regular_price"]:.2f}</p>
+            <p class="metric-label">Sales Price: ${results["metrics"]["regular_price"]:.2f}</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -821,50 +821,244 @@ def display_salvage_results(results):
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-def chat_with_ai(results, issue_description, chat_history=None):
-    """Initialize or continue chat with AI about quality issues"""
-    if chat_history is None:
-        chat_history = []
+# Create enhanced AI-specific functions
+def get_enhanced_ai_analysis(
+    client: OpenAI, 
+    issue_type: str,  # "quality" or "salvage"
+    data: Dict[str, Any],
+    user_input: Optional[str] = None,
+    chat_history: Optional[List[Dict[str, str]]] = None,
+    model: str = "gpt-4o"
+) -> str:
+    """
+    Get enhanced AI analysis for quality or salvage issues
+    
+    Args:
+        client: OpenAI client instance
+        issue_type: Type of issue ("quality" or "salvage")
+        data: Results data from the analysis
+        user_input: Optional user question or input
+        chat_history: Optional chat history for context
+        model: Model ID to use
         
-        # Generate initial AI analysis
+    Returns:
+        AI response text
+    """
+    if issue_type == "quality":
+        # Create system prompt for quality issues
         system_prompt = f"""
-        You are a Quality Management expert for a product line. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
+        You are an expert Quality and Product Management consultant specializing in manufacturing and e-commerce products.
+        Your role is to analyze quality issues and provide strategic recommendations based on data-driven insights.
         
         Product details:
-        - SKU: {results["sku"]}
-        - Type: {results["product_type"]}
-        - MSRP: ${results["msrp"]:.2f}
-        - Issue: {issue_description}
+        - SKU: {data["sku"]}
+        - Type: {data["product_type"]}
+        - Sales Price: ${data["sales_price"]:.2f}
+        - Issue: {data["issue_description"]}
         
-        Metrics:
-        - Return Rate (30 days): {results["current_metrics"]["return_rate_30d"]:.2f}%
-        - Current Profit Margin: {results["current_metrics"]["margin_percentage"]:.2f}%
-        - Future Profit Margin: {results["future_metrics"]["margin_percentage"]:.2f}%
-        - Monthly Return Cost: ${results["financial_impact"]["monthly_return_cost"]:.2f}
-        - Estimated Savings: ${results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
-        - Payback Period: {results["financial_impact"]["payback_months"]:.1f} months
+        Current metrics:
+        - Return Rate (30 days): {data["current_metrics"]["return_rate_30d"]:.2f}%
+        - Current Profit Margin: {data["current_metrics"]["margin_percentage"]:.2f}%
+        - Current Profit Per Unit: ${data["current_metrics"]["profit_per_unit"]:.2f}
+        - Monthly Return Cost: ${data["financial_impact"]["monthly_return_cost"]:.2f}
+        - Annual Return Cost: ${data["financial_impact"]["annual_return_cost"]:.2f}
         
-        Recommendation: {results["recommendation"]}
+        Proposed fix metrics:
+        - Fix Cost Upfront: ${data["financial_impact"]["fix_cost_upfront"]:.2f}
+        - Fix Cost Per Unit: ${data["financial_impact"]["fix_cost_per_unit"]:.2f}
+        - Unit Cost After Fix: ${data["financial_impact"]["new_unit_cost"]:.2f}
+        - Estimated Future Return Rate: {data["future_metrics"]["estimated_return_rate"]:.2f}%
+        - Future Profit Margin: {data["future_metrics"]["margin_percentage"]:.2f}%
+        - Future Profit Per Unit: ${data["future_metrics"]["profit_per_unit"]:.2f}
+        - Monthly Savings: ${data["financial_impact"]["estimated_monthly_savings"]:.2f}
+        - Annual Savings: ${data["financial_impact"]["annual_savings"]:.2f}
+        - Payback Period: {data["financial_impact"]["payback_months"]:.1f} months
+        - 3-Year ROI: {data["financial_impact"]["roi_3yr"]:.1f}%
+        - Annual Profit Improvement: ${data["financial_impact"]["profit_improvement"]:.2f}
         
-        Your task is to analyze this quality issue and provide expert insights and recommendations.
-        Focus on the financial impact, profitability, and strategic considerations.
-        Give specific advice about how to implement the fix effectively or alternatives if appropriate.
+        Recommendation: {data["recommendation"]}
+        
+        Your analysis should be thorough, professional, and actionable. Consider both financial and non-financial factors in your recommendations.
+        Provide specific suggestions tailored to the product type and issue described.
+        If the user asks for specific information not in the data provided, feel free to make reasonable assumptions based on industry standards.
+        
+        User is looking for expert guidance on how to address this quality issue most effectively, including potential alternative approaches.
+        Be specific and detailed in your recommendations, discussing potential implementation challenges and strategies.
         """
+    elif issue_type == "salvage":
+        # Create system prompt for salvage operations
+        system_prompt = f"""
+        You are an expert Inventory Management and Operations consultant specializing in product salvage, rework, and recovery.
+        Your role is to analyze salvage operations and provide strategic recommendations based on data-driven insights.
         
-        initial_analysis = get_ai_analysis(
-            client,
-            system_prompt,
-            "Based on the product information and quality metrics, provide your initial analysis of the issue and suggested next steps. Be specific about potential fixes and quality improvements.",
-            model="gpt-4o"
+        Salvage operation details:
+        - SKU: {data["sku"]}
+        - Affected Inventory: {data["metrics"]["affected_inventory"]} units
+        - Original Sales Price: ${data["metrics"]["regular_price"]:.2f}
+        - Discounted Price: ${data["metrics"]["discounted_price"]:.2f} ({data["metrics"]["discount_percentage"]}% discount)
+        - Expected Recovery Rate: {data["metrics"]["recovery_rate"]}%
+        - Expected Units Recovered: {data["metrics"]["expected_units_recovered"]:.0f} units
+        
+        Financial metrics:
+        - Total Rework Cost: ${data["financial"]["total_rework_cost"]:.2f}
+        - Rework Cost Per Unit: ${data["financial"]["total_rework_cost"] / data["metrics"]["affected_inventory"]:.2f}
+        - Salvage Revenue: ${data["financial"]["salvage_revenue"]:.2f}
+        - Write-off Loss: ${data["financial"]["write_off_loss"]:.2f}
+        - Complete Write-off Cost: ${data["financial"]["complete_writeoff_cost"]:.2f}
+        - Net Profit/Loss from Salvage: ${data["financial"]["salvage_profit"]:.2f}
+        - ROI: {data["financial"]["roi_percent"]:.1f}%
+        - Original Profit Per Unit: ${data["metrics"]["original_profit_per_unit"]:.2f}
+        - Salvage Profit Per Unit: ${data["metrics"]["salvage_profit_per_unit"]:.2f}
+        
+        Recommendation: {data["recommendation"]}
+        
+        Your analysis should be thorough, professional, and actionable. Consider both financial and non-financial factors in your recommendations.
+        Provide specific suggestions for optimizing the salvage operation including:
+        - Ideas to increase the recovery rate
+        - Potential alternative pricing strategies
+        - Ways to reduce rework costs
+        - Methods to position the reworked products to customers
+        - Whether to consider a complete write-off instead
+        
+        User is looking for expert guidance on how to handle this inventory issue most effectively, including potential alternative approaches.
+        Be specific and detailed in your recommendations, discussing potential implementation challenges and strategies.
+        """
+    else:
+        # Generic AI consultant prompt
+        system_prompt = """
+        You are an expert consultant specializing in product quality, operations, and inventory management.
+        Provide thoughtful, strategic advice based on the user's questions about product quality, returns, or inventory issues.
+        Your responses should be practical, actionable, and focused on optimizing business results.
+        When specific data isn't available, make reasonable assumptions based on industry standards and best practices.
+        """
+    
+    # Default message if no user input provided
+    if user_input is None or user_input.strip() == "":
+        if issue_type == "quality":
+            user_input = "Based on the quality issue and analysis results, what do you recommend we do? Please provide specific advice on how to implement the fix and any alternative approaches we should consider."
+        elif issue_type == "salvage":
+            user_input = "Based on the salvage operation analysis, what should we do with this affected inventory? Please provide specific recommendations and any alternative approaches we should consider."
+        else:
+            user_input = "Please provide general advice on managing product quality and returns."
+    
+    # Build messages array
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add chat history if provided
+    if chat_history:
+        messages.extend(chat_history)
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_input})
+    
+    try:
+        # Make API call
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048
         )
         
-        # Add initial AI message
-        chat_history.append({
-            "role": "assistant",
-            "content": initial_analysis
-        })
+        # Extract and return response
+        return response.choices[0].message.content
+    except Exception as e:
+        error_message = f"Error getting AI analysis: {str(e)}"
+        print(error_message)
+        return f"I apologize, but I encountered an error analyzing this issue. Please try again or contact technical support if the problem persists.\n\nError details: {error_message}"
+
+def display_ai_assistant():
+    """Display dedicated AI assistant page"""
+    st.markdown('<div class="main-header">AI Quality Consultant</div>', unsafe_allow_html=True)
     
-    return chat_history
+    # Introduction
+    st.markdown("""
+    <div class="card">
+        <p>Welcome to the AI Quality Consultant. This tool helps you analyze quality issues, brainstorm solutions, 
+        and get expert advice on how to improve product quality and reduce returns.</p>
+        
+        <p>You can ask questions about:</p>
+        <ul>
+            <li>Strategies to reduce product returns</li>
+            <li>How to identify root causes of quality issues</li>
+            <li>Cost-benefit analysis of quality improvements</li>
+            <li>Best practices for quality control</li>
+            <li>How to handle inventory with quality problems</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Initialize chat history in session state if not present
+    if "ai_assistant_history" not in st.session_state:
+        st.session_state.ai_assistant_history = []
+    
+    # Display existing chat history
+    chat_container = st.container()
+    
+    with chat_container:
+        for message in st.session_state.ai_assistant_history:
+            if message["role"] == "user":
+                st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
+    
+    # Input for new message
+    user_input = st.text_input("Ask a question about quality management, returns, or inventory issues:", key="ai_assistant_input")
+    
+    if st.button("Send", key="ai_assistant_send"):
+        if user_input:
+            # Add user message to chat history
+            st.session_state.ai_assistant_history.append({
+                "role": "user",
+                "content": user_input
+            })
+            
+            # Get AI response
+            system_prompt = """
+            You are an expert consultant specializing in product quality, returns management, manufacturing, and e-commerce operations.
+            Provide strategic, practical advice on quality improvement, returns reduction, and inventory management.
+            Your guidance should be actionable, specific, and focused on business impact.
+            
+            When addressing quality issues:
+            - Consider both short-term fixes and long-term solutions
+            - Balance cost reduction with quality improvement
+            - Think about both product design and manufacturing process
+            - Consider customer perception and market positioning
+            
+            For inventory questions:
+            - Provide advice on balancing inventory levels with service levels
+            - Suggest strategies for handling damaged or returned goods
+            - Consider salvage operations, rework, and disposal options
+            
+            Use a professional, consultative tone. Be thorough but concise in your responses.
+            """
+            
+            # Get the full chat history for context
+            messages_history = []
+            for msg in st.session_state.ai_assistant_history:
+                messages_history.append({"role": msg["role"], "content": msg["content"]})
+            
+            ai_response = get_ai_analysis(
+                client,
+                system_prompt,
+                user_input,
+                model="gpt-4o",
+                messages=messages_history[:-1]  # Exclude the latest user message as it's passed separately
+            )
+            
+            # Add AI response to chat history
+            st.session_state.ai_assistant_history.append({
+                "role": "assistant",
+                "content": ai_response
+            })
+            
+            # Rerun to show updated chat
+            st.experimental_rerun()
+    
+    # Clear chat button
+    if st.button("Start New Conversation", key="ai_assistant_clear"):
+        st.session_state.ai_assistant_history = []
+        st.experimental_rerun()
 
 # --- SALES ANALYSIS FUNCTIONS ---
 
@@ -994,6 +1188,7 @@ def display_quality_manager():
         if "quality_analysis_results" not in st.session_state:
             st.session_state.quality_analysis_results = None
             st.session_state.analysis_submitted = False
+            st.session_state.use_ai_assistant = False
         
         # Form for entering quality issue data
         if not st.session_state.analysis_submitted:
@@ -1036,12 +1231,12 @@ def display_quality_manager():
                     )
                     
                 with col2:
-                    st.markdown('<span class="required-field">MSRP (Retail Price)</span>', unsafe_allow_html=True)
-                    msrp = st.number_input(
-                        "MSRP (Retail Price)",
+                    st.markdown('<span class="required-field">Sales Price</span>', unsafe_allow_html=True)
+                    sales_price = st.number_input(
+                        "Sales Price",
                         min_value=0.0,
                         label_visibility="collapsed",
-                        help="Required: Manufacturer's Suggested Retail Price"
+                        help="Required: Current selling price"
                     )
                     
                     st.markdown('<span class="required-field">Current Unit Cost (Landed Cost)</span>', unsafe_allow_html=True)
@@ -1075,6 +1270,9 @@ def display_quality_manager():
                     label_visibility="collapsed",
                     help="Required: Detailed description of the quality problem"
                 )
+                
+                # Option to use AI assistant
+                use_ai = st.checkbox("Use AI Assistant for analysis and recommendations", value=False)
                 
                 # Expandable section for optional metrics
                 with st.expander("Additional Metrics (Optional)"):
@@ -1122,7 +1320,7 @@ def display_quality_manager():
                 
                 if submit_button:
                     # Validate required fields
-                    if not all([sku, sales_30d > 0, current_unit_cost > 0, msrp > 0, issue_description]):
+                    if not all([sku, sales_30d > 0, current_unit_cost > 0, sales_price > 0, issue_description]):
                         st.error("Please fill in all required fields marked with *")
                     else:
                         # Perform analysis
@@ -1135,7 +1333,7 @@ def display_quality_manager():
                             current_unit_cost=current_unit_cost,
                             fix_cost_upfront=fix_cost_upfront,
                             fix_cost_per_unit=fix_cost_per_unit,
-                            msrp=msrp,  # Added MSRP
+                            sales_price=sales_price,  # Changed from MSRP to sales_price
                             asin=asin if asin else None,
                             ncx_rate=ncx_rate if ncx_rate > 0 else None,
                             sales_365d=sales_365d if sales_365d > 0 else None,
@@ -1148,12 +1346,24 @@ def display_quality_manager():
                         # Store results in session state
                         st.session_state.quality_analysis_results = results
                         st.session_state.analysis_submitted = True
+                        st.session_state.use_ai_assistant = use_ai
                         
-                        # Initialize chat with AI
-                        st.session_state.chat_history = chat_with_ai(
-                            results, 
-                            issue_description
-                        )
+                        # Initialize chat with AI if requested
+                        if use_ai:
+                            # Get enhanced AI analysis for quality issues
+                            ai_analysis = get_enhanced_ai_analysis(
+                                client, 
+                                "quality", 
+                                results
+                            )
+                            
+                            # Create chat history with initial AI analysis
+                            st.session_state.chat_history = [{
+                                "role": "assistant",
+                                "content": ai_analysis
+                            }]
+                        else:
+                            st.session_state.chat_history = None
                         
                         # Rerun to show results
                         st.experimental_rerun()
@@ -1163,79 +1373,56 @@ def display_quality_manager():
             # Display analysis results
             display_quality_issue_results(st.session_state.quality_analysis_results)
             
-            # Display AI chat interface
-            st.markdown('<div class="sub-header">AI Quality Consultant</div>', unsafe_allow_html=True)
-            
-            # Chat container
-            chat_container = st.container()
-            
-            with chat_container:
-                # Display chat history
-                for message in st.session_state.chat_history:
-                    if message["role"] == "user":
-                        st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
-            
-            # Input for new messages
-            user_input = st.text_input("Ask about the quality issue or potential solutions:", key="user_message")
-            
-            if st.button("Send", key="send_button"):
-                if user_input:
-                    # Add user message to chat history
-                    st.session_state.chat_history.append({
-                        "role": "user",
-                        "content": user_input
-                    })
-                    
-                    # Get AI response
-                    system_prompt = f"""
-                    You are a Quality Management expert for a product line. You analyze quality issues, provide insights, and suggest solutions.
-                    
-                    Product details:
-                    - SKU: {st.session_state.quality_analysis_results["sku"]}
-                    - Type: {st.session_state.quality_analysis_results["product_type"]}
-                    - MSRP: ${st.session_state.quality_analysis_results["msrp"]:.2f}
-                    - Issue: {st.session_state.quality_analysis_results["issue_description"]}
-                    
-                    Metrics:
-                    - Return Rate (30 days): {st.session_state.quality_analysis_results["current_metrics"]["return_rate_30d"]:.2f}%
-                    - Current Profit Margin: {st.session_state.quality_analysis_results["current_metrics"]["margin_percentage"]:.2f}%
-                    - Future Profit Margin: {st.session_state.quality_analysis_results["future_metrics"]["margin_percentage"]:.2f}%
-                    - Monthly Return Cost: ${st.session_state.quality_analysis_results["financial_impact"]["monthly_return_cost"]:.2f}
-                    - Estimated Savings: ${st.session_state.quality_analysis_results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
-                    - Payback Period: {st.session_state.quality_analysis_results["financial_impact"]["payback_months"]:.1f} months
-                    
-                    Recommendation: {st.session_state.quality_analysis_results["recommendation"]}
-                    """
-                    
-                    # Get the full chat history for context
-                    messages_history = []
-                    for msg in st.session_state.chat_history:
-                        messages_history.append({"role": msg["role"], "content": msg["content"]})
-                    
-                    ai_response = get_ai_analysis(
-                        client,
-                        system_prompt,
-                        user_input,
-                        model="gpt-4o",
-                        messages=messages_history[:-1]  # Exclude the latest user message as it's passed separately
-                    )
-                    
-                    # Add AI response to chat history
-                    st.session_state.chat_history.append({
-                        "role": "assistant",
-                        "content": ai_response
-                    })
-                    
-                    # Clear input and rerun to show updated chat
-                    st.experimental_rerun()
+            # Display AI chat interface if enabled
+            if st.session_state.use_ai_assistant:
+                st.markdown('<div class="sub-header">AI Quality Consultant</div>', unsafe_allow_html=True)
+                
+                # Chat container
+                chat_container = st.container()
+                
+                with chat_container:
+                    # Display chat history
+                    for message in st.session_state.chat_history:
+                        if message["role"] == "user":
+                            st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
+                
+                # Input for new messages
+                user_input = st.text_input("Ask about the quality issue or potential solutions:", key="user_message")
+                
+                if st.button("Send", key="send_button"):
+                    if user_input:
+                        # Add user message to chat history
+                        st.session_state.chat_history.append({
+                            "role": "user",
+                            "content": user_input
+                        })
+                        
+                        # Get AI response with enhanced analysis
+                        ai_response = get_enhanced_ai_analysis(
+                            client,
+                            "quality",
+                            st.session_state.quality_analysis_results,
+                            user_input,
+                            st.session_state.chat_history[:-1]  # Exclude the latest user message
+                        )
+                        
+                        # Add AI response to chat history
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": ai_response
+                        })
+                        
+                        # Clear input and rerun to show updated chat
+                        st.experimental_rerun()
             
             # Reset button
             if st.button("Start New Analysis", key="reset_button"):
                 st.session_state.quality_analysis_results = None
                 st.session_state.analysis_submitted = False
                 st.session_state.chat_history = None
+                st.session_state.use_ai_assistant = False
                 st.experimental_rerun()
     
     with tab2:
@@ -1245,6 +1432,8 @@ def display_quality_manager():
         if "salvage_results" not in st.session_state:
             st.session_state.salvage_results = None
             st.session_state.salvage_submitted = False
+            st.session_state.salvage_ai_enabled = False
+            st.session_state.salvage_chat_history = None
         
         # Form for entering salvage operation data
         if not st.session_state.salvage_submitted:
@@ -1280,13 +1469,13 @@ def display_quality_manager():
                         help="Required: Current per-unit cost to produce"
                     )
                     
-                    st.markdown('<span class="required-field">MSRP (Retail Price)</span>', unsafe_allow_html=True)
-                    msrp = st.number_input(
-                        "MSRP (Retail Price)",
+                    st.markdown('<span class="required-field">Sales Price</span>', unsafe_allow_html=True)
+                    sales_price = st.number_input(
+                        "Sales Price",
                         min_value=0.01,
-                        key="salvage_msrp",
+                        key="salvage_sales_price",
                         label_visibility="collapsed",
-                        help="Required: Original retail price before discount"
+                        help="Required: Original selling price before discount"
                     )
                 
                 with col2:
@@ -1328,12 +1517,15 @@ def display_quality_manager():
                         help="Required: Discount percentage for selling reworked units"
                     )
                 
+                # Option to use AI assistant
+                use_ai_salvage = st.checkbox("Use AI Assistant for analysis and recommendations", value=False, key="salvage_ai_checkbox")
+                
                 # Form submission
                 submit_button = st.form_submit_button("Analyze Salvage Operation")
                 
                 if submit_button:
                     # Validate required fields
-                    if not all([sku, affected_inventory > 0, current_unit_cost > 0, msrp > 0]):
+                    if not all([sku, affected_inventory > 0, current_unit_cost > 0, sales_price > 0]):
                         st.error("Please fill in all required fields marked with *")
                     else:
                         # Perform analysis
@@ -1345,12 +1537,30 @@ def display_quality_manager():
                             rework_cost_per_unit=rework_cost_per_unit,
                             expected_recovery_pct=expected_recovery_pct,
                             expected_discount_pct=expected_discount_pct,
-                            msrp=msrp  # Added MSRP
+                            sales_price=sales_price  # Changed from MSRP to sales_price
                         )
                         
                         # Store results in session state
                         st.session_state.salvage_results = results
                         st.session_state.salvage_submitted = True
+                        st.session_state.salvage_ai_enabled = use_ai_salvage
+                        
+                        # Initialize AI chat if enabled
+                        if use_ai_salvage:
+                            # Get enhanced AI analysis for salvage operations
+                            ai_analysis = get_enhanced_ai_analysis(
+                                client, 
+                                "salvage", 
+                                results
+                            )
+                            
+                            # Create chat history with initial AI analysis
+                            st.session_state.salvage_chat_history = [{
+                                "role": "assistant",
+                                "content": ai_analysis
+                            }]
+                        else:
+                            st.session_state.salvage_chat_history = None
                         
                         # Rerun to show results
                         st.experimental_rerun()
@@ -1360,7 +1570,51 @@ def display_quality_manager():
             # Display analysis results
             display_salvage_results(st.session_state.salvage_results)
             
-            # Scenario modeling
+            # Display AI chat interface if enabled
+            if st.session_state.salvage_ai_enabled and st.session_state.salvage_chat_history:
+                st.markdown('<div class="sub-header">AI Salvage Consultant</div>', unsafe_allow_html=True)
+                
+                # Chat container
+                salvage_chat_container = st.container()
+                
+                with salvage_chat_container:
+                    # Display chat history
+                    for message in st.session_state.salvage_chat_history:
+                        if message["role"] == "user":
+                            st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
+                
+                # Input for new messages
+                salvage_user_input = st.text_input("Ask about the salvage operation or potential solutions:", key="salvage_user_message")
+                
+                if st.button("Send", key="salvage_send_button"):
+                    if salvage_user_input:
+                        # Add user message to chat history
+                        st.session_state.salvage_chat_history.append({
+                            "role": "user",
+                            "content": salvage_user_input
+                        })
+                        
+                        # Get AI response with enhanced analysis
+                        salvage_ai_response = get_enhanced_ai_analysis(
+                            client,
+                            "salvage",
+                            st.session_state.salvage_results,
+                            salvage_user_input,
+                            st.session_state.salvage_chat_history[:-1]  # Exclude the latest user message
+                        )
+                        
+                        # Add AI response to chat history
+                        st.session_state.salvage_chat_history.append({
+                            "role": "assistant",
+                            "content": salvage_ai_response
+                        })
+                        
+                        # Clear input and rerun to show updated chat
+                        st.experimental_rerun()
+            
+            # Scenario modeling section
             st.markdown('<div class="sub-header">Scenario Modeling</div>', unsafe_allow_html=True)
             
             col1, col2, col3 = st.columns(3)
@@ -1405,7 +1659,7 @@ def display_quality_manager():
                     rework_cost_per_unit=rework_adjustment,
                     expected_recovery_pct=recovery_adjustment,
                     expected_discount_pct=discount_adjustment,
-                    msrp=st.session_state.salvage_results["metrics"]["regular_price"]  # Use original MSRP
+                    sales_price=st.session_state.salvage_results["metrics"]["regular_price"]  # Use original sales price
                 )
                 
                 # Compare current vs new scenario
@@ -1472,11 +1726,27 @@ def display_quality_manager():
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # AI analysis of new scenario if AI is enabled
+                if st.session_state.salvage_ai_enabled and st.button("Get AI Analysis of New Scenario"):
+                    # Get enhanced AI analysis of new scenario
+                    scenario_analysis = get_enhanced_ai_analysis(
+                        client, 
+                        "salvage", 
+                        new_results,
+                        "Compare this new scenario with the original scenario. What are the key differences and which one do you recommend?"
+                    )
+                    
+                    # Display the analysis
+                    st.markdown('<div class="sub-header">AI Analysis of New Scenario</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="chat-message ai-message">{scenario_analysis}</div>', unsafe_allow_html=True)
             
             # Reset button
             if st.button("Start New Analysis", key="salvage_reset_button"):
                 st.session_state.salvage_results = None
                 st.session_state.salvage_submitted = False
+                st.session_state.salvage_ai_enabled = False
+                st.session_state.salvage_chat_history = None
                 st.experimental_rerun()
 
 def display_dashboard():
