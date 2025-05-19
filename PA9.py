@@ -11,6 +11,10 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 from openai import OpenAI
 import base64
 import io
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def verify_password(password):
     """Verify the password for login"""
@@ -165,7 +169,7 @@ st.markdown("""
 
 # --- UTILITY FUNCTIONS ---
 
-def initialize_openai_client(api_key: str) -> OpenAI:
+def initialize_openai_client(api_key: str) -> Optional[OpenAI]:
     """
     Initialize the OpenAI client with the provided API key
     
@@ -173,14 +177,25 @@ def initialize_openai_client(api_key: str) -> OpenAI:
         api_key: OpenAI API key
         
     Returns:
-        OpenAI client instance
+        OpenAI client instance or None if initialization fails
     """
+    if not api_key:
+        logging.error("No API key provided")
+        return None
+        
     try:
         client = OpenAI(api_key=api_key)
+        # Test the connection with a simple request
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=5
+        )
+        logging.info(f"OpenAI client initialized successfully")
         return client
     except Exception as e:
         # Handle initialization errors gracefully
-        print(f"Error initializing OpenAI client: {e}")
+        logging.error(f"Error initializing OpenAI client: {str(e)}")
         return None
 
 def get_ai_analysis(
@@ -203,6 +218,9 @@ def get_ai_analysis(
     Returns:
         AI response text
     """
+    if client is None:
+        return "AI assistant is not available. Please check your API key configuration."
+        
     try:
         # Build the messages array
         message_list = [{"role": "system", "content": system_prompt}]
@@ -227,7 +245,7 @@ def get_ai_analysis(
     except Exception as e:
         # Handle API errors gracefully
         error_message = f"Error getting AI analysis: {str(e)}"
-        print(error_message)
+        logging.error(error_message)
         return f"I apologize, but I encountered an error while analyzing this issue. Please try again or contact technical support if the problem persists.\n\nError details: {error_message}"
 
 def format_currency(value: float) -> str:
@@ -611,7 +629,7 @@ def display_quality_issue_results(results):
             f"${results['current_metrics']['profit_per_unit']:.2f}",
             f"{results['current_metrics']['margin_percentage']:.2f}%",
             f"{results['current_metrics']['return_rate_30d']:.2f}%",
-            "N/A",  # We don't have the current returns in the result
+            f"{returns_30d:.0f} units",  # We need to include the actual returns here
             f"${results['financial_impact']['current_monthly_profit']:.2f}"
         ],
         "After Fix": [
@@ -619,7 +637,7 @@ def display_quality_issue_results(results):
             f"${results['future_metrics']['profit_per_unit']:.2f}",
             f"{results['future_metrics']['margin_percentage']:.2f}%",
             f"{results['future_metrics']['estimated_return_rate']:.2f}%",
-            "N/A",  # We don't have the future returns in the result
+            f"{estimated_future_returns:.1f} units",  # Include the estimated future returns
             f"${results['financial_impact']['new_monthly_profit']:.2f}"
         ],
         "Change": [
@@ -627,7 +645,7 @@ def display_quality_issue_results(results):
             f"${results['future_metrics']['profit_per_unit'] - results['current_metrics']['profit_per_unit']:.2f}",
             f"{results['future_metrics']['margin_percentage'] - results['current_metrics']['margin_percentage']:.2f}%",
             f"-{results['current_metrics']['return_rate_30d'] - results['future_metrics']['estimated_return_rate']:.2f}%",
-            "N/A",
+            f"-{returns_30d - estimated_future_returns:.1f} units",  # Calculate the difference
             f"${results['financial_impact']['new_monthly_profit'] - results['financial_impact']['current_monthly_profit']:.2f}"
         ]
     }
@@ -827,7 +845,7 @@ def display_salvage_results(results):
 
 # Create enhanced AI-specific functions
 def get_enhanced_ai_analysis(
-    client: OpenAI, 
+    client: Optional[OpenAI], 
     issue_type: str,  # "quality" or "salvage"
     data: Dict[str, Any],
     user_input: Optional[str] = None,
@@ -848,6 +866,9 @@ def get_enhanced_ai_analysis(
     Returns:
         AI response text
     """
+    if client is None:
+        return "AI assistant is not available. Please check your API key configuration in the Streamlit secrets or environment variables."
+    
     if issue_type == "quality":
         # Create system prompt for quality issues
         system_prompt = f"""
@@ -968,7 +989,7 @@ def get_enhanced_ai_analysis(
         return response.choices[0].message.content
     except Exception as e:
         error_message = f"Error getting AI analysis: {str(e)}"
-        print(error_message)
+        logging.error(error_message)
         return f"I apologize, but I encountered an error analyzing this issue. Please try again or contact technical support if the problem persists.\n\nError details: {error_message}"
 
 def display_ai_assistant():
@@ -996,6 +1017,14 @@ def display_ai_assistant():
     if "ai_assistant_history" not in st.session_state:
         st.session_state.ai_assistant_history = []
     
+    # API connection status
+    openai_status = client is not None
+    
+    if not openai_status:
+        st.error("⚠️ OpenAI API connection is not available. Please check your API key configuration in Streamlit secrets or environment variables.")
+    else:
+        st.success("✅ OpenAI API connection established successfully.")
+    
     # Display existing chat history
     chat_container = st.container()
     
@@ -1009,7 +1038,8 @@ def display_ai_assistant():
     # Input for new message
     user_input = st.text_input("Ask a question about quality management, returns, or inventory issues:", key="ai_assistant_input")
     
-    if st.button("Send", key="ai_assistant_send"):
+    # Send button (disabled if API not available)
+    if st.button("Send", key="ai_assistant_send", disabled=not openai_status):
         if user_input:
             # Add user message to chat history
             st.session_state.ai_assistant_history.append({
@@ -1037,17 +1067,18 @@ def display_ai_assistant():
             Use a professional, consultative tone. Be thorough but concise in your responses.
             """
             
-            # Get the full chat history for context
+            # Get the full chat history for context (excluding the latest user message)
             messages_history = []
-            for msg in st.session_state.ai_assistant_history:
+            for msg in st.session_state.ai_assistant_history[:-1]:  # Exclude the latest user message
                 messages_history.append({"role": msg["role"], "content": msg["content"]})
             
+            # Make API call
             ai_response = get_ai_analysis(
                 client,
                 system_prompt,
                 user_input,
                 model="gpt-4o",
-                messages=messages_history[:-1]  # Exclude the latest user message as it's passed separately
+                messages=messages_history
             )
             
             # Add AI response to chat history
@@ -1108,52 +1139,6 @@ def analyze_sales_trends(df):
         "category_sales": category_sales
     }
 
-# --- INVENTORY MANAGEMENT FUNCTIONS ---
-
-def load_inventory_data():
-    """
-    Create an empty inventory data template
-    """
-    # Create minimal template with columns
-    data = {
-        "sku": [],
-        "product_name": [],
-        "category": [],
-        "in_stock": [],
-        "reorder_point": [],
-        "lead_time_days": [],
-        "cost": [],
-        "last_ordered": []
-    }
-    return pd.DataFrame(data)
-
-def analyze_inventory_status(df):
-    """Analyze inventory status from the dataframe"""
-    if df.empty:
-        return None
-    
-    # Calculate inventory metrics
-    # Add status column if it doesn't exist
-    if "status" not in df.columns:
-        df["status"] = df.apply(lambda x: "Low Stock" if x["in_stock"] <= x["reorder_point"] else "OK", axis=1)
-        
-    low_stock_items = df[df["status"] == "Low Stock"]
-    stock_out_risk = len(low_stock_items) / len(df) * 100 if len(df) > 0 else 0
-    
-    # Calculate inventory value
-    df["inventory_value"] = df["in_stock"] * df["cost"]
-    total_inventory_value = df["inventory_value"].sum()
-    
-    # Calculate inventory by category
-    category_inventory = df.groupby("category")["inventory_value"].sum().reset_index()
-    
-    return {
-        "low_stock_items": low_stock_items,
-        "stock_out_risk": stock_out_risk,
-        "total_inventory_value": total_inventory_value,
-        "category_inventory": category_inventory
-    }
-
 # --- DASHBOARD FUNCTIONS ---
 
 def load_dashboard_data():
@@ -1186,7 +1171,7 @@ def display_quality_manager():
         
         # Initialize session state for chat
         if "chat_history" not in st.session_state:
-            st.session_state.chat_history = None
+            st.session_state.chat_history = []
         
         # Check if analysis results exist
         if "quality_analysis_results" not in st.session_state:
@@ -1275,8 +1260,15 @@ def display_quality_manager():
                     help="Required: Detailed description of the quality problem"
                 )
                 
-                # Option to use AI assistant
-                use_ai = st.checkbox("Use AI Assistant for analysis and recommendations", value=False)
+                # Check API connection availability
+                openai_status = client is not None
+                
+                # Option to use AI assistant (disabled if API not available)
+                if not openai_status:
+                    st.warning("⚠️ AI Assistant is not available due to API connection issues. Please check your API key configuration.")
+                    use_ai = False
+                else:
+                    use_ai = st.checkbox("Use AI Assistant for analysis and recommendations", value=False)
                 
                 # Expandable section for optional metrics
                 with st.expander("Additional Metrics (Optional)"):
@@ -1327,6 +1319,10 @@ def display_quality_manager():
                     if not all([sku, sales_30d > 0, current_unit_cost > 0, sales_price > 0, issue_description]):
                         st.error("Please fill in all required fields marked with *")
                     else:
+                        # Store for display_quality_issue_results function to use
+                        st.session_state.returns_30d = returns_30d
+                        st.session_state.estimated_future_returns = sales_30d * ((return_rate_30d := (returns_30d / sales_30d) * 100 if sales_30d > 0 else 0) * 0.2 / 100)
+                        
                         # Perform analysis
                         results = analyze_quality_issue(
                             sku=sku,
@@ -1353,7 +1349,7 @@ def display_quality_manager():
                         st.session_state.use_ai_assistant = use_ai
                         
                         # Initialize chat with AI if requested
-                        if use_ai:
+                        if use_ai and client is not None:
                             # Get enhanced AI analysis for quality issues
                             ai_analysis = get_enhanced_ai_analysis(
                                 client, 
@@ -1367,7 +1363,7 @@ def display_quality_manager():
                                 "content": ai_analysis
                             }]
                         else:
-                            st.session_state.chat_history = None
+                            st.session_state.chat_history = []
                         
                         # Rerun to show results
                         st.rerun() 
@@ -1381,51 +1377,57 @@ def display_quality_manager():
             if st.session_state.use_ai_assistant:
                 st.markdown('<div class="sub-header">AI Quality Consultant</div>', unsafe_allow_html=True)
                 
-                # Chat container
-                chat_container = st.container()
+                # API connection status
+                openai_status = client is not None
                 
-                with chat_container:
-                    # Display chat history
-                    for message in st.session_state.chat_history:
-                        if message["role"] == "user":
-                            st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
-                        else:
-                            st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
-                
-                # Input for new messages
-                user_input = st.text_input("Ask about the quality issue or potential solutions:", key="user_message")
-                
-                if st.button("Send", key="send_button"):
-                    if user_input:
-                        # Add user message to chat history
-                        st.session_state.chat_history.append({
-                            "role": "user",
-                            "content": user_input
-                        })
-                        
-                        # Get AI response with enhanced analysis
-                        ai_response = get_enhanced_ai_analysis(
-                            client,
-                            "quality",
-                            st.session_state.quality_analysis_results,
-                            user_input,
-                            st.session_state.chat_history[:-1]  # Exclude the latest user message
-                        )
-                        
-                        # Add AI response to chat history
-                        st.session_state.chat_history.append({
-                            "role": "assistant",
-                            "content": ai_response
-                        })
-                        
-                        # Clear input and rerun to show updated chat
-                        st.rerun() 
+                if not openai_status:
+                    st.error("⚠️ OpenAI API connection is not available. Please check your API key configuration.")
+                else:
+                    # Chat container
+                    chat_container = st.container()
+                    
+                    with chat_container:
+                        # Display chat history
+                        for message in st.session_state.chat_history:
+                            if message["role"] == "user":
+                                st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
+                    
+                    # Input for new messages
+                    user_input = st.text_input("Ask about the quality issue or potential solutions:", key="user_message")
+                    
+                    if st.button("Send", key="send_button", disabled=not openai_status):
+                        if user_input:
+                            # Add user message to chat history
+                            st.session_state.chat_history.append({
+                                "role": "user",
+                                "content": user_input
+                            })
+                            
+                            # Get AI response with enhanced analysis
+                            ai_response = get_enhanced_ai_analysis(
+                                client,
+                                "quality",
+                                st.session_state.quality_analysis_results,
+                                user_input,
+                                st.session_state.chat_history[:-1]  # Exclude the latest user message
+                            )
+                            
+                            # Add AI response to chat history
+                            st.session_state.chat_history.append({
+                                "role": "assistant",
+                                "content": ai_response
+                            })
+                            
+                            # Clear input and rerun to show updated chat
+                            st.rerun() 
             
             # Reset button
             if st.button("Start New Analysis", key="reset_button"):
                 st.session_state.quality_analysis_results = None
                 st.session_state.analysis_submitted = False
-                st.session_state.chat_history = None
+                st.session_state.chat_history = []
                 st.session_state.use_ai_assistant = False
                 st.rerun() 
     
@@ -1437,7 +1439,7 @@ def display_quality_manager():
             st.session_state.salvage_results = None
             st.session_state.salvage_submitted = False
             st.session_state.salvage_ai_enabled = False
-            st.session_state.salvage_chat_history = None
+            st.session_state.salvage_chat_history = []
         
         # Form for entering salvage operation data
         if not st.session_state.salvage_submitted:
@@ -1521,8 +1523,15 @@ def display_quality_manager():
                         help="Required: Discount percentage for selling reworked units"
                     )
                 
-                # Option to use AI assistant
-                use_ai_salvage = st.checkbox("Use AI Assistant for analysis and recommendations", value=False, key="salvage_ai_checkbox")
+                # Check API connection availability for AI assistant
+                openai_status = client is not None
+                
+                # Option to use AI assistant (disabled if API not available)
+                if not openai_status:
+                    st.warning("⚠️ AI Assistant is not available due to API connection issues. Please check your API key configuration.")
+                    use_ai_salvage = False
+                else:
+                    use_ai_salvage = st.checkbox("Use AI Assistant for analysis and recommendations", value=False, key="salvage_ai_checkbox")
                 
                 # Form submission
                 submit_button = st.form_submit_button("Analyze Salvage Operation")
@@ -1550,7 +1559,7 @@ def display_quality_manager():
                         st.session_state.salvage_ai_enabled = use_ai_salvage
                         
                         # Initialize AI chat if enabled
-                        if use_ai_salvage:
+                        if use_ai_salvage and client is not None:
                             # Get enhanced AI analysis for salvage operations
                             ai_analysis = get_enhanced_ai_analysis(
                                 client, 
@@ -1564,7 +1573,7 @@ def display_quality_manager():
                                 "content": ai_analysis
                             }]
                         else:
-                            st.session_state.salvage_chat_history = None
+                            st.session_state.salvage_chat_history = []
                         
                         # Rerun to show results
                         st.rerun() 
@@ -1575,48 +1584,54 @@ def display_quality_manager():
             display_salvage_results(st.session_state.salvage_results)
             
             # Display AI chat interface if enabled
-            if st.session_state.salvage_ai_enabled and st.session_state.salvage_chat_history:
+            if st.session_state.salvage_ai_enabled:
                 st.markdown('<div class="sub-header">AI Salvage Consultant</div>', unsafe_allow_html=True)
                 
-                # Chat container
-                salvage_chat_container = st.container()
+                # API connection status
+                openai_status = client is not None
                 
-                with salvage_chat_container:
-                    # Display chat history
-                    for message in st.session_state.salvage_chat_history:
-                        if message["role"] == "user":
-                            st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
-                        else:
-                            st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
-                
-                # Input for new messages
-                salvage_user_input = st.text_input("Ask about the salvage operation or potential solutions:", key="salvage_user_message")
-                
-                if st.button("Send", key="salvage_send_button"):
-                    if salvage_user_input:
-                        # Add user message to chat history
-                        st.session_state.salvage_chat_history.append({
-                            "role": "user",
-                            "content": salvage_user_input
-                        })
-                        
-                        # Get AI response with enhanced analysis
-                        salvage_ai_response = get_enhanced_ai_analysis(
-                            client,
-                            "salvage",
-                            st.session_state.salvage_results,
-                            salvage_user_input,
-                            st.session_state.salvage_chat_history[:-1]  # Exclude the latest user message
-                        )
-                        
-                        # Add AI response to chat history
-                        st.session_state.salvage_chat_history.append({
-                            "role": "assistant",
-                            "content": salvage_ai_response
-                        })
-                        
-                        # Clear input and rerun to show updated chat
-                        st.rerun() 
+                if not openai_status:
+                    st.error("⚠️ OpenAI API connection is not available. Please check your API key configuration.")
+                else:
+                    # Chat container
+                    salvage_chat_container = st.container()
+                    
+                    with salvage_chat_container:
+                        # Display chat history
+                        for message in st.session_state.salvage_chat_history:
+                            if message["role"] == "user":
+                                st.markdown(f'<div class="chat-message user-message">{message["content"]}</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown(f'<div class="chat-message ai-message">{message["content"]}</div>', unsafe_allow_html=True)
+                    
+                    # Input for new messages
+                    salvage_user_input = st.text_input("Ask about the salvage operation or potential solutions:", key="salvage_user_message")
+                    
+                    if st.button("Send", key="salvage_send_button", disabled=not openai_status):
+                        if salvage_user_input:
+                            # Add user message to chat history
+                            st.session_state.salvage_chat_history.append({
+                                "role": "user",
+                                "content": salvage_user_input
+                            })
+                            
+                            # Get AI response with enhanced analysis
+                            salvage_ai_response = get_enhanced_ai_analysis(
+                                client,
+                                "salvage",
+                                st.session_state.salvage_results,
+                                salvage_user_input,
+                                st.session_state.salvage_chat_history[:-1]  # Exclude the latest user message
+                            )
+                            
+                            # Add AI response to chat history
+                            st.session_state.salvage_chat_history.append({
+                                "role": "assistant",
+                                "content": salvage_ai_response
+                            })
+                            
+                            # Clear input and rerun to show updated chat
+                            st.rerun() 
             
             # Scenario modeling section
             st.markdown('<div class="sub-header">Scenario Modeling</div>', unsafe_allow_html=True)
@@ -1732,32 +1747,33 @@ def display_quality_manager():
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # AI analysis of new scenario if AI is enabled
-                if st.session_state.salvage_ai_enabled and st.button("Get AI Analysis of New Scenario"):
-                    # Get enhanced AI analysis of new scenario
-                    scenario_analysis = get_enhanced_ai_analysis(
-                        client, 
-                        "salvage", 
-                        new_results,
-                        "Compare this new scenario with the original scenario. What are the key differences and which one do you recommend?"
-                    )
-                    
-                    # Display the analysis
-                    st.markdown('<div class="sub-header">AI Analysis of New Scenario</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="chat-message ai-message">{scenario_analysis}</div>', unsafe_allow_html=True)
+                if st.session_state.salvage_ai_enabled and client is not None:
+                    if st.button("Get AI Analysis of New Scenario"):
+                        # Get enhanced AI analysis of new scenario
+                        scenario_analysis = get_enhanced_ai_analysis(
+                            client, 
+                            "salvage", 
+                            new_results,
+                            "Compare this new scenario with the original scenario. What are the key differences and which one do you recommend?"
+                        )
+                        
+                        # Display the analysis
+                        st.markdown('<div class="sub-header">AI Analysis of New Scenario</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="chat-message ai-message">{scenario_analysis}</div>', unsafe_allow_html=True)
             
             # Reset button
             if st.button("Start New Analysis", key="salvage_reset_button"):
                 st.session_state.salvage_results = None
                 st.session_state.salvage_submitted = False
                 st.session_state.salvage_ai_enabled = False
-                st.session_state.salvage_chat_history = None
+                st.session_state.salvage_chat_history = []
                 st.rerun() 
 
 def display_dashboard():
     st.markdown('<div class="main-header">Business Overview Dashboard</div>', unsafe_allow_html=True)
     
     # Data upload option
-    st.markdown('<div class="data-warning">No data available. Please upload or enter data in the Sales Analysis and Inventory Management sections.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="data-warning">No data available. Please upload or enter data in the Sales Analysis and Quality Manager sections.</div>', unsafe_allow_html=True)
     
     # Placeholder for dashboard widgets
     col1, col2, col3, col4 = st.columns(4)
@@ -1776,14 +1792,14 @@ def display_dashboard():
     
     with col3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="metric-label">Inventory Turnover</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="metric-value">0.00x</div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Return Rate</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">0.00%</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="metric-label">Stock-Out Risk</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="metric-value">0.0%</div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Quality Score</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">0.0</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Placeholder charts
@@ -1811,7 +1827,7 @@ def display_dashboard():
         if 'Analysis Date' in quality_df.columns:
             quality_df = quality_df.sort_values('Analysis Date', ascending=False)
         
-        st.dataframe(quality_df[['SKU', 'MSRP', 'Current Return Rate', 'Annual Profit Improvement', 'Recommendation', 'Analysis Date']], 
+        st.dataframe(quality_df[['SKU', 'Sales Price', 'Current Return Rate', 'Annual Profit Improvement', 'Recommendation', 'Analysis Date']], 
                    use_container_width=True, 
                    hide_index=True)
     else:
@@ -2068,355 +2084,3 @@ def display_sales_analysis():
             st.warning("No data available for the selected filters. Please adjust your selection.")
     else:
         st.info("No sales data available. Please upload data or add entries manually.")
-
-def display_inventory_management():
-    st.markdown('<div class="main-header">Inventory Management</div>', unsafe_allow_html=True)
-    
-    # Initialize inventory data if not exist
-    if 'inventory_data' not in st.session_state:
-        st.session_state.inventory_data = load_inventory_data()
-    
-    # Upload inventory data
-    st.markdown('<div class="sub-header">Upload Inventory Data</div>', unsafe_allow_html=True)
-    
-    upload_col1, upload_col2 = st.columns([2, 1])
-    
-    with upload_col1:
-        uploaded_file = st.file_uploader("Upload inventory data CSV (Columns: sku, product_name, category, in_stock, reorder_point, lead_time_days, cost, last_ordered)", type="csv")
-        if uploaded_file is not None:
-            try:
-                inventory_df = pd.read_csv(uploaded_file)
-                # Convert date column to datetime if exists
-                if 'last_ordered' in inventory_df.columns:
-                    inventory_df['last_ordered'] = pd.to_datetime(inventory_df['last_ordered'])
-                # Store in session state
-                st.session_state.inventory_data = inventory_df
-                st.success("Inventory data uploaded successfully!")
-            except Exception as e:
-                st.error(f"Error uploading file: {e}")
-    
-    with upload_col2:
-        if st.button("Add Example Data", key="add_example_inventory"):
-            # Create example data
-            skus = [f"VH-{i:04d}" for i in range(1, 11)]
-            product_names = [f"Product {i}" for i in range(1, 11)]
-            categories = np.random.choice(["Health", "Wellness", "Medical", "Fitness"], 10)
-            in_stock = np.random.randint(0, 100, 10)
-            reorder_points = np.random.randint(10, 30, 10)
-            lead_times = np.random.randint(7, 45, 10)
-            costs = np.random.uniform(10, 100, 10).round(2)
-            last_ordered = pd.date_range(end=pd.Timestamp.now(), periods=10, freq="D")
-            
-            example_df = pd.DataFrame({
-                "sku": skus,
-                "product_name": product_names,
-                "category": categories,
-                "in_stock": in_stock,
-                "reorder_point": reorder_points,
-                "lead_time_days": lead_times,
-                "cost": costs,
-                "last_ordered": last_ordered
-            })
-            
-            # Add status column
-            example_df["status"] = example_df.apply(lambda x: "Low Stock" if x["in_stock"] <= x["reorder_point"] else "OK", axis=1)
-            
-            st.session_state.inventory_data = example_df
-            st.success("Example inventory data added successfully!")
-    
-    # Manual data entry option
-    with st.expander("Manual Data Entry"):
-        st.markdown("Add inventory data manually:")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            entry_sku = st.text_input("SKU")
-            entry_product_name = st.text_input("Product Name")
-            entry_category = st.selectbox("Category", options=["Health", "Wellness", "Medical", "Fitness", "Other"])
-        
-        with col2:
-            entry_in_stock = st.number_input("In Stock", min_value=0)
-            entry_reorder_point = st.number_input("Reorder Point", min_value=0)
-            entry_lead_time = st.number_input("Lead Time (Days)", min_value=1)
-        
-        with col3:
-            entry_cost = st.number_input("Cost", min_value=0.01)
-            entry_last_ordered = st.date_input("Last Ordered", value=datetime.now().date())
-        
-        if st.button("Add Inventory Item"):
-            # Check if required fields are provided
-            if entry_sku and entry_product_name:
-                new_row = pd.DataFrame({
-                    "sku": [entry_sku],
-                    "product_name": [entry_product_name],
-                    "category": [entry_category],
-                    "in_stock": [entry_in_stock],
-                    "reorder_point": [entry_reorder_point],
-                    "lead_time_days": [entry_lead_time],
-                    "cost": [entry_cost],
-                    "last_ordered": [pd.Timestamp(entry_last_ordered)]
-                })
-                
-                # Add status column
-                new_row["status"] = new_row.apply(lambda x: "Low Stock" if x["in_stock"] <= x["reorder_point"] else "OK", axis=1)
-                
-                st.session_state.inventory_data = pd.concat([st.session_state.inventory_data, new_row], ignore_index=True)
-                st.success("Inventory item added successfully!")
-            else:
-                st.error("SKU and Product Name are required.")
-    
-    # Display and analyze data if available
-    if not st.session_state.inventory_data.empty:
-        # Data preview
-        st.markdown('<div class="sub-header">Inventory Data Preview</div>', unsafe_allow_html=True)
-        st.dataframe(st.session_state.inventory_data.head(10), use_container_width=True)
-        
-        # Export data
-        st.markdown(get_csv_download_link(st.session_state.inventory_data, "inventory_data.csv", "Export Inventory Data to CSV"), unsafe_allow_html=True)
-        
-        # Filter options
-        st.markdown('<div class="sub-header">Filter Inventory</div>', unsafe_allow_html=True)
-        
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
-        
-        with filter_col1:
-            if 'category' in st.session_state.inventory_data.columns:
-                available_categories = sorted(st.session_state.inventory_data["category"].unique())
-                selected_categories = st.multiselect(
-                    "Filter by Category",
-                    options=available_categories,
-                    default=available_categories
-                )
-            else:
-                selected_categories = []
-        
-        with filter_col2:
-            if 'status' in st.session_state.inventory_data.columns:
-                available_statuses = sorted(st.session_state.inventory_data["status"].unique())
-                selected_status = st.multiselect(
-                    "Filter by Status",
-                    options=available_statuses,
-                    default=available_statuses
-                )
-            else:
-                selected_status = []
-        
-        with filter_col3:
-            sku_search = st.text_input("Search by SKU or Product Name")
-        
-        # Apply filters
-        filtered_df = st.session_state.inventory_data.copy()
-        
-        # Ensure status column exists
-        if 'status' not in filtered_df.columns and 'in_stock' in filtered_df.columns and 'reorder_point' in filtered_df.columns:
-            filtered_df["status"] = filtered_df.apply(lambda x: "Low Stock" if x["in_stock"] <= x["reorder_point"] else "OK", axis=1)
-        
-        if selected_categories:
-            filtered_df = filtered_df[filtered_df["category"].isin(selected_categories)]
-        
-        if selected_status:
-            filtered_df = filtered_df[filtered_df["status"].isin(selected_status)]
-        
-        if sku_search:
-            filtered_df = filtered_df[
-                (filtered_df["sku"].str.contains(sku_search, case=False, na=False)) |
-                (filtered_df["product_name"].str.contains(sku_search, case=False, na=False))
-            ]
-        
-        # Check if we have data after filtering
-        if not filtered_df.empty:
-            # Analyze the filtered data
-            analysis_results = analyze_inventory_status(filtered_df)
-            
-            # Display summary metrics
-            st.markdown('<div class="sub-header">Inventory Summary</div>', unsafe_allow_html=True)
-            
-            summary_col1, summary_col2, summary_col3 = st.columns(3)
-            
-            with summary_col1:
-                total_inventory = filtered_df["in_stock"].sum()
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                st.markdown('<div class="metric-label">Total Inventory Units</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">{total_inventory:,}</div>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            with summary_col2:
-                total_value = analysis_results["total_inventory_value"]
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                st.markdown('<div class="metric-label">Total Inventory Value</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">${total_value:,.2f}</div>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            with summary_col3:
-                low_stock_count = len(analysis_results["low_stock_items"])
-                low_stock_percent = low_stock_count / len(filtered_df) * 100 if len(filtered_df) > 0 else 0
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                st.markdown('<div class="metric-label">Low Stock Items</div>', unsafe_allow_html=True)
-                stock_color = "#EF4444" if low_stock_percent > 20 else "#10B981"
-                st.markdown(f'<div class="metric-value" style="color:{stock_color}">{low_stock_count} ({low_stock_percent:.1f}%)</div>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Inventory by category chart
-            st.markdown('<div class="sub-header">Inventory Value by Category</div>', unsafe_allow_html=True)
-            
-            if not analysis_results["category_inventory"].empty:
-                category_fig = px.pie(
-                    analysis_results["category_inventory"],
-                    values="inventory_value",
-                    names="category",
-                    hole=0.4
-                )
-                
-                category_fig.update_layout(
-                    height=350,
-                    margin=dict(l=20, r=20, t=20, b=20),
-                )
-                
-                st.plotly_chart(category_fig, use_container_width=True)
-            
-            # Inventory Status Table
-            st.markdown('<div class="sub-header">Inventory Status</div>', unsafe_allow_html=True)
-            
-            # Create a styled dataframe
-            st.dataframe(
-                filtered_df.sort_values(["status", "category", "sku"]),
-                column_config={
-                    "sku": "SKU",
-                    "product_name": "Product Name",
-                    "category": "Category",
-                    "in_stock": "In Stock",
-                    "reorder_point": "Reorder Point",
-                    "lead_time_days": "Lead Time (Days)",
-                    "cost": st.column_config.NumberColumn(
-                        "Cost",
-                        format="$%.2f"
-                    ),
-                    "last_ordered": "Last Ordered",
-                    "status": st.column_config.TextColumn(
-                        "Status",
-                        help="Inventory status based on reorder point"
-                    ),
-                    "inventory_value": st.column_config.NumberColumn(
-                        "Inventory Value",
-                        format="$%.2f"
-                    )
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            # Low stock items alert
-            if low_stock_count > 0:
-                st.markdown('<div class="sub-header">Low Stock Alert</div>', unsafe_allow_html=True)
-                
-                low_stock_df = analysis_results["low_stock_items"].sort_values("in_stock")
-                
-                st.warning(f"{low_stock_count} items are below reorder point and may need to be reordered soon.")
-                
-                st.dataframe(
-                    low_stock_df[["sku", "product_name", "in_stock", "reorder_point", "lead_time_days", "last_ordered"]],
-                    hide_index=True,
-                    use_container_width=True
-                )
-        else:
-            st.warning("No inventory data available for the selected filters. Please adjust your selection.")
-    else:
-        st.info("No inventory data available. Please upload data or add entries manually.")
-def main():
-    # Check if authenticated
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-    
-    # Sidebar navigation - only shown if authenticated
-    if st.session_state["authenticated"]:
-        st.sidebar.title("QualityROI Dashboard")
-        st.sidebar.markdown("""
-        <div class="sidebar-info">
-        <p>Welcome to QualityROI. Use the navigation below to access different modules.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        app_mode = st.sidebar.selectbox(
-            "Choose the app mode",
-            ["Quality Manager", "AI Assistant", "Dashboard", "Sales Analysis", "Inventory Management"]
-        )
-        
-        # Logout button
-        if st.sidebar.button("Logout"):
-            st.session_state["authenticated"] = False
-            st.rerun() 
-        
-        # Display selected page
-        if app_mode == "Dashboard":
-            display_dashboard()
-        elif app_mode == "Sales Analysis":
-            display_sales_analysis()
-        elif app_mode == "Inventory Management":
-            display_inventory_management()
-        elif app_mode == "Quality Manager":
-            display_quality_manager()
-        elif app_mode == "AI Assistant":
-            display_ai_assistant()
-    else:
-        # Login Screen
-        st.title("QualityROI - Cost-Benefit Analysis Tool")
-        st.subheader("Login")
-        
-        password = st.text_input("Enter password", type="password")
-        
-        if st.button("Login"):
-            if verify_password(password):
-                st.session_state["authenticated"] = True
-                st.success("Login successful!")
-                st.rerun() 
-            else:
-                st.error("Incorrect password")
-        
-        # Information about the tool
-        st.markdown("""
-        <div class="card">
-            <h3>About QualityROI</h3>
-            <p>QualityROI is a cost-benefit analysis tool designed to help you evaluate quality issues and make data-driven decisions.</p>
-            <ul>
-                <li><strong>Quality Manager:</strong> Analyze quality issues and salvage operations</li>
-                <li><strong>AI Assistant:</strong> Get expert advice on quality issues and solutions</li>
-                <li><strong>Dashboard:</strong> Get an overview of your business metrics</li>
-                <li><strong>Sales Analysis:</strong> Analyze sales trends and patterns</li>
-                <li><strong>Inventory Management:</strong> Monitor inventory levels and identify low stock items</li>
-            </ul>
-            <p>Please login to access the application.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-# --- API KEY HANDLING ---
-try:
-    api_key = st.secrets["openai_api_key"]
-except (FileNotFoundError, KeyError):
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-
-# --- API KEY HANDLING ---
-try:
-    api_key = st.secrets["openai_api_key"]
-except (FileNotFoundError, KeyError):
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-
-# Initialize OpenAI client
-client = initialize_openai_client(api_key)
-
-if __name__ == "__main__":
-    # Initialize session state variables if needed
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-    if "quality_analysis_results" not in st.session_state:
-        st.session_state.quality_analysis_results = None
-    if "salvage_results" not in st.session_state:
-        st.session_state.salvage_results = None
-    
-    # Run the main application
-    main()
-
-
-
-# Initialize OpenAI client with fallback
-client = initialize_openai_client(api_key) or None
