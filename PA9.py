@@ -2319,3 +2319,6 @@ def display_inventory_management():
             st.warning("No inventory data available for the selected filters. Please adjust your selection.")
     else:
         st.info("No inventory data available. Please upload data or add entries manually.")
+# Run the application
+if __name__ == "__main__":
+    main()
