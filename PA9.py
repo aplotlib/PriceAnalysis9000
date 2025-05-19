@@ -12,6 +12,10 @@ from openai import OpenAI
 import base64
 import io
 
+def verify_password(password):
+    """Verify the password for login"""
+    return password == "MPFvive8955@#@"  # Just check direct equality
+
 # Page configuration
 st.set_page_config(
     page_title="QualityROI - Cost-Benefit Analysis Tool",
@@ -225,10 +229,6 @@ def get_ai_analysis(
         error_message = f"Error getting AI analysis: {str(e)}"
         print(error_message)
         return f"I apologize, but I encountered an error while analyzing this issue. Please try again or contact technical support if the problem persists.\n\nError details: {error_message}"
-
-def verify_password(password):
-    """Verify the password for login"""
-    return password == "MPFvive8955@#@"  # Just check direct equality
 
 def format_currency(value: float) -> str:
     """Format a value as currency with $ symbol"""
