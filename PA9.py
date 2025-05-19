@@ -2319,6 +2319,24 @@ def display_inventory_management():
             st.warning("No inventory data available for the selected filters. Please adjust your selection.")
     else:
         st.info("No inventory data available. Please upload data or add entries manually.")
-# Run the application
+
+# At the beginning of these functions, add:
+if client is None:
+    return "AI analysis is not available - No API key provided or OpenAI client initialization failed."
+
 if __name__ == "__main__":
+    # Initialize session state variables if needed
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+    if "quality_analysis_results" not in st.session_state:
+        st.session_state.quality_analysis_results = None
+    if "salvage_results" not in st.session_state:
+        st.session_state.salvage_results = None
+    
+    # Run the main application
     main()
+
+
+
+# Initialize OpenAI client with fallback
+client = initialize_openai_client(api_key) or None
