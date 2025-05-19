@@ -226,6 +226,10 @@ def get_ai_analysis(
         print(error_message)
         return f"I apologize, but I encountered an error while analyzing this issue. Please try again or contact technical support if the problem persists.\n\nError details: {error_message}"
 
+def verify_password(password):
+    """Verify the password for login"""
+    return password == "MPFvive8955@#@"  # Just check direct equality
+
 def format_currency(value: float) -> str:
     """Format a value as currency with $ symbol"""
     return f"${value:.2f}"
@@ -2384,6 +2388,12 @@ def main():
             <p>Please login to access the application.</p>
         </div>
         """, unsafe_allow_html=True)
+
+# --- API KEY HANDLING ---
+try:
+    api_key = st.secrets["openai_api_key"]
+except (FileNotFoundError, KeyError):
+    api_key = os.environ.get("OPENAI_API_KEY", "")
 
 # --- API KEY HANDLING ---
 try:
