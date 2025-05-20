@@ -2705,9 +2705,8 @@ if st.checkbox("Run Tariff Rate Scenario Analysis", key="tariff_scenario_check")
                 shipping_cost, storage_cost, customs_fee, broker_fee,
                 other_costs, units_per_shipment
             )
-
-# Create plot
-                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+#create plot
+fig = make_subplots(specs=[[{"secondary_y": True}]])
                         
                         # Add landed cost line
                         fig.add_trace(
@@ -4985,6 +4984,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
