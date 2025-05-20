@@ -2585,10 +2585,13 @@ def display_landed_cost_calculator():
             
             # Display breakeven and profitability
             st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("<h2 class='sub-header'>Calculation Results</h2>", unsafe_allow_html=True)
+            
+            # Create metrics layout
             col11, col12 = st.columns(2)
-
-
-st.markdown(f"""
+            
+            with col11:
+                st.markdown(f"""
                 <div class='result-box'>
                     <h3>Breakeven Price: ${result['breakeven_price']:.2f}</h3>
                     <p>At this selling price, you will neither make a profit nor incur a loss after covering all costs including tariffs.</p>
@@ -2604,7 +2607,7 @@ st.markdown(f"""
                 </div>
                 """, unsafe_allow_html=True)
             
-            # Create detailed cost breakdown
+            # Create cost breakdown
             st.markdown("<h3 class='sub-header'>Cost Breakdown</h3>", unsafe_allow_html=True)
             
             # Create a pie chart for cost breakdown
@@ -2681,7 +2684,7 @@ st.markdown(f"""
             
             # Create scenario analysis section
             if st.checkbox("Run Tariff Rate Scenario Analysis", key="tariff_scenario_check"):
-                st.markdown("<h3 class='sub-header'>Tariff Rate Scenario Analysis</h3>", unsafe_allow_html=True)
+                ("<h3 class='sub-header'>Tariff Rate Scenario Analysis</h3>", unsafe_allow_html=True)
                 
                 col1, col2, col3 = st.columns(3)
                 
@@ -2798,11 +2801,11 @@ st.markdown(f"""
                             csv = scenarios_df.to_csv(index=False)
                             b64 = base64.b64encode(csv.encode()).decode()
                             href = f'<a href="data:file/csv;base64,{b64}" download="tariff_scenarios.csv" class="download-link">Download Scenario Data as CSV</a>'
-                            st.markdown(href, unsafe_allow_html=True)
+                            (href, unsafe_allow_html=True)
             
             # Create price scenario analysis section
             if st.checkbox("Run Price Scenario Analysis", key="price_scenario_check"):
-                st.markdown("<h3 class='sub-header'>Price Scenario Analysis</h3>", unsafe_allow_html=True)
+                ("<h3 class='sub-header'>Price Scenario Analysis</h3>", unsafe_allow_html=True)
                 
                 col1, col2, col3 = st.columns(3)
                 
