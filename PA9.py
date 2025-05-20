@@ -2590,7 +2590,7 @@ st.markdown("<h2 class='sub-header'>Calculation Results</h2>", unsafe_allow_html
             # Create metrics layout
 col11, col12 = st.columns(2)
             
-            with col11:
+        with col11:
                 st.markdown(f"""
                 <div class='result-box'>
                     <h3>Breakeven Price: ${result['breakeven_price']:.2f}</h3>
@@ -2598,7 +2598,7 @@ col11, col12 = st.columns(2)
                 </div>
                 """, unsafe_allow_html=True)
             
-            with col12:
+        with col12:
                 # Display minimum profitable MSRP
                 st.markdown(f"""
                 <div class='result-box'>
