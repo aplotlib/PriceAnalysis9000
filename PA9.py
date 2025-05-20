@@ -2588,7 +2588,7 @@ def display_landed_cost_calculator():
 st.markdown("<h2 class='sub-header'>Calculation Results</h2>", unsafe_allow_html=True)
             
             # Create metrics layout
-            col11, col12 = st.columns(2)
+col11, col12 = st.columns(2)
             
             with col11:
                 st.markdown(f"""
