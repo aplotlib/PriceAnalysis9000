@@ -4197,4 +4197,151 @@ def display_analysis_page():
                     user_input = st.text_area(
                         "Ask for advice on the quality issue, potential solutions, or regulatory implications:",
                         placeholder="E.g., What could be causing this issue? What fixes do you recommend? What are the regulatory considerations?",
-                        key=
+                        key="chat_input"
+                    )
+                    
+                    # Send button
+                    if st.button("Send", key="send_button"):
+                        if user_input:
+                            # Add user message to chat history
+                            st.session_state.chat_history.append({
+                                "role": "user",
+                                "content": user_input
+                            })
+                            
+                            with st.spinner("Getting AI analysis..."):
+                                # Build the message history for API call
+                                messages = [
+                                    {"role": "system", "content": f"""
+                                    You are a Quality Management expert specializing in medical devices. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
+                                    
+                                    Product details:
+                                    - SKU: {st.session_state.quality_analysis_results["sku"]}
+                                    - Type: {st.session_state.quality_analysis_results["product_type"]}
+                                    - Issue: {st.session_state.quality_analysis_results["issue_description"]}
+                                    
+                                    Metrics:
+                                    - Return Rate (30 days): {st.session_state.quality_analysis_results["current_metrics"]["return_rate_30d"]:.2f}%
+                                    - Monthly Return Cost: ${st.session_state.quality_analysis_results["financial_impact"]["monthly_return_cost"]:.2f}
+                                    - Estimated Savings: ${st.session_state.quality_analysis_results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
+                                    - Payback Period: {st.session_state.quality_analysis_results["financial_impact"]["payback_months"]:.1f} months
+                                    - Medical Risk Level: {st.session_state.quality_analysis_results["medical_device_impact"]["risk_level"]}
+                                    - Regulatory Impact: {st.session_state.quality_analysis_results["medical_device_impact"]["regulatory_impact"]}
+                                    
+                                    Recommendation: {st.session_state.quality_analysis_results["recommendation"]}
+                                    
+                                    Keep your responses concise, specific, and tailored to the medical device industry and its regulatory requirements.
+                                    """}
+                                ]
+                                
+                                # Add conversation history
+                                for msg in st.session_state.chat_history:
+                                    messages.append({"role": msg["role"], "content": msg["content"]})
+                                
+                                # Make the API call (excluding the last user message as it's added separately)
+                                ai_response = call_openai_api(messages[:-1])
+                                
+                                # Add AI response to chat history
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": ai_response
+                                })
+                                
+                                # Rerun to show updated chat
+                                st.rerun()
+            
+            # Export options
+            with st.expander("Export Analysis"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Export as CSV
+                    results_dict = {
+                        'Metric': [
+                            'SKU',
+                            'Product Type',
+                            'Return Rate (30d)',
+                            'Monthly Return Cost',
+                            'Annual Return Cost',
+                            'Estimated Monthly Savings',
+                            'Annual Savings',
+                            'Payback Period (months)',
+                            '3-Year ROI',
+                            'Current Sales Price',
+                            'New Sales Price',
+                            'Expected Return Reduction',
+                            'Solution Confidence',
+                            'Fix Cost Upfront',
+                            'Additional Cost Per Unit',
+                            'Current Unit Cost',
+                            'Recommendation',
+                            'Risk Level',
+                            'Regulatory Impact'
+                        ],
+                        'Value': [
+                            st.session_state.quality_analysis_results['sku'],
+                            st.session_state.quality_analysis_results['product_type'],
+                            f"{st.session_state.quality_analysis_results['current_metrics']['return_rate_30d']:.2f}%",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['monthly_return_cost']:.2f}",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['annual_return_cost']:.2f}",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['estimated_monthly_savings']:.2f}",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['annual_savings']:.2f}",
+                            f"{st.session_state.quality_analysis_results['financial_impact']['payback_months']:.1f}",
+                            f"{st.session_state.quality_analysis_results['financial_impact']['roi_3yr']:.1f}%",
+                            f"${st.session_state.quality_analysis_results['current_metrics']['sales_price']:.2f}",
+                            f"${st.session_state.quality_analysis_results['solution_metrics']['new_sales_price']:.2f}",
+                            f"{st.session_state.quality_analysis_results['solution_metrics']['expected_reduction']:.1f}%",
+                            f"{st.session_state.quality_analysis_results['solution_metrics']['solution_confidence']:.1f}%",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['fix_cost_upfront']:.2f}",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['fix_cost_per_unit']:.2f}",
+                            f"${st.session_state.quality_analysis_results['financial_impact']['current_unit_cost']:.2f}",
+                            st.session_state.quality_analysis_results['recommendation'],
+                            st.session_state.quality_analysis_results['medical_device_impact']['risk_level'],
+                            st.session_state.quality_analysis_results['medical_device_impact']['regulatory_impact']
+                        ]
+                    }
+                    
+                    # Convert to DataFrame
+                    results_df = pd.DataFrame(results_dict)
+                    
+                    # Create download link
+                    csv = results_df.to_csv(index=False)
+                    b64 = base64.b64encode(csv.encode()).decode()
+                    filename = f"{st.session_state.quality_analysis_results['sku']}_analysis.csv"
+                    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}" class="download-link">Download Analysis as CSV</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+                
+                with col2:
+                    # Export as PDF
+                    if st.button("Generate PDF Report"):
+                        with st.spinner("Generating PDF report..."):
+                            pdf_buffer = export_as_pdf(st.session_state.quality_analysis_results)
+                            
+                            # Create download link for PDF
+                            b64 = base64.b64encode(pdf_buffer.getvalue()).decode()
+                            filename = f"{st.session_state.quality_analysis_results['sku']}_analysis.pdf"
+                            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}" class="download-link">Download PDF Report</a>'
+                            st.markdown(href, unsafe_allow_html=True)
+                    
+                    # Add to comparison list
+                    if st.button("Add to Comparison List"):
+                        if 'compare_list' not in st.session_state:
+                            st.session_state.compare_list = []
+                        
+                        # Check if already in list
+                        already_exists = any(item['sku'] == st.session_state.quality_analysis_results['sku'] for item in st.session_state.compare_list)
+                        
+                        if not already_exists:
+                            st.session_state.compare_list.append(st.session_state.quality_analysis_results)
+                            st.success(f"Added {st.session_state.quality_analysis_results['sku']} to comparison list. Total items: {len(st.session_state.compare_list)}")
+                        else:
+                            st.warning(f"{st.session_state.quality_analysis_results['sku']} is already in the comparison list.")
+        
+        with tabs[1]:  # Tariff Calculator tab
+            display_landed_cost_calculator()
+        
+        with tabs[2]:  # Marketing ROI tab
+            calculate_ad_roi_ui()
+        
+        with tabs[3]:  # Monte Carlo Simulation tab
+            run_monte_carlo_simulation_ui()
