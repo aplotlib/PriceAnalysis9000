@@ -2681,12 +2681,12 @@ def display_landed_cost_calculator():
             )
             
             st.plotly_chart(waterfall_fig, use_container_width=True)
-            
-            # Create scenario analysis section
-            if st.checkbox("Run Tariff Rate Scenario Analysis", key="tariff_scenario_check"):
-                ("<h3 class='sub-header'>Tariff Rate Scenario Analysis</h3>", unsafe_allow_html=True)
-                
-                col1, col2, col3 = st.columns(3)
+
+# Create scenario analysis section
+if st.checkbox("Run Tariff Rate Scenario Analysis", key="tariff_scenario_check"):
+    st.markdown("<h3 class='sub-header'>Tariff Rate Scenario Analysis</h3>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
                 
                 with col1:
                     min_tariff = st.number_input("Minimum Tariff Rate (%)", min_value=0, max_value=100, value=0)
