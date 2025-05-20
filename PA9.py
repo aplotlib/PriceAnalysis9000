@@ -2718,3 +2718,1483 @@ fig.add_trace(
         line=dict(color=PRIMARY_COLOR, width=3)
     )
 )
+                        
+# Add profit line on secondary axis
+fig.add_trace(
+    go.Scatter(
+        x=scenarios_df['tariff_rate'],
+        y=scenarios_df['profit'],
+        name="Profit per Unit",
+        line=dict(color=SUCCESS_COLOR, width=3, dash='dot')
+    ),
+    secondary_y=True
+)
+                        
+# Add margin line on secondary axis
+fig.add_trace(
+    go.Scatter(
+        x=scenarios_df['tariff_rate'],
+        y=scenarios_df['margin'],
+        name="Margin %",
+        line=dict(color=WARNING_COLOR, width=3, dash='dot')
+    ),
+    secondary_y=True
+)
+                        
+# Add breakeven line
+fig.add_trace(
+    go.Scatter(
+        x=scenarios_df['tariff_rate'],
+        y=scenarios_df['breakeven_price'],
+        name="Breakeven Price",
+        line=dict(color=DANGER_COLOR, width=2, dash='dash')
+    )
+)
+                        
+# Mark the current tariff rate
+fig.add_vline(
+    x=tariff_rate,
+    line_dash="solid",
+    line_color=TEXT_SECONDARY,
+    annotation_text=f"Current Rate ({tariff_rate}%)",
+    annotation_position="top right"
+)
+                        
+# Mark zero profit line
+fig.add_hline(
+    y=0,
+    line_dash="dash",
+    line_color=DANGER_COLOR,
+    secondary_y=True,
+    annotation_text="Break-even",
+    annotation_position="bottom right"
+)
+                        
+# Update layout
+fig.update_layout(
+    title_text="Impact of Tariff Rates on Cost, Price, and Profitability",
+    xaxis_title="Tariff Rate (%)",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=20, r=20, t=40, b=20),
+    height=500
+)
+                        
+# Update y-axes
+fig.update_yaxes(title_text="Cost & Price ($)", secondary_y=False)
+fig.update_yaxes(title_text="Profit ($) & Margin (%)", secondary_y=True)
+                        
+st.plotly_chart(fig, use_container_width=True)
+                        
+# Display data in table
+with st.expander("View Scenario Data Table", expanded=False):
+    st.write("Tariff Rate Impact Data:")
+    formatted_df = scenarios_df.copy()
+    formatted_df['tariff_rate'] = formatted_df['tariff_rate'].apply(lambda x: f"{x:.1f}%")
+    formatted_df['landed_cost'] = formatted_df['landed_cost'].apply(lambda x: f"${x:.2f}")
+    formatted_df['profit'] = formatted_df['profit'].apply(lambda x: f"${x:.2f}")
+    formatted_df['margin'] = formatted_df['margin'].apply(lambda x: f"{x:.1f}%")
+    formatted_df['breakeven_price'] = formatted_df['breakeven_price'].apply(lambda x: f"${x:.2f}")
+    
+    st.dataframe(formatted_df, use_container_width=True)
+    
+    # Download link for CSV
+    csv = scenarios_df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    href = f'<a href="data:file/csv;base64,{b64}" download="tariff_scenarios.csv" class="download-link">Download Scenario Data as CSV</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
+# Create price scenario analysis section
+if st.checkbox("Run Price Scenario Analysis", key="price_scenario_check"):
+    st.markdown("<h3 class='sub-header'>Price Scenario Analysis</h3>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        min_price_factor = st.slider("Minimum Price Factor", min_value=0.5, max_value=1.0, value=0.8, step=0.05,
+                               help="Minimum price as a factor of landed cost (e.g., 0.8 = 80% of landed cost)")
+    
+    with col2:
+        max_price_factor = st.slider("Maximum Price Factor", min_value=1.0, max_value=3.0, value=2.0, step=0.1,
+                               help="Maximum price as a factor of landed cost (e.g., 2.0 = 200% of landed cost)")
+    
+    with col3:
+        price_steps = st.number_input("Number of Price Points", min_value=2, max_value=20, value=10)
+    
+    if st.button("Generate Price Scenarios"):
+        with st.spinner("Analyzing price scenarios..."):
+            # Generate scenarios
+            price_scenarios_df = generate_price_scenarios(
+                tariff_rate, cost_to_produce, min_price_factor, max_price_factor, price_steps,
+                shipping_cost, storage_cost, customs_fee, broker_fee,
+                other_costs, units_per_shipment
+            )
+            
+            # Create plot
+            price_fig = px.line(
+                price_scenarios_df,
+                x="msrp",
+                y=["profit", "margin"],
+                labels={"msrp": "Selling Price ($)", "value": "Value", "variable": "Metric"},
+                title="Profit and Margin at Different Price Points",
+                color_discrete_map={"profit": SUCCESS_COLOR, "margin": WARNING_COLOR}
+            )
+            
+            # Add vertical line for current MSRP
+            price_fig.add_vline(
+                x=msrp,
+                line_dash="solid",
+                line_color=TEXT_SECONDARY,
+                annotation_text=f"Current MSRP (${msrp:.2f})",
+                annotation_position="top right"
+            )
+            
+            # Add horizontal line for zero profit
+            price_fig.add_hline(
+                y=0,
+                line_dash="dash",
+                line_color=DANGER_COLOR,
+                annotation_text="Break-even",
+                annotation_position="bottom right"
+            )
+            
+            # Add landed cost vertical line
+            price_fig.add_vline(
+                x=result['landed_cost'],
+                line_dash="dash",
+                line_color=DANGER_COLOR,
+                annotation_text=f"Landed Cost (${result['landed_cost']:.2f})",
+                annotation_position="bottom left"
+            )
+            
+            # Update layout
+            price_fig.update_layout(
+                xaxis_title="Selling Price ($)",
+                yaxis_title="Value",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=500
+            )
+            
+            st.plotly_chart(price_fig, use_container_width=True)
+            
+            # Create profit margin heat map
+            profit_margin_df = price_scenarios_df.copy()
+            
+            # Add profit margin categories
+            def categorize_margin(margin):
+                if margin <= 0:
+                    return "Loss"
+                elif margin < 15:
+                    return "Low"
+                elif margin < 30:
+                    return "Medium"
+                else:
+                    return "High"
+            
+            profit_margin_df['margin_category'] = profit_margin_df['margin'].apply(categorize_margin)
+            
+            # Create color map
+            color_map = {
+                "Loss": DANGER_COLOR,
+                "Low": WARNING_COLOR,
+                "Medium": SECONDARY_COLOR,
+                "High": SUCCESS_COLOR
+            }
+            
+            # Create margin category chart
+            margin_fig = px.bar(
+                profit_margin_df,
+                x="msrp",
+                y="profit",
+                color="margin_category",
+                labels={"msrp": "Selling Price ($)", "profit": "Profit per Unit ($)", "margin_category": "Margin Category"},
+                title="Profit by Selling Price and Margin Category",
+                color_discrete_map=color_map
+            )
+            
+            # Add current MSRP line
+            margin_fig.add_vline(
+                x=msrp,
+                line_dash="solid",
+                line_color=TEXT_SECONDARY,
+                annotation_text=f"Current MSRP (${msrp:.2f})",
+                annotation_position="top right"
+            )
+            
+            # Update layout
+            margin_fig.update_layout(
+                xaxis_title="Selling Price ($)",
+                yaxis_title="Profit per Unit ($)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=400
+            )
+            
+            st.plotly_chart(margin_fig, use_container_width=True)
+            
+            # Display data in table
+            with st.expander("View Price Scenario Data Table", expanded=False):
+                st.write("Price Impact Data:")
+                formatted_price_df = price_scenarios_df.copy()
+                formatted_price_df['msrp'] = formatted_price_df['msrp'].apply(lambda x: f"${x:.2f}")
+                formatted_price_df['profit'] = formatted_price_df['profit'].apply(lambda x: f"${x:.2f}")
+                formatted_price_df['margin'] = formatted_price_df['margin'].apply(lambda x: f"{x:.1f}%")
+                formatted_price_df['landed_cost'] = formatted_price_df['landed_cost'].apply(lambda x: f"${x:.2f}")
+                
+                st.dataframe(formatted_price_df, use_container_width=True)
+                
+                # Download link for CSV
+                price_csv = price_scenarios_df.to_csv(index=False)
+                price_b64 = base64.b64encode(price_csv.encode()).decode()
+                price_href = f'<a href="data:file/csv;base64,{price_b64}" download="price_scenarios.csv" class="download-link">Download Price Scenario Data as CSV</a>'
+                st.markdown(price_href, unsafe_allow_html=True)
+
+def calculate_ad_roi_ui():
+    """Display the advertising ROI calculator UI"""
+    st.markdown("<h2 class='sub-header'>Marketing ROI Calculator</h2>", unsafe_allow_html=True)
+    
+    # Create two columns for basic inputs
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        current_price = st.number_input(
+            "Current Sales Price ($)", 
+            min_value=0.01, 
+            value=100.00, 
+            step=0.01,
+            help="Current selling price per unit"
+        )
+        
+        proposed_price = st.number_input(
+            "Proposed Sales Price ($)", 
+            min_value=0.0, 
+            value=0.0, 
+            step=0.01,
+            help="Proposed new selling price per unit (leave at 0 to keep current price)"
+        )
+        
+        if proposed_price <= 0:
+            proposed_price = current_price
+        
+        current_ad_spend = st.number_input(
+            "Current Monthly Ad Spend ($)", 
+            min_value=0.0, 
+            value=1000.0, 
+            step=100.0,
+            help="Current monthly advertising spend"
+        )
+        
+        proposed_ad_spend = st.number_input(
+            "Proposed Monthly Ad Spend ($)", 
+            min_value=0.0, 
+            value=2000.0, 
+            step=100.0,
+            help="Proposed monthly advertising spend"
+        )
+    
+    with col2:
+        current_sales_qty = st.number_input(
+            "Current Monthly Sales Quantity", 
+            min_value=1, 
+            value=100, 
+            step=1,
+            help="Number of units sold per month at current ad spend"
+        )
+        
+        estimated_sales_change = st.slider(
+            "Estimated Sales Volume Change (%)", 
+            min_value=-50.0, 
+            max_value=200.0, 
+            value=20.0, 
+            step=5.0,
+            help="Estimated percentage change in sales volume after ad spend change"
+        ) / 100.0  # Convert to decimal
+        
+        current_return_rate = st.slider(
+            "Current Return Rate (%)", 
+            min_value=0.0, 
+            max_value=50.0, 
+            value=5.0, 
+            step=1.0,
+            help="Current product return rate percentage"
+        ) / 100.0  # Convert to decimal
+        
+        expected_return_rate = st.slider(
+            "Expected Return Rate After Changes (%)", 
+            min_value=0.0, 
+            max_value=50.0, 
+            value=5.0, 
+            step=1.0,
+            help="Expected return rate after implementing price and marketing changes"
+        ) / 100.0  # Convert to decimal
+    
+    # Optional production cost inputs
+    with st.expander("Production Cost Details (Optional)", expanded=False):
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            cost_to_produce = st.number_input(
+                "Cost to Produce per Unit ($)", 
+                min_value=0.0, 
+                value=50.0, 
+                step=1.0,
+                help="Cost to produce or acquire each unit before any other costs"
+            )
+            
+            tariff_rate = st.slider(
+                "Import Tariff Rate (%)", 
+                min_value=0.0, 
+                max_value=100.0, 
+                value=25.0, 
+                step=1.0,
+                help="Import duty rate as a percentage of the production cost, if applicable"
+            )
+    
+    # Calculate button
+    calculate_button = st.button(
+        "Calculate Marketing ROI",
+        help="Click to calculate ROI and financial impact of ad spend and price changes"
+    )
+    
+    if calculate_button:
+        with st.spinner("Calculating..."):
+            # Perform calculation
+            result = calculate_ad_roi(
+                current_price=current_price,
+                proposed_price=proposed_price,
+                current_ad_spend=current_ad_spend,
+                proposed_ad_spend=proposed_ad_spend,
+                current_sales_qty=current_sales_qty,
+                estimated_sales_change=estimated_sales_change,
+                current_return_rate=current_return_rate,
+                expected_return_rate=expected_return_rate,
+                cost_to_produce=cost_to_produce,
+                tariff_rate=tariff_rate
+            )
+            
+            # Display results
+            st.markdown("<h2 class='sub-header'>Marketing ROI Analysis Results</h2>", unsafe_allow_html=True)
+            
+            # Key metrics
+            col5, col6, col7, col8 = st.columns(4)
+            
+            with col5:
+                roi_color = SUCCESS_COLOR if result['roi_percentage'] > 0 else DANGER_COLOR
+                st.markdown(f"""
+                <div class='metric-card'>
+                    <p class='metric-label'>ROI on Ad Spend Change</p>
+                    <p class='metric-value' style='color:{roi_color}'>{result['roi_percentage']:.1f}%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col6:
+                profit_change_color = SUCCESS_COLOR if result['net_profit_change'] > 0 else DANGER_COLOR
+                st.markdown(f"""
+                <div class='metric-card'>
+                    <p class='metric-label'>Monthly Profit Change</p>
+                    <p class='metric-value' style='color:{profit_change_color}'>${result['net_profit_change']:.2f}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col7:
+                sales_color = SUCCESS_COLOR if result['sales_qty_change'] > 0 else DANGER_COLOR
+                st.markdown(f"""
+                <div class='metric-card'>
+                    <p class='metric-label'>Sales Volume Change</p>
+                    <p class='metric-value' style='color:{sales_color}'>{result['sales_qty_change']:.0f} units</p>
+                    <p style='font-size:0.8rem;'>({estimated_sales_change * 100:.1f}%)</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col8:
+                st.markdown(f"""
+                <div class='metric-card'>
+                    <p class='metric-label'>Breakeven Additional Units</p>
+                    <p class='metric-value'>{result['breakeven_additional_units']:.1f}</p>
+                    <p style='font-size:0.8rem;'>({result['breakeven_sales_change'] * 100:.1f}% increase)</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Comparison table
+            st.markdown("<h3>Current vs. Proposed Scenario</h3>", unsafe_allow_html=True)
+            
+            comparison_data = {
+                'Metric': [
+                    'Monthly Ad Spend',
+                    'Sales Price',
+                    'Sales Quantity',
+                    'Sales Revenue',
+                    'Return Rate',
+                    'Returns Quantity',
+                    'Net Sales Quantity',
+                    'Net Sales Revenue',
+                    'Profit Before Ads',
+                    'Profit After Ads'
+                ],
+                'Current': [
+                    f"${result['current_ad_spend']:.2f}",
+                    f"${result['current_price']:.2f}",
+                    f"{result['current_sales_qty']:.0f}",
+                    f"${result['current_sales_dollars']:.2f}",
+                    f"{result['current_return_rate'] * 100:.1f}%",
+                    f"{result['current_returns_qty']:.1f}",
+                    f"{result['current_net_sales_qty']:.1f}",
+                    f"${result['current_net_sales_dollars']:.2f}",
+                    f"${result['current_profit_before_ads']:.2f}",
+                    f"${result['current_profit_after_ads']:.2f}"
+                ],
+                'Proposed': [
+                    f"${result['proposed_ad_spend']:.2f}",
+                    f"${result['proposed_price']:.2f}",
+                    f"{result['new_sales_qty']:.0f}",
+                    f"${result['new_sales_dollars']:.2f}",
+                    f"{result['expected_return_rate'] * 100:.1f}%",
+                    f"{result['new_returns_qty']:.1f}",
+                    f"{result['new_net_sales_qty']:.1f}",
+                    f"${result['new_net_sales_dollars']:.2f}",
+                    f"${result['new_profit_before_ads']:.2f}",
+                    f"${result['new_profit_after_ads']:.2f}"
+                ],
+                'Change': [
+                    f"${result['ad_spend_change']:.2f}",
+                    f"${proposed_price - current_price:.2f}",
+                    f"{result['sales_qty_change']:.0f}",
+                    f"${result['sales_dollars_change']:.2f}",
+                    f"{(result['expected_return_rate'] - result['current_return_rate']) * 100:.1f}%",
+                    f"{result['new_returns_qty'] - result['current_returns_qty']:.1f}",
+                    f"{result['new_net_sales_qty'] - result['current_net_sales_qty']:.1f}",
+                    f"${result['new_net_sales_dollars'] - result['current_net_sales_dollars']:.2f}",
+                    f"${result['new_profit_before_ads'] - result['current_profit_before_ads']:.2f}",
+                    f"${result['net_profit_change']:.2f}"
+                ]
+            }
+            
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            
+            # Create visualization
+            st.markdown("<h3>Visual Analysis</h3>", unsafe_allow_html=True)
+            
+            # Create bar chart comparison
+            fig = go.Figure()
+            
+            # Add current scenario
+            fig.add_trace(go.Bar(
+                name='Current Scenario',
+                x=['Ad Spend', 'Net Sales', 'Profit After Ads'],
+                y=[
+                    result['current_ad_spend'],
+                    result['current_net_sales_dollars'],
+                    result['current_profit_after_ads']
+                ],
+                marker_color=SECONDARY_COLOR
+            ))
+            
+            # Add proposed scenario
+            fig.add_trace(go.Bar(
+                name='Proposed Scenario',
+                x=['Ad Spend', 'Net Sales', 'Profit After Ads'],
+                y=[
+                    result['proposed_ad_spend'],
+                    result['new_net_sales_dollars'],
+                    result['new_profit_after_ads']
+                ],
+                marker_color=PRIMARY_COLOR
+            ))
+            
+            # Update layout
+            fig.update_layout(
+                title='Financial Comparison: Current vs. Proposed',
+                barmode='group',
+                yaxis_title='Amount ($)',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5
+                ),
+                height=400,
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Create ROI visualization
+            roi_fig = go.Figure()
+            
+            # Add waterfall chart
+            roi_fig.add_trace(go.Waterfall(
+                name='ROI Analysis',
+                orientation='v',
+                measure=['absolute', 'relative', 'relative', 'total'],
+                x=['Current Profit', 'Ad Spend Change', 'Revenue Change', 'New Profit'],
+                textposition='outside',
+                text=[
+                    f"${result['current_profit_after_ads']:.2f}",
+                    f"${result['ad_spend_change']:.2f}",
+                    f"${result['new_profit_before_ads'] - result['current_profit_before_ads']:.2f}",
+                    f"${result['new_profit_after_ads']:.2f}"
+                ],
+                y=[
+                    result['current_profit_after_ads'],
+                    result['ad_spend_change'],
+                    result['new_profit_before_ads'] - result['current_profit_before_ads'],
+                    0
+                ],
+                connector={'line': {'color': TEXT_SECONDARY}},
+                decreasing={'marker': {'color': DANGER_COLOR}},
+                increasing={'marker': {'color': SUCCESS_COLOR}},
+                totals={'marker': {'color': PRIMARY_COLOR}}
+            ))
+            
+            # Update layout
+            roi_fig.update_layout(
+                title='Profit Waterfall: Impact of Ad Spend and Revenue Changes',
+                yaxis_title='Amount ($)',
+                showlegend=False,
+                height=400,
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            
+            st.plotly_chart(roi_fig, use_container_width=True)
+            
+            # Run ad spend sensitivity analysis
+            if st.checkbox("Run Ad Spend Sensitivity Analysis", key="ad_sensitivity"):
+                st.markdown("<h3 class='sub-header'>Ad Spend Sensitivity Analysis</h3>", unsafe_allow_html=True)
+                
+                col9, col10, col11 = st.columns(3)
+                
+                with col9:
+                    min_spend_factor = st.slider(
+                        "Minimum Ad Spend Factor", 
+                        min_value=0.1, 
+                        max_value=1.0, 
+                        value=0.5, 
+                        step=0.1,
+                        help="Minimum ad spend as a factor of current spend (e.g., 0.5 = 50% of current spend)"
+                    )
+                
+                with col10:
+                    max_spend_factor = st.slider(
+                        "Maximum Ad Spend Factor", 
+                        min_value=1.0, 
+                        max_value=5.0, 
+                        value=3.0, 
+                        step=0.25,
+                        help="Maximum ad spend as a factor of current spend (e.g., 3.0 = 300% of current spend)"
+                    )
+                
+                with col11:
+                    spend_steps = st.number_input(
+                        "Number of Spend Points", 
+                        min_value=5, 
+                        max_value=20, 
+                        value=10
+                    )
+                    
+                    sales_change_per_ad_dollar = st.number_input(
+                        "Est. Sales % Change per Ad Spend % Change", 
+                        min_value=0.0, 
+                        max_value=2.0, 
+                        value=0.8, 
+                        step=0.1,
+                        help="Estimated sales percentage change for each percentage of ad spend change (elasticity)"
+                    )
+                
+                if st.button("Generate Ad Spend Scenarios"):
+                    with st.spinner("Analyzing ad spend scenarios..."):
+                        # Generate scenarios
+                        ad_scenarios_df = generate_ad_spend_scenarios(
+                            current_price=current_price,
+                            proposed_price=proposed_price,
+                            current_ad_spend=current_ad_spend,
+                            current_sales_qty=current_sales_qty,
+                            estimated_sales_change_per_ad_dollar=sales_change_per_ad_dollar,
+                            min_spend_factor=min_spend_factor,
+                            max_spend_factor=max_spend_factor,
+                            steps=spend_steps,
+                            current_return_rate=current_return_rate,
+                            expected_return_rate=expected_return_rate,
+                            cost_to_produce=cost_to_produce,
+                            tariff_rate=tariff_rate
+                        )
+                        
+                        # Create line chart
+                        ad_fig = make_subplots(specs=[[{"secondary_y": True}]])
+                        
+                        # Add profit line
+                        ad_fig.add_trace(
+                            go.Scatter(
+                                x=ad_scenarios_df['ad_spend'],
+                                y=ad_scenarios_df['profit'],
+                                name="Profit After Ads",
+                                line=dict(color=SUCCESS_COLOR, width=3)
+                            ),
+                            secondary_y=False
+                        )
+                        
+                        # Add ROI line on secondary axis
+                        ad_fig.add_trace(
+                            go.Scatter(
+                                x=ad_scenarios_df['ad_spend'],
+                                y=ad_scenarios_df['roi'],
+                                name="ROI %",
+                                line=dict(color=PRIMARY_COLOR, width=3, dash='dot')
+                            ),
+                            secondary_y=True
+                        )
+                        
+                        # Mark the current ad spend
+                        ad_fig.add_vline(
+                            x=current_ad_spend,
+                            line_dash="dash",
+                            line_color=TEXT_SECONDARY,
+                            annotation_text=f"Current (${current_ad_spend})",
+                            annotation_position="top right"
+                        )
+                        
+                        # Mark the proposed ad spend
+                        ad_fig.add_vline(
+                            x=proposed_ad_spend,
+                            line_dash="solid",
+                            line_color=TEXT_PRIMARY,
+                            annotation_text=f"Proposed (${proposed_ad_spend})",
+                            annotation_position="top left"
+                        )
+                        
+                        # Update layout
+                        ad_fig.update_layout(
+                            title_text="Impact of Ad Spend on Profit and ROI",
+                            xaxis_title="Monthly Ad Spend ($)",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                            margin=dict(l=20, r=20, t=40, b=20),
+                            height=500
+                        )
+                        
+                        # Update y-axes
+                        ad_fig.update_yaxes(title_text="Monthly Profit ($)", secondary_y=False)
+                        ad_fig.update_yaxes(title_text="ROI (%)", secondary_y=True)
+                        
+                        st.plotly_chart(ad_fig, use_container_width=True)
+                        
+                        # Add scatter plot of sales vs. ad spend
+                        sales_fig = px.scatter(
+                            ad_scenarios_df,
+                            x="ad_spend",
+                            y="sales_qty",
+                            size="profit",
+                            color="profit_change",
+                            hover_name="ad_spend",
+                            labels={
+                                "ad_spend": "Monthly Ad Spend ($)",
+                                "sales_qty": "Monthly Sales Volume",
+                                "profit": "Monthly Profit ($)",
+                                "profit_change": "Profit Change vs. Current ($)"
+                            },
+                            title="Sales Volume vs. Ad Spend with Profit Indicators",
+                            color_continuous_scale=px.colors.sequential.Blugrn,
+                        )
+                        
+                        # Mark the current ad spend
+                        sales_fig.add_vline(
+                            x=current_ad_spend,
+                            line_dash="dash",
+                            line_color=TEXT_SECONDARY,
+                            annotation_text=f"Current (${current_ad_spend})",
+                            annotation_position="top right"
+                        )
+                        
+                        # Mark the proposed ad spend
+                        sales_fig.add_vline(
+                            x=proposed_ad_spend,
+                            line_dash="solid",
+                            line_color=TEXT_PRIMARY,
+                            annotation_text=f"Proposed (${proposed_ad_spend})",
+                            annotation_position="top left"
+                        )
+                        
+                        # Update layout
+                        sales_fig.update_layout(
+                            margin=dict(l=20, r=20, t=40, b=20),
+                            height=500
+                        )
+                        
+                        st.plotly_chart(sales_fig, use_container_width=True)
+                        
+                        # Display data in table
+                        with st.expander("View Ad Spend Scenario Data Table", expanded=False):
+                            st.write("Ad Spend Impact Data:")
+                            formatted_ad_df = ad_scenarios_df.copy()
+                            formatted_ad_df['ad_spend'] = formatted_ad_df['ad_spend'].apply(lambda x: f"${x:.2f}")
+                            formatted_ad_df['sales_qty'] = formatted_ad_df['sales_qty'].apply(lambda x: f"{x:.0f}")
+                            formatted_ad_df['sales_dollars'] = formatted_ad_df['sales_dollars'].apply(lambda x: f"${x:.2f}")
+                            formatted_ad_df['profit'] = formatted_ad_df['profit'].apply(lambda x: f"${x:.2f}")
+                            formatted_ad_df['profit_change'] = formatted_ad_df['profit_change'].apply(lambda x: f"${x:.2f}")
+                            formatted_ad_df['roi'] = formatted_ad_df['roi'].apply(lambda x: f"{x:.1f}%")
+                            
+                            st.dataframe(formatted_ad_df, use_container_width=True)
+                            
+                            # Download link for CSV
+                            ad_csv = ad_scenarios_df.to_csv(index=False)
+                            ad_b64 = base64.b64encode(ad_csv.encode()).decode()
+                            ad_href = f'<a href="data:file/csv;base64,{ad_b64}" download="ad_spend_scenarios.csv" class="download-link">Download Ad Spend Scenario Data as CSV</a>'
+                            st.markdown(ad_href, unsafe_allow_html=True)
+
+def run_monte_carlo_simulation_ui():
+    """Display UI for Monte Carlo simulation of quality issue analysis"""
+    st.markdown("<h2 class='sub-header'>Monte Carlo Risk Simulation</h2>", unsafe_allow_html=True)
+    
+    # Instructions
+    st.markdown("""
+    <div class="info-box">
+        Run Monte Carlo simulations to model uncertainty in quality issue fixes. 
+        This allows you to better understand the range of possible outcomes and the probability 
+        of achieving your ROI targets.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Check if there are quality analysis results available
+    if st.session_state.quality_analysis_results:
+        # Use the current analysis results
+        current_scenario = st.session_state.quality_analysis_results
+        
+        # Display scenario info
+        st.markdown(f"""
+        <div class="form-section">
+            <div class="form-section-header">Base Scenario: {current_scenario['sku']}</div>
+            <p>This simulation will use your current analysis as the base scenario.</p>
+            <ul>
+                <li><strong>Product:</strong> {current_scenario['sku']}</li>
+                <li><strong>Return Rate:</strong> {current_scenario['current_metrics']['return_rate_30d']:.2f}%</li>
+                <li><strong>Expected Reduction:</strong> {current_scenario['solution_metrics']['expected_reduction']:.1f}%</li>
+                <li><strong>Solution Confidence:</strong> {current_scenario['solution_metrics']['solution_confidence']:.1f}%</li>
+                <li><strong>Fix Cost Upfront:</strong> ${current_scenario['financial_impact']['fix_cost_upfront']:.2f}</li>
+                <li><strong>Additional Cost Per Unit:</strong> ${current_scenario['financial_impact']['fix_cost_per_unit']:.2f}</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Simulation parameters
+        st.markdown('<div class="form-section-header">Simulation Parameters</div>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            num_simulations = st.slider(
+                "Number of Simulations", 
+                min_value=100, 
+                max_value=10000, 
+                value=1000, 
+                step=100,
+                help="Higher number of simulations gives more accurate results but takes longer to process"
+            )
+        
+        with col2:
+            confidence_level = st.slider(
+                "Confidence Level for Results (%)", 
+                min_value=50, 
+                max_value=99, 
+                value=90, 
+                step=1,
+                help="Confidence level for calculating result ranges"
+            )
+        
+        # Parameter variation settings
+        st.markdown('<div class="form-section-header">Parameter Variation Ranges</div>', unsafe_allow_html=True)
+        st.markdown("""
+        <p>Set the percentage by which each parameter can vary in the simulation. For example, 
+        a 20% variation for Expected Reduction means the actual reduction could be up to 20% higher or lower 
+        than your estimate.</p>
+        """, unsafe_allow_html=True)
+        
+        col3, col4, col5 = st.columns(3)
+        
+        with col3:
+            expected_reduction_var = st.slider(
+                "Expected Reduction Variation (%)", 
+                min_value=0, 
+                max_value=50, 
+                value=20, 
+                step=5,
+                help="How much the expected return rate reduction can vary in the simulation"
+            )
+            
+            fix_cost_upfront_var = st.slider(
+                "Fix Cost Upfront Variation (%)", 
+                min_value=0, 
+                max_value=50, 
+                value=10, 
+                step=5,
+                help="How much the upfront fix cost can vary in the simulation"
+            )
+        
+        with col4:
+            fix_cost_per_unit_var = st.slider(
+                "Cost Per Unit Variation (%)", 
+                min_value=0, 
+                max_value=50, 
+                value=15, 
+                step=5,
+                help="How much the additional cost per unit can vary in the simulation"
+            )
+            
+            sales_30d_var = st.slider(
+                "Sales Volume Variation (%)", 
+                min_value=0, 
+                max_value=30, 
+                value=5, 
+                step=5,
+                help="How much the monthly sales volume can vary in the simulation"
+            )
+        
+        with col5:
+            returns_30d_var = st.slider(
+                "Returns Variation (%)", 
+                min_value=0, 
+                max_value=30, 
+                value=10, 
+                step=5,
+                help="How much the monthly returns can vary in the simulation"
+            )
+            
+            sales_price_var = st.slider(
+                "Sales Price Variation (%)", 
+                min_value=0, 
+                max_value=30, 
+                value=5, 
+                step=5,
+                help="How much the sales price can vary in the simulation"
+            )
+        
+        # Create variation parameters dictionary
+        param_variations = {
+            'expected_reduction': expected_reduction_var,
+            'fix_cost_per_unit': fix_cost_per_unit_var,
+            'fix_cost_upfront': fix_cost_upfront_var,
+            'sales_30d': sales_30d_var,
+            'returns_30d': returns_30d_var,
+            'sales_price': sales_price_var
+        }
+        
+        # Run simulation button
+        if st.button("Run Monte Carlo Simulation"):
+            with st.spinner(f"Running {num_simulations} simulations..."):
+                # Run the simulation
+                simulation_results, message = run_monte_carlo_simulation(
+                    scenario=current_scenario,
+                    num_simulations=num_simulations,
+                    param_variations=param_variations
+                )
+                
+                if simulation_results is not None:
+                    # Store results in session state
+                    st.session_state.monte_carlo_scenario = {
+                        'base_scenario': current_scenario,
+                        'results': simulation_results,
+                        'num_simulations': num_simulations,
+                        'confidence_level': confidence_level,
+                        'param_variations': param_variations
+                    }
+                    
+                    # Display results
+                    st.success(f"Simulation complete: {num_simulations} iterations processed successfully.")
+                    st.rerun()
+                else:
+                    st.error(f"Simulation failed: {message}")
+    
+    # Display simulation results if available
+    if 'monte_carlo_scenario' in st.session_state and st.session_state.monte_carlo_scenario:
+        sim_data = st.session_state.monte_carlo_scenario
+        results_df = sim_data['results']
+        
+        st.markdown("<h2 class='sub-header'>Monte Carlo Simulation Results</h2>", unsafe_allow_html=True)
+        
+        # Calculate key metrics
+        roi_mean = results_df['roi_3yr'].mean()
+        roi_median = results_df['roi_3yr'].median()
+        roi_std = results_df['roi_3yr'].std()
+        payback_mean = results_df['payback_months'].mean()
+        payback_median = results_df['payback_months'].median()
+        
+        # Calculate probability of positive ROI
+        positive_roi_prob = (results_df['roi_3yr'] > 0).mean() * 100
+        
+        # Calculate confidence intervals
+        alpha = (100 - sim_data['confidence_level']) / 100
+        roi_lower = results_df['roi_3yr'].quantile(alpha/2)
+        roi_upper = results_df['roi_3yr'].quantile(1-alpha/2)
+        payback_lower = results_df['payback_months'].quantile(alpha/2)
+        payback_upper = results_df['payback_months'].quantile(1-alpha/2)
+        
+        # Display summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <p class='metric-label'>Mean ROI (3-Year)</p>
+                <p class='metric-value' style='color:{SUCCESS_COLOR if roi_mean > 0 else DANGER_COLOR}'>{roi_mean:.1f}%</p>
+                <p style='font-size:0.85rem;'>Median: {roi_median:.1f}%</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            roi_ci_color = SUCCESS_COLOR if roi_lower > 0 else (WARNING_COLOR if roi_upper > 0 else DANGER_COLOR)
+            st.markdown(f"""
+            <div class='metric-card'>
+                <p class='metric-label'>{sim_data['confidence_level']}% Confidence Interval (ROI)</p>
+                <p class='metric-value' style='color:{roi_ci_color}'>{roi_lower:.1f}% to {roi_upper:.1f}%</p>
+                <p style='font-size:0.85rem;'>Standard Deviation: {roi_std:.1f}%</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <p class='metric-label'>Mean Payback Period</p>
+                <p class='metric-value'>{payback_mean:.1f} months</p>
+                <p style='font-size:0.85rem;'>Median: {payback_median:.1f} months</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <p class='metric-label'>Probability of Positive ROI</p>
+                <p class='metric-value' style='color:{SUCCESS_COLOR if positive_roi_prob > 80 else (WARNING_COLOR if positive_roi_prob > 50 else DANGER_COLOR)}'>{positive_roi_prob:.1f}%</p>
+                <p style='font-size:0.85rem;'>Based on {sim_data['num_simulations']} simulations</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Create ROI distribution histogram
+        roi_hist_fig = px.histogram(
+            results_df, 
+            x='roi_3yr',
+            marginal='box',
+            nbins=30,
+            title='Distribution of 3-Year ROI Results',
+            labels={'roi_3yr': 'ROI (%)'},
+            color_discrete_sequence=[PRIMARY_COLOR]
+        )
+        
+        # Add vertical line at 0% ROI
+        roi_hist_fig.add_vline(
+            x=0, 
+            line_dash="dash", 
+            line_color=DANGER_COLOR,
+            annotation_text="Break-even",
+            annotation_position="top right"
+        )
+        
+        # Add vertical line at base scenario ROI
+        roi_hist_fig.add_vline(
+            x=sim_data['base_scenario']['financial_impact']['roi_3yr'], 
+            line_dash="solid", 
+            line_color=TEXT_PRIMARY,
+            annotation_text="Base Scenario",
+            annotation_position="top left"
+        )
+        
+        # Update layout
+        roi_hist_fig.update_layout(
+            xaxis_title="3-Year ROI (%)",
+            yaxis_title="Number of Simulations",
+            showlegend=False,
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=400
+        )
+        
+        st.plotly_chart(roi_hist_fig, use_container_width=True)
+        
+        # Create payback period distribution
+        filtered_payback = results_df[results_df['payback_months'] < 100]  # Filter out extreme values for better visualization
+        
+        payback_hist_fig = px.histogram(
+            filtered_payback, 
+            x='payback_months',
+            marginal='box',
+            nbins=30,
+            title='Distribution of Payback Period Results',
+            labels={'payback_months': 'Payback Period (months)'},
+            color_discrete_sequence=[SECONDARY_COLOR]
+        )
+        
+        # Add vertical line at 12 months payback
+        payback_hist_fig.add_vline(
+            x=12, 
+            line_dash="dash", 
+            line_color=WARNING_COLOR,
+            annotation_text="1 Year",
+            annotation_position="top right"
+        )
+        
+        # Add vertical line at base scenario payback
+        payback_hist_fig.add_vline(
+            x=sim_data['base_scenario']['financial_impact']['payback_months'], 
+            line_dash="solid", 
+            line_color=TEXT_PRIMARY,
+            annotation_text="Base Scenario",
+            annotation_position="top left"
+        )
+        
+        # Update layout
+        payback_hist_fig.update_layout(
+            xaxis_title="Payback Period (months)",
+            yaxis_title="Number of Simulations",
+            showlegend=False,
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=400
+        )
+        
+        st.plotly_chart(payback_hist_fig, use_container_width=True)
+        
+        # Create scatterplot of key relationships
+        scatter_fig = px.scatter(
+            results_df,
+            x='expected_reduction',
+            y='roi_3yr',
+            color='payback_months',
+            size='net_benefit',
+            hover_data=['fix_cost_upfront', 'fix_cost_per_unit', 'annual_savings'],
+            labels={
+                'expected_reduction': 'Expected Reduction (%)',
+                'roi_3yr': 'ROI (%)',
+                'payback_months': 'Payback Period (months)',
+                'net_benefit': 'Net Benefit ($)',
+                'fix_cost_upfront': 'Upfront Cost ($)',
+                'fix_cost_per_unit': 'Cost per Unit ($)',
+                'annual_savings': 'Annual Savings ($)'
+            },
+            title='Relationship Between Reduction Rate, ROI, and Payback Period',
+            color_continuous_scale=px.colors.sequential.Viridis_r
+        )
+        
+        # Update layout
+        scatter_fig.update_layout(
+            xaxis_title="Expected Return Rate Reduction (%)",
+            yaxis_title="3-Year ROI (%)",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=500
+        )
+        
+        st.plotly_chart(scatter_fig, use_container_width=True)
+        
+        # Create heatmap of parameter sensitivities
+        st.markdown("<h3>Parameter Sensitivity Analysis</h3>", unsafe_allow_html=True)
+        
+        # Calculate correlations
+        correlation_columns = ['expected_reduction', 'fix_cost_per_unit', 'fix_cost_upfront', 
+                              'sales_30d', 'returns_30d', 'sales_price', 'roi_3yr', 'payback_months']
+        correlation_df = results_df[correlation_columns].corr()
+        
+        # Extract correlations with ROI and payback
+        roi_correlations = correlation_df['roi_3yr'].drop(['roi_3yr', 'payback_months'])
+        payback_correlations = correlation_df['payback_months'].drop(['roi_3yr', 'payback_months'])
+        
+        # Combine into a new dataframe
+        sensitivity_df = pd.DataFrame({
+            'Parameter': roi_correlations.index,
+            'ROI Impact': roi_correlations.values,
+            'Payback Impact': payback_correlations.values
+        })
+        
+        # Sort by absolute ROI impact
+        sensitivity_df = sensitivity_df.reindex(sensitivity_df['ROI Impact'].abs().sort_values(ascending=False).index)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Create bar chart for ROI sensitivity
+            roi_sens_fig = px.bar(
+                sensitivity_df,
+                y='Parameter',
+                x='ROI Impact',
+                orientation='h',
+                title='Parameter Sensitivity Impact on ROI',
+                color='ROI Impact',
+                color_continuous_scale=px.colors.sequential.Blues,
+                labels={'ROI Impact': 'Correlation with ROI', 'Parameter': ''}
+            )
+            
+            # Update layout
+            roi_sens_fig.update_layout(
+                xaxis_title="Correlation Coefficient",
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=350
+            )
+            
+            st.plotly_chart(roi_sens_fig, use_container_width=True)
+        
+        with col2:
+            # Create bar chart for payback sensitivity
+            payback_sens_fig = px.bar(
+                sensitivity_df,
+                y='Parameter',
+                x='Payback Impact',
+                orientation='h',
+                title='Parameter Sensitivity Impact on Payback Period',
+                color='Payback Impact',
+                color_continuous_scale=px.colors.sequential.Blues_r,
+                labels={'Payback Impact': 'Correlation with Payback', 'Parameter': ''}
+            )
+            
+            # Update layout
+            payback_sens_fig.update_layout(
+                xaxis_title="Correlation Coefficient",
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=350
+            )
+            
+            st.plotly_chart(payback_sens_fig, use_container_width=True)
+        
+        # Create heatmap of correlation matrix
+        heatmap_fig = px.imshow(
+            correlation_df,
+            text_auto='.2f',
+            aspect="auto",
+            color_continuous_scale=px.colors.diverging.RdBu_r,
+            title='Parameter Correlation Matrix'
+        )
+        
+        # Update layout
+        heatmap_fig.update_layout(
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=500
+        )
+        
+        with st.expander("View Detailed Correlation Matrix", expanded=False):
+            st.plotly_chart(heatmap_fig, use_container_width=True)
+        
+        # Display data table with summary statistics
+        with st.expander("View Simulation Statistics", expanded=False):
+            # Calculate summary statistics
+            summary_stats = results_df.describe().transpose()
+            
+            # Add confidence intervals
+            summary_stats[f'{sim_data["confidence_level"]}% Lower'] = results_df.quantile(alpha/2)
+            summary_stats[f'{sim_data["confidence_level"]}% Upper'] = results_df.quantile(1-alpha/2)
+            
+            # Round and display
+            st.dataframe(summary_stats.round(2), use_container_width=True)
+            
+            # Download link for CSV
+            csv = results_df.to_csv(index=False)
+            b64 = base64.b64encode(csv.encode()).decode()
+            href = f'<a href="data:file/csv;base64,{b64}" download="monte_carlo_results.csv" class="download-link">Download Full Simulation Results as CSV</a>'
+            st.markdown(href, unsafe_allow_html=True)
+    
+    elif not st.session_state.quality_analysis_results:
+        st.warning("Please run a quality analysis first before using the Monte Carlo Simulation tool.")
+
+def display_analysis_page():
+    """Display the single product analysis page"""
+    # Display header
+    app_header()
+    st.markdown('<div class="main-header">Medical Device Quality ROI Analysis</div>', unsafe_allow_html=True)
+    
+    # Display mode toggle
+    display_mode_toggle()
+    
+    # Navigation buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Batch Analysis Import", key="batch_button", use_container_width=True, help="Upload a CSV or Excel file to analyze multiple products at once"):
+            navigate_to_page("batch_analysis")
+    with col2:
+        if st.button("Formula Guide", key="help_button", use_container_width=True, help="View detailed explanations of formulas used in the analysis"):
+            navigate_to_page("help")
+    
+    # Check if analysis results exist
+    if not st.session_state.analysis_submitted:
+        # New Analysis button
+        if st.button("New Analysis", key="new_analysis"):
+            st.session_state.quality_analysis_results = None
+            st.session_state.analysis_submitted = False
+            st.session_state.chat_history = []
+            
+        with st.form("quality_issue_form"):
+            st.markdown('<div class="form-section-header">Product & Issue Details</div>', unsafe_allow_html=True)
+            
+            # Basic product information
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # Required inputs
+                sku = st.text_input(
+                    "SKU", 
+                    help="Product SKU (Stock Keeping Unit)"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+                
+                product_type = st.selectbox(
+                    "Product Type", 
+                    ["B2C", "B2B", "Both"],
+                    help="Distribution channel for this product"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            with col2:
+                sales_30d = st.number_input(
+                    "Units Sold (30 Days)", 
+                    min_value=0.0,
+                    help="Number of units sold in the last 30 days"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+                
+                returns_30d = st.number_input(
+                    "Units Returned (30 Days)", 
+                    min_value=0.0,
+                    help="Number of units returned in the last 30 days"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            with col3:
+                risk_level = st.select_slider(
+                    "Medical Risk Level",
+                    options=["Low", "Medium", "High"],
+                    value="Medium",
+                    help="Risk level assessment for this medical device issue"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+                
+                regulatory_impact = st.selectbox(
+                    "Regulatory Impact",
+                    ["None", "Possible", "Significant"],
+                    help="Potential regulatory impact of this issue"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            # Description of issue
+            issue_description = st.text_area(
+                "Description of Quality Issue",
+                height=100,
+                help="Detailed description of the quality problem, including failure modes and customer impact"
+            )
+            st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            # Financial Information
+            st.markdown('<div class="form-section-header">Financial Information</div>', unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                current_unit_cost = st.number_input(
+                    "Current Unit Cost", 
+                    min_value=0.0,
+                    help="Current per-unit cost to produce/acquire (landed cost)"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+                
+                sales_price = st.number_input(
+                    "Current Sales Price", 
+                    min_value=0.0,
+                    help="Current selling price per unit"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            with col2:
+                fix_cost_upfront = st.number_input(
+                    "Fix Cost Upfront", 
+                    min_value=0.0,
+                    help="One-time cost to implement the quality fix (engineering, design changes, tooling, etc.)"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+                
+                fix_cost_per_unit = st.number_input(
+                    "Additional Cost Per Unit", 
+                    min_value=0.0,
+                    help="Additional cost per unit after implementing the fix (extra material, labor, etc.)"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            with col3:
+                new_sales_price = st.number_input(
+                    "New Sales Price (if changing)", 
+                    min_value=0.0,
+                    help="New selling price per unit after the fix (if staying the same, leave at 0)"
+                )
+                
+                # Only show in advanced mode
+                if st.session_state.view_mode == "advanced":
+                    fba_fee = st.number_input(
+                        "Fulfillment/Shipping Fee", 
+                        min_value=0.0,
+                        help="Fulfillment fee per unit, if applicable"
+                    )
+                else:
+                    fba_fee = 0.0
+            
+            # Solution expectations
+            st.markdown('<div class="form-section-header">Solution Expectations</div>', unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                expected_reduction = st.slider(
+                    "Expected Return Rate Reduction (%)", 
+                    min_value=0.0, 
+                    max_value=100.0,
+                    value=50.0,
+                    help="Expected percentage reduction in return rate after implementing the fix"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            with col2:
+                solution_confidence = st.slider(
+                    "Solution Confidence (%)", 
+                    min_value=0.0, 
+                    max_value=100.0,
+                    value=75.0,
+                    help="Confidence level that the solution will achieve the expected reduction"
+                )
+                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
+            
+            # Expandable section for optional metrics (only in advanced mode)
+            if st.session_state.view_mode == "advanced":
+                with st.expander("Additional Metrics (Optional)"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        asin = st.text_input(
+                            "Alternative Product ID", 
+                            help="Alternative product identification number"
+                        )
+                        
+                        ncx_rate = st.number_input(
+                            "Negative Customer Experience Rate (%)", 
+                            min_value=0.0, 
+                            max_value=100.0,
+                            help="Composite of bad reviews, returns, and customer complaints divided by total sales"
+                        )
+                        
+                        sales_365d = st.number_input(
+                            "Units Sold (365 Days)", 
+                            min_value=0.0,
+                            help="Number of units sold in the last 365 days (for long-term trends)"
+                        )
+                        
+                        returns_365d = st.number_input(
+                            "Units Returned (365 Days)", 
+                            min_value=0.0,
+                            help="Number of units returned in the last 365 days (for long-term trends)"
+                        )
+                    
+                    with col2:
+                        star_rating = st.number_input(
+                            "Current Star Rating", 
+                            min_value=1.0, 
+                            max_value=5.0,
+                            value=4.0,
+                            help="Current average star rating (if applicable)"
+                        )
+                        
+                        total_reviews = st.number_input(
+                            "Total Reviews", 
+                            min_value=0,
+                            help="Total number of reviews (if applicable)"
+                        )
+            else:
+                # Set default values for optional fields
+                asin = None
+                ncx_rate = None
+                sales_365d = None
+                returns_365d = None
+                star_rating = None
+                total_reviews = None
+            
+            # Note about required fields
+            st.markdown('<p><small>* Required fields</small></p>', unsafe_allow_html=True)
+            
+            # Form submission
+            submit_button = st.form_submit_button("Analyze Quality Issue")
+            
+            if submit_button:
+                # Validate required fields
+                if not all([sku, issue_description]):
+                    st.error("Please fill in all required fields marked with *")
+                elif sales_30d <= 0:
+                    st.error("Units Sold (30 Days) must be greater than zero")
+                elif current_unit_cost <= 0:
+                    st.error("Current Unit Cost must be greater than zero")
+                elif sales_price <= 0:
+                    st.error("Current Sales Price must be greater than zero")
+                else:
+                    with st.spinner("Analyzing quality issue..."):
+                        # Set new_sales_price to current sales_price if not specified
+                        if new_sales_price <= 0:
+                            new_sales_price = sales_price
+                        
+                        # Perform analysis
+                        results = analyze_quality_issue(
+                            sku=sku,
+                            product_type=product_type,
+                            sales_30d=sales_30d,
+                            returns_30d=returns_30d,
+                            issue_description=issue_description,
+                            current_unit_cost=current_unit_cost,
+                            fix_cost_upfront=fix_cost_upfront,
+                            fix_cost_per_unit=fix_cost_per_unit,
+                            sales_price=sales_price,
+                            expected_reduction=expected_reduction,
+                            solution_confidence=solution_confidence,
+                            new_sales_price=new_sales_price,
+                            asin=asin if asin else None,
+                            ncx_rate=ncx_rate if ncx_rate > 0 else None,
+                            sales_365d=sales_365d if sales_365d > 0 else None,
+                            returns_365d=returns_365d if returns_365d > 0 else None,
+                            star_rating=star_rating if star_rating > 0 else None,
+                            total_reviews=total_reviews if total_reviews > 0 else None,
+                            fba_fee=fba_fee if fba_fee > 0 else None,
+                            risk_level=risk_level,
+                            regulatory_impact=regulatory_impact
+                        )
+                        
+                        # Store results in session state
+                        st.session_state.quality_analysis_results = results
+                        st.session_state.analysis_submitted = True
+                        
+                        # Initialize chat with AI
+                        st.session_state.chat_history = chat_with_ai(
+                            results, 
+                            issue_description
+                        )
+                        
+                        # Rerun to show results
+                        st.rerun()
+    
+    # Display results if available
+    if st.session_state.analysis_submitted and st.session_state.quality_analysis_results:
+        # Create tabs for different analysis types
+        tabs = st.tabs(["Quality ROI Analysis", "Tariff Calculator", "Marketing ROI", "Monte Carlo Simulation"])
+        
+        with tabs[0]:  # Quality ROI Analysis tab
+            # Add a reset button at the top
+            if st.button("New Analysis", key="reset_top_button"):
+                reset_analysis()
+                
+            # Display analysis results
+            display_quality_issue_results(st.session_state.quality_analysis_results)
+            
+            # Display AI chat interface if enabled and in advanced mode
+            if st.session_state.view_mode == "advanced":
+                with st.expander("Quality Consultant AI Assistant", expanded=True):
+                    # Chat container
+                    st.markdown('<div style="background-color:#F9FAFB; border-radius:8px; padding:1rem; margin-bottom:1rem; border:1px solid #E5E7EB; max-height:400px; overflow-y:auto;">', unsafe_allow_html=True)
+                    
+                    if st.session_state.chat_history:
+                        for message in st.session_state.chat_history:
+                            if message["role"] == "user":
+                                st.markdown(f'<div style="padding:0.75rem; background-color:{TERTIARY_COLOR}; border-radius:8px; margin-bottom:0.75rem; margin-left:auto; max-width:85%; border-bottom-right-radius:0;">{message["content"]}</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown(f'<div style="padding:0.75rem; background-color:white; border-radius:8px; margin-bottom:0.75rem; margin-right:auto; max-width:85%; border-bottom-left-radius:0; border-left:3px solid {PRIMARY_COLOR};">{message["content"]}</div>', unsafe_allow_html=True)
+                    else:
+                        st.info("AI consultant not available or initialization failed.")
+                        
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Input for new messages
+                    user_input = st.text_area(
+                        "Ask for advice on the quality issue, potential solutions, or regulatory implications:",
+                        placeholder="E.g., What could be causing this issue? What fixes do you recommend? What are the regulatory considerations?",
+                        key=
