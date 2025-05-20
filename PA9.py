@@ -62,8 +62,30 @@ st.markdown(f"""
              --background: {BACKGROUND_COLOR}; --card-bg: {CARD_BACKGROUND}; --text-primary: {TEXT_PRIMARY}; 
              --text-secondary: {TEXT_SECONDARY}; --text-muted: {TEXT_MUTED}; --success: {SUCCESS_COLOR}; 
              --warning: {WARNING_COLOR}; --danger: {DANGER_COLOR}; --border: {BORDER_COLOR}; }}
-    .metric-card {{ background-color: var(--card-bg); border-radius:8px; padding: 1rem; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1rem; }}
+    .metric-card {{ 
+        background-color: var(--card-bg); 
+        border-radius: 8px; 
+        padding: 1rem; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+        margin-bottom: 1rem; 
+        position: relative;
+        border-left: 3px solid var(--primary);
+    }}
+    .metric-card:hover::after {{
+        content: attr(data-tooltip);
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgba(0,0,0,0.8);
+        color: white;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 12px;
+        white-space: nowrap;
+        z-index: 99;
+        opacity: 0.9;
+    }}
     .metric-label {{ font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem; }}
     .metric-value {{ font-size: 1.5rem; font-weight: 600; color: var(--text-primary); }}
     .metric-subvalue {{ font-size: 0.8rem; color: var(--text-muted); }}
@@ -76,13 +98,96 @@ st.markdown(f"""
     .user-bubble {{ background: {TERTIARY_COLOR}; padding:0.75rem; margin-left:auto; 
                     margin-bottom: 0.5rem; border-radius: 4px 0 0 4px; max-width: 80%; }}
     .stTabs [data-baseweb="tab-list"] {{ gap: 1rem; }}
-    .stTabs [data-baseweb="tab"] {{ height: 3rem; white-space: pre-wrap; background-color: white;
-                                   border-radius: 4px 4px 0 0; gap: 0.5rem; padding-top: 0.5rem; }}
-    .stTabs [aria-selected="true"] {{ background-color: {PRIMARY_COLOR} !important; color: white !important; }}
+    .stTabs [data-baseweb="tab"] {{ 
+        height: 3rem; 
+        white-space: pre-wrap; 
+        background-color: white;
+        border-radius: 4px 4px 0 0; 
+        gap: 0.5rem; 
+        padding-top: 0.5rem; 
+        font-weight: 500;
+    }}
+    .stTabs [aria-selected="true"] {{ 
+        background-color: {PRIMARY_COLOR} !important; 
+        color: white !important; 
+        font-weight: 600;
+    }}
     div.block-container {{ padding-top: 2rem; padding-bottom: 2rem; }}
-    .export-button {{ background-color: var(--primary); color: white; padding: 0.5rem 1rem;
-                      border-radius: 4px; text-decoration: none; display: inline-block; margin-right: 0.5rem; }}
-    .export-button:hover {{ background-color: var(--secondary); }}
+    .export-button {{ 
+        background-color: var(--primary); 
+        color: white; 
+        padding: 0.5rem 1rem;
+        border-radius: 4px; 
+        text-decoration: none; 
+        display: inline-block; 
+        margin-right: 0.5rem;
+        transition: background-color 0.3s ease;
+    }}
+    .export-button:hover {{ 
+        background-color: var(--secondary); 
+        text-decoration: none;
+        color: white;
+    }}
+    .stButton > button {{
+        background-color: var(--primary);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        transition: background-color 0.3s ease;
+    }}
+    .stButton > button:hover {{
+        background-color: var(--secondary);
+    }}
+    /* Tooltip styling */
+    .tooltip {{
+        position: relative;
+        display: inline-block;
+    }}
+    .tooltip .tooltiptext {{
+        visibility: hidden;
+        width: 200px;
+        background-color: #555;
+        color: #fff;
+        text-align: center;
+        border-radius: 6px;
+        padding: 5px;
+        position: absolute;
+        z-index: 1;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -100px;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }}
+    .tooltip:hover .tooltiptext {{
+        visibility: visible;
+        opacity: 1;
+    }}
+    /* Form styling */
+    .stNumberInput input, .stTextInput input, .stSelectbox, .stTextArea textarea {{
+        border-radius: 4px;
+        border: 1px solid #dee2e6;
+    }}
+    .stNumberInput input:focus, .stTextInput input:focus, .stSelectbox:focus, .stTextArea textarea:focus {{
+        border-color: var(--primary);
+        box-shadow: 0 0 0 0.2rem rgba(0,150,199,0.25);
+    }}
+    /* Header Styling */
+    h1, h2, h3, h4, h5, h6 {{
+        color: var(--text-primary);
+        font-weight: 600;
+    }}
+    h1 {{
+        margin-bottom: 1rem;
+        border-bottom: 2px solid var(--primary);
+        padding-bottom: 0.5rem;
+    }}
+    /* Loader styling */
+    .stSpinner > div {{
+        border-top-color: var(--primary) !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -273,7 +378,6 @@ def analyze_quality_issue(
         # Calculate annualized metrics
         annual_sales = sales_30d * 12
         annual_returns = returns_30d * 12
-        annual_return_rate = return_rate_30d  # Same percentage
         
         # Calculate financial impact of current situation
         margin_per_unit = sales_price - current_unit_cost
@@ -351,11 +455,11 @@ def analyze_quality_issue(
                 "return_rate_30d": return_rate_30d,
                 "annual_sales": annual_sales,
                 "annual_returns": annual_returns,
-                "annual_return_rate": annual_return_rate,
                 "unit_cost": current_unit_cost,
                 "sales_price": sales_price,
                 "margin_per_unit": margin_per_unit,
-                "margin_percentage": margin_percentage
+                "margin_percentage": margin_percentage,
+                "loss_per_return": loss_per_return  # Added this field
             },
             "solution_metrics": {
                 "fix_cost_upfront": fix_cost_upfront,
@@ -950,21 +1054,43 @@ def display_header():
     with col1:
         st.title("🔍 Product Profitability Analysis")
         st.markdown("""
-        Analyze product quality issues, calculate ROI for improvement projects, and simulate financial scenarios.
-        """)
+        <div style="margin-bottom: 1rem;">
+            Analyze product quality issues, calculate ROI for improvement projects, and simulate financial scenarios.
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        if st.button("📋 Help"):
-            st.info("""
-            **How to use this tool:**
+        with st.popover("📋 Help", use_container_width=True):
+            st.markdown("""
+            ### How to use this tool
             
-            1. Enter product and quality issue details in the form
-            2. Submit to generate a comprehensive analysis
-            3. Use the AI assistant to get further insights
-            4. Export results as CSV or PDF for reporting
+            1. **Quality ROI Analysis**: Enter product details and quality issue information to calculate ROI of potential fixes
+            2. **Tariff Calculator**: Determine the impact of tariffs and import costs on product margins
+            3. **Marketing ROI**: Analyze advertising campaign performance metrics
+            4. **Monte Carlo Simulation**: Understand risks and probabilities with statistical modeling
+            
+            Each tab provides specialized analysis tools with interactive visualizations and export options.
+            
+            #### Tips
+            - Hover over charts and metrics for additional information
+            - Use the AI assistant to get expert recommendations
+            - Export results as CSV or PDF for reporting
             
             For additional help, contact the Quality Management team.
             """)
+    
+    # Add app navigation and user info in a status bar
+    st.markdown("""
+    <div style="background-color: #f8f9fa; padding: 0.5rem; border-radius: 4px; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <span style="color: #6c757d; margin-right: 1rem;">User: Quality Manager</span>
+            <span style="color: #6c757d;">Department: Product Development</span>
+        </div>
+        <div>
+            <span style="color: #6c757d;">Last updated: {}</span>
+        </div>
+    </div>
+    """.format(datetime.now().strftime("%Y-%m-%d")), unsafe_allow_html=True)
 
 def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True):
     """Display the results of a quality issue analysis."""
@@ -977,17 +1103,19 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Return Rate (30d)</div>
-            <div class="metric-value">{results['current_metrics']['return_rate_30d']:.2f}%</div>
-            <div class="metric-subvalue">Annual: {results['current_metrics']['annual_return_rate']:.2f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Use tooltip for extra information
+        with st.container():
+            st.markdown(f"""
+            <div class="metric-card" data-tooltip="30-day return rate based on recent sales data">
+                <div class="metric-label">Return Rate (30d)</div>
+                <div class="metric-value">{results['current_metrics']['return_rate_30d']:.2f}%</div>
+                <div class="metric-subvalue">Monthly average</div>
+            </div>
+            """, unsafe_allow_html=True)
     
     with col2:
         st.markdown(f"""
-        <div class="metric-card">
+        <div class="metric-card" data-tooltip="Estimated annual financial impact from returns">
             <div class="metric-label">Annual Loss</div>
             <div class="metric-value">{format_currency(results['financial_impact']['annual_loss'])}</div>
             <div class="metric-subvalue">Due to returns</div>
@@ -999,7 +1127,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
             results['financial_impact']['roi_3yr'], 200, 0
         )
         st.markdown(f"""
-        <div class="metric-card">
+        <div class="metric-card" data-tooltip="Return on investment over a 3-year period">
             <div class="metric-label">3-Year ROI</div>
             <div class="metric-value" style="color: {roi_color};">{results['financial_impact']['roi_3yr']:.2f}%</div>
             <div class="metric-subvalue">1-Year: {results['financial_impact']['roi_1yr']:.2f}%</div>
@@ -1011,7 +1139,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
             24 - min(results['financial_impact']['payback_period'], 24), 18, 6
         )
         st.markdown(f"""
-        <div class="metric-card">
+        <div class="metric-card" data-tooltip="Time required to recover the investment">
             <div class="metric-label">Payback Period</div>
             <div class="metric-value" style="color: {payback_color};">{results['financial_impact']['payback_period']:.1f} months</div>
             <div class="metric-subvalue">To break even</div>
@@ -1041,13 +1169,18 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
             financial_impact = results['financial_impact']
             st.subheader("Financial Impact")
             
+            # Calculate values needed for display
+            annual_returns = results['current_metrics']['annual_returns']
+            annual_sales = results['current_metrics']['annual_sales']
+            loss_per_return = financial_impact['annual_loss'] / annual_returns if annual_returns > 0 else 0
+            
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("#### Current Situation")
                 st.markdown(f"""
                 - **Annual Returns:** {annual_returns:.0f} units
-                - **Return Rate:** {results['current_metrics']['annual_return_rate']:.2f}%
+                - **Return Rate:** {results['current_metrics']['return_rate_30d']:.2f}%
                 - **Loss Per Return:** {format_currency(loss_per_return)}
                 - **Annual Loss:** {format_currency(financial_impact['annual_loss'])}
                 """, unsafe_allow_html=True)
@@ -1061,7 +1194,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 - **Implementation Cost:** {format_currency(financial_impact['implementation_cost'])} (includes {format_currency(results['solution_metrics']['fix_cost_upfront'])} upfront)
                 """, unsafe_allow_html=True)
             
-            # Waterfall chart
+            # Waterfall chart with hover tooltips
             fig = go.Figure(go.Waterfall(
                 name="Financial Impact",
                 orientation="v",
@@ -1085,13 +1218,26 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 connector={"line": {"color": "rgb(63, 63, 63)"}},
                 decreasing={"marker": {"color": DANGER_COLOR}},
                 increasing={"marker": {"color": SUCCESS_COLOR}},
-                totals={"marker": {"color": SECONDARY_COLOR}}
+                totals={"marker": {"color": SECONDARY_COLOR}},
+                hoverinfo="text",
+                hovertext=[
+                    f"Current annual loss due to returns: ${financial_impact['annual_loss']:,.0f}",
+                    f"Savings from prevented returns: +${financial_impact['adjusted_savings']:,.0f}",
+                    f"One-time implementation cost: -${results['solution_metrics']['fix_cost_upfront']:,.0f}",
+                    f"Annual ongoing costs: -${(annual_sales * results['solution_metrics']['fix_cost_per_unit']):,.0f}",
+                    f"Net annual impact: ${(financial_impact['adjusted_savings'] - financial_impact['implementation_cost']):,.0f}"
+                ]
             ))
             
             fig.update_layout(
                 title="Financial Impact Waterfall",
                 showlegend=False,
-                height=400
+                height=400,
+                hoverlabel=dict(
+                    bgcolor="white",
+                    font_size=12,
+                    font_family="Arial"
+                )
             )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -1113,12 +1259,22 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                     y=[current_return_rate, improved_return_rate],
                     text=[f"{current_return_rate:.2f}%", f"{improved_return_rate:.2f}%"],
                     textposition='auto',
-                    marker_color=[DANGER_COLOR, SUCCESS_COLOR]
+                    marker_color=[DANGER_COLOR, SUCCESS_COLOR],
+                    hoverinfo="text",
+                    hovertext=[
+                        f"Current return rate: {current_return_rate:.2f}%<br>Based on {results['current_metrics']['returns_30d']} returns in 30 days",
+                        f"Projected return rate: {improved_return_rate:.2f}%<br>Expected reduction: {results['solution_metrics']['expected_reduction']}%<br>Confidence: {results['solution_metrics']['solution_confidence']}%"
+                    ]
                 ))
                 fig.update_layout(
                     title="Return Rate Reduction",
                     yaxis_title="Return Rate (%)",
-                    height=350
+                    height=350,
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        font_size=12,
+                        font_family="Arial"
+                    )
                 )
                 st.plotly_chart(fig, use_container_width=True)
             
@@ -1130,20 +1286,31 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                     y=[results['financial_impact']['roi_1yr'], results['financial_impact']['roi_3yr']],
                     text=[f"{results['financial_impact']['roi_1yr']:.2f}%", f"{results['financial_impact']['roi_3yr']:.2f}%"],
                     textposition='auto',
-                    marker_color=[SECONDARY_COLOR, PRIMARY_COLOR]
+                    marker_color=[SECONDARY_COLOR, PRIMARY_COLOR],
+                    hoverinfo="text",
+                    hovertext=[
+                        f"1-Year ROI: {results['financial_impact']['roi_1yr']:.2f}%<br>Implementation cost: ${results['financial_impact']['implementation_cost']:,.2f}<br>First year savings: ${results['financial_impact']['adjusted_savings']:,.2f}",
+                        f"3-Year ROI: {results['financial_impact']['roi_3yr']:.2f}%<br>Includes annual growth of {annualized_growth:.1f}%<br>Cumulative 3-year benefit: ${cumulative_savings:,.2f}"
+                    ]
                 ))
                 fig.update_layout(
                     title="Return on Investment",
                     yaxis_title="ROI (%)",
-                    height=350
+                    height=350,
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        font_size=12,
+                        font_family="Arial"
+                    )
                 )
                 st.plotly_chart(fig, use_container_width=True)
             
             # Payback period gauge
             fig = go.Figure(go.Indicator(
-                mode="gauge+number",
+                mode="gauge+number+delta",
                 value=results['financial_impact']['payback_period'],
                 title={"text": "Payback Period (Months)"},
+                delta={'reference': 12, 'decreasing': {'color': SUCCESS_COLOR}, 'increasing': {'color': DANGER_COLOR}},
                 gauge={
                     "axis": {"range": [None, 36], "tickwidth": 1, "tickcolor": "darkblue"},
                     "bar": {"color": PRIMARY_COLOR},
@@ -1159,11 +1326,23 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                     "threshold": {
                         "line": {"color": "red", "width": 4},
                         "thickness": 0.75,
-                        "value": 24
+                        "value": 12
                     }
                 }
             ))
-            fig.update_layout(height=300)
+            fig.update_layout(
+                height=300,
+                margin=dict(l=30, r=30, t=50, b=30),
+                annotations=[
+                    dict(
+                        x=0.5,
+                        y=-0.15,
+                        text=f"Break-even in {results['financial_impact']['payback_period']:.1f} months<br>Monthly net benefit: ${monthly_net_benefit:,.2f}",
+                        showarrow=False,
+                        align="center"
+                    )
+                ]
+            )
             st.plotly_chart(fig, use_container_width=True)
         
         with tabs[2]:
@@ -1337,31 +1516,58 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
 def display_quality_analysis_form():
     """Display the form for quality issue analysis."""
     with st.form(key="quality_analysis_form"):
-        st.markdown("### Product Information")
+        st.markdown("""
+        <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem;">
+            <i class="fas fa-clipboard-list"></i> Product Information
+        </h3>
+        """, unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            sku = st.text_input("SKU", placeholder="Enter product SKU")
+            sku = st.text_input("SKU", placeholder="Enter product SKU", help="Unique identifier for the product")
         
         with col2:
+            product_type_options = ["B2C - Consumer", "B2B - Professional", "B2B - Healthcare", "OEM"]
             product_type = st.selectbox(
                 "Product Type",
-                options=["B2C - Consumer", "B2B - Professional", "B2B - Healthcare", "OEM"],
-                index=0
+                options=product_type_options,
+                index=0,
+                help="Select the market segment for this product"
             )
         
         with col3:
-            issue_description = st.text_input("Issue Description", placeholder="Brief description of the quality issue")
+            issue_description = st.text_input(
+                "Issue Description", 
+                placeholder="Brief description of the quality issue",
+                help="Describe the quality problem being addressed"
+            )
         
-        st.markdown("### Sales & Returns Data")
+        st.markdown("""
+        <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1.5rem;">
+            <i class="fas fa-chart-line"></i> Sales & Returns Data
+        </h3>
+        """, unsafe_allow_html=True)
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            sales_30d = st.number_input("Sales (Last 30 Days)", min_value=0, value=1000, step=100)
+            sales_30d = st.number_input(
+                "Sales (Last 30 Days)",
+                min_value=0,
+                value=1000,
+                step=100,
+                help="Number of units sold in the last 30 days"
+            )
         
         with col2:
-            returns_30d = st.number_input("Returns (Last 30 Days)", min_value=0, value=50, step=10)
+            returns_30d = st.number_input(
+                "Returns (Last 30 Days)",
+                min_value=0,
+                value=50,
+                step=10,
+                help="Number of units returned in the last 30 days"
+            )
         
         with col3:
             annualized_growth = st.slider(
@@ -1370,32 +1576,81 @@ def display_quality_analysis_form():
                 max_value=50.0,
                 value=5.0,
                 step=1.0,
-                format="%.1f%%"
+                format="%.1f%%",
+                help="Projected annual growth rate for sales volume"
             )
+            
+            # Calculate and display current return rate for user reference
+            if sales_30d > 0:
+                return_rate = (returns_30d / sales_30d) * 100
+                st.caption(f"Current return rate: {return_rate:.2f}%")
         
-        st.markdown("### Cost & Pricing Information")
+        st.markdown("""
+        <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1.5rem;">
+            <i class="fas fa-dollar-sign"></i> Cost & Pricing Information
+        </h3>
+        """, unsafe_allow_html=True)
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            current_unit_cost = st.number_input("Current Unit Cost ($)", min_value=0.0, value=10.0, step=1.0)
+            current_unit_cost = st.number_input(
+                "Current Unit Cost ($)",
+                min_value=0.0,
+                value=10.0,
+                step=1.0,
+                help="Manufacturing cost per unit before improvements"
+            )
         
         with col2:
-            sales_price = st.number_input("Sales Price ($)", min_value=0.0, value=25.0, step=1.0)
+            sales_price = st.number_input(
+                "Sales Price ($)",
+                min_value=0.0,
+                value=25.0,
+                step=1.0,
+                help="Retail or wholesale price per unit"
+            )
         
         with col3:
-            st.markdown("**Current Margin**")
             margin = sales_price - current_unit_cost
             margin_percentage = safe_divide(margin, sales_price, 0) * 100
-            st.markdown(f"${margin:.2f} ({margin_percentage:.2f}%)")
+            
+            st.markdown(
+                f"""
+                <div style="background-color: {CARD_BACKGROUND}; padding: 0.75rem; border-radius: 4px; 
+                        border-left: 3px solid {PRIMARY_COLOR}; margin-top: 1.55rem;">
+                    <div style="font-size: 0.85rem; color: {TEXT_SECONDARY}; margin-bottom: 0.25rem;">Current Margin</div>
+                    <div style="font-size: 1.2rem; font-weight: 600; color: {TEXT_PRIMARY};">${margin:.2f} ({margin_percentage:.2f}%)</div>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
         
-        st.markdown("### Proposed Solution")
+        st.markdown("""
+        <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1.5rem;">
+            <i class="fas fa-tools"></i> Proposed Solution
+        </h3>
+        """, unsafe_allow_html=True)
+        
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            fix_cost_upfront = st.number_input("Fix Cost - Upfront ($)", min_value=0.0, value=5000.0, step=500.0)
+            fix_cost_upfront = st.number_input(
+                "Fix Cost - Upfront ($)",
+                min_value=0.0,
+                value=5000.0,
+                step=500.0,
+                help="One-time cost to implement the solution"
+            )
         
         with col2:
-            fix_cost_per_unit = st.number_input("Fix Cost - Per Unit ($)", min_value=0.0, value=0.5, step=0.1)
+            fix_cost_per_unit = st.number_input(
+                "Fix Cost - Per Unit ($)",
+                min_value=0.0,
+                value=0.5,
+                step=0.1,
+                help="Additional cost per unit after implementing the solution"
+            )
         
         with col3:
             expected_reduction = st.slider(
@@ -1404,7 +1659,8 @@ def display_quality_analysis_form():
                 max_value=100.0,
                 value=50.0,
                 step=5.0,
-                format="%.1f%%"
+                format="%.1f%%",
+                help="Projected percentage reduction in return rate"
             )
         
         with col4:
@@ -1414,10 +1670,16 @@ def display_quality_analysis_form():
                 max_value=100.0,
                 value=80.0,
                 step=5.0,
-                format="%.1f%%"
+                format="%.1f%%",
+                help="Confidence level in the effectiveness of the solution"
             )
         
-        st.markdown("### Risk Assessment")
+        st.markdown("""
+        <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1.5rem;">
+            <i class="fas fa-exclamation-triangle"></i> Risk Assessment
+        </h3>
+        """, unsafe_allow_html=True)
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -1450,22 +1712,24 @@ def display_quality_analysis_form():
                 help="1 = Low, 5 = High. Considers potential patient impact."
             )
         
-        submitted = st.form_submit_button("Run Analysis")
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            submitted = st.form_submit_button("Run Analysis", use_container_width=True)
         
         if submitted:
             if not sku:
-                st.error("SKU is required")
+                st.error("⚠️ SKU is required")
                 return None
             
             if sales_30d <= 0:
-                st.error("Sales must be greater than zero")
+                st.error("⚠️ Sales must be greater than zero")
                 return None
             
             if current_unit_cost <= 0 or sales_price <= 0:
-                st.error("Cost and price must be greater than zero")
+                st.error("⚠️ Cost and price must be greater than zero")
                 return None
             
-            with st.spinner("Analyzing quality issue..."):
+            with st.spinner("Analyzing quality issue... Please wait"):
                 try:
                     results = analyze_quality_issue(
                         sku=sku,
@@ -1488,6 +1752,15 @@ def display_quality_analysis_form():
                     st.session_state.quality_analysis_results = results
                     st.session_state.analysis_submitted = True
                     
+                    # Store variables needed for charts in session state
+                    st.session_state.annualized_growth = annualized_growth
+                    st.session_state.monthly_net_benefit = safe_divide(
+                        results['financial_impact']['adjusted_savings'] - 
+                        (results['current_metrics']['annual_sales'] * results['solution_metrics']['fix_cost_per_unit']), 
+                        12, 0
+                    )
+                    st.session_state.cumulative_savings = results['financial_impact']['adjusted_savings'] * 3  # Simplified calculation
+                    
                     # Prepare initial message for AI assistant
                     if 'chat_history' not in st.session_state:
                         st.session_state.chat_history = []
@@ -1507,32 +1780,92 @@ def display_ai_assistant(results: Dict[str, Any]):
     
     system_prompt = get_system_prompt(results)
     
-    with st.expander("Quality Consultant AI Assistant", expanded=True):
+    st.markdown("""
+    <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1rem;">
+        <i class="fas fa-robot"></i> Quality Consultant AI Assistant
+    </h3>
+    """, unsafe_allow_html=True)
+    
+    # Add a brief explanation of the assistant's capabilities
+    st.markdown("""
+    <div style="background-color: #f8f9fa; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; border-left: 3px solid #0096C7;">
+        Your AI quality management consultant can provide expert guidance on:
+        <ul style="margin-top: 0.5rem; margin-bottom: 0.5rem;">
+            <li>Regulatory considerations for medical devices</li>
+            <li>Implementation strategies for quality improvements</li>
+            <li>Cost-benefit analysis interpretation</li>
+            <li>Risk mitigation recommendations</li>
+        </ul>
+        Ask specific questions about your analysis results to get targeted advice.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Display chat history
+    chat_container = st.container()
+    with chat_container:
         for msg in st.session_state.chat_history:
             if msg["role"] == "user":
                 st.markdown(f'<div class="user-bubble">{msg["content"]}</div>', unsafe_allow_html=True)
             else:
                 st.markdown(f'<div class="assistant-bubble">{msg["content"]}</div>', unsafe_allow_html=True)
+    
+    # Input area with suggested prompts
+    col1, col2 = st.columns([4, 1])
+    
+    with col1:
+        user_input = st.text_area(
+            "Ask the AI consultant...",
+            key="chat_input", 
+            placeholder="Type your question here or select a suggestion.",
+            height=80
+        )
+    
+    with col2:
+        st.markdown("<div style='margin-top: 1.7rem;'></div>", unsafe_allow_html=True)
+        send_button = st.button("📤 Send", key="send_msg_btn", use_container_width=True)
+    
+    # Suggested prompt buttons
+    st.markdown("<p style='margin-bottom: 0.5rem; font-size: 0.85rem; color: #6c757d;'>Suggested questions:</p>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("What are the next steps I should take?", key="prompt1", use_container_width=True):
+            user_input = "What are the next steps I should take based on this analysis?"
+            send_button = True
+    
+    with col2:
+        if st.button("Regulatory considerations?", key="prompt2", use_container_width=True):
+            user_input = "What regulatory considerations should I keep in mind for this quality issue?"
+            send_button = True
+    
+    with col3:
+        if st.button("How to improve confidence?", key="prompt3", use_container_width=True):
+            user_input = "How can I improve my confidence in the proposed solution?"
+            send_button = True
+    
+    # Process message
+    if send_button and user_input:
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
         
-        user_input = st.text_area("Ask the AI about this analysis...", key="chat_input", placeholder="e.g., What are the next steps I should take based on this analysis?")
+        messages = [{"role": "system", "content": system_prompt}] + [
+            {"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history
+        ]
         
-        if st.button("Send"):
-            if user_input:
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                
-                messages = [{"role": "system", "content": system_prompt}] + [
-                    {"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history
-                ]
-                
-                with st.spinner("AI thinking..."):
-                    ai_resp = call_openai_api(messages)
-                
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_resp})
-                st.rerun()
+        with st.spinner("AI consultant is thinking..."):
+            ai_resp = call_openai_api(messages)
         
-        # Add initial message if chat is empty
-        if not st.session_state.chat_history:
-            st.info("Ask the AI assistant for insights about this analysis, next steps, or regulatory considerations.")
+        st.session_state.chat_history.append({"role": "assistant", "content": ai_resp})
+        st.rerun()
+    
+    # Add initial message if chat is empty
+    if not st.session_state.chat_history:
+        st.info("💡 Ask the AI assistant questions about your analysis, regulatory considerations, or best practices for implementation.")
+    
+    # Add a clear conversation button
+    if st.session_state.chat_history and st.button("Clear Conversation", key="clear_chat_btn"):
+        st.session_state.chat_history = []
+        st.rerun()
 
 def display_landed_cost_calculator():
     """Display the landed cost calculator UI."""
@@ -2316,14 +2649,73 @@ def display_analysis_page():
                 display_quality_issue_results(results)
                 display_ai_assistant(results)
         else:
-            if st.button("Start New Analysis"):
-                st.session_state.analysis_submitted = False
-                st.session_state.quality_analysis_results = None
-                st.session_state.chat_history = []
-                st.rerun()
+            col1, col2 = st.columns([1, 6])
+            with col1:
+                if st.button("Start New Analysis", key="new_analysis_btn"):
+                    st.session_state.analysis_submitted = False
+                    st.session_state.quality_analysis_results = None
+                    st.session_state.chat_history = []
+                    st.rerun()
             
-            display_quality_issue_results(st.session_state.quality_analysis_results)
-            display_ai_assistant(st.session_state.quality_analysis_results)
+            # Display a badge with the SKU being analyzed
+            with col2:
+                st.markdown(f"""
+                <div style="background-color: {TERTIARY_COLOR}; padding: 0.5rem 1rem; border-radius: 20px; 
+                      display: inline-block; margin-bottom: 1rem;">
+                    <span style="font-weight: 600;">Analyzing SKU:</span> {st.session_state.quality_analysis_results['sku']} | 
+                    <span style="font-weight: 600;">Type:</span> {st.session_state.quality_analysis_results['product_type']}
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Add tabs for results sections
+            result_tabs = st.tabs(["Analysis Results", "AI Assistant", "Export Options"])
+            
+            with result_tabs[0]:
+                display_quality_issue_results(st.session_state.quality_analysis_results)
+            
+            with result_tabs[1]:
+                display_ai_assistant(st.session_state.quality_analysis_results)
+            
+            with result_tabs[2]:
+                st.markdown("### Export Analysis Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### CSV Export")
+                    if st.session_state.quality_analysis_results:
+                        results = st.session_state.quality_analysis_results
+                        df = export_as_csv(results)
+                        csv_download = generate_download_link(
+                            df, 
+                            f"quality_analysis_{results['sku']}_{datetime.now().strftime('%Y%m%d')}.csv", 
+                            "📥 Export as CSV"
+                        )
+                        st.markdown(csv_download, unsafe_allow_html=True)
+                        
+                        st.markdown("Preview:")
+                        st.dataframe(df, use_container_width=True, height=300)
+                
+                with col2:
+                    st.markdown("#### PDF Report")
+                    if st.session_state.quality_analysis_results:
+                        results = st.session_state.quality_analysis_results
+                        try:
+                            pdf_buffer = export_as_pdf(results)
+                            pdf_data = base64.b64encode(pdf_buffer.read()).decode('utf-8')
+                            pdf_download = f'<a href="data:application/pdf;base64,{pdf_data}" download="quality_analysis_{results["sku"]}_{datetime.now().strftime("%Y%m%d")}.pdf" class="export-button">📄 Export as PDF</a>'
+                            st.markdown(pdf_download, unsafe_allow_html=True)
+                            
+                            st.markdown("The PDF report includes:")
+                            st.markdown("""
+                            - Executive summary with key metrics
+                            - Detailed financial analysis
+                            - Visualizations of return rates and ROI
+                            - Risk assessment breakdown
+                            - Recommendations for action
+                            """)
+                        except Exception as e:
+                            st.error(f"Error generating PDF: {e}")
     
     with tabs[1]:
         display_landed_cost_calculator()
@@ -2338,13 +2730,48 @@ def display_analysis_page():
 def main():
     """Main application function."""
     try:
-        display_analysis_page()
+        # Add FontAwesome to the page for icons
+        st.markdown("""
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+        """, unsafe_allow_html=True)
+        
+        # Handle page navigation
+        if st.session_state.current_page == "analysis":
+            display_analysis_page()
+        
+        # Add footer with version and additional info
+        st.markdown("""
+        <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px; margin-top: 2rem; 
+                    text-align: center; border-top: 1px solid #dee2e6;">
+            <div style="color: #6c757d; font-size: 0.8rem;">
+                Product Profitability Analysis Tool v1.0.1 | © 2025 Medical Device Quality Management
+            </div>
+            <div style="color: #6c757d; font-size: 0.8rem; margin-top: 0.5rem;">
+                For support contact: <a href="mailto:quality@meddevice.com">quality@meddevice.com</a>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
     except Exception as e:
         st.error(f"An unexpected error occurred: {str(e)}")
         logger.exception("Unexpected application error")
-        st.markdown("""
-        Please try refreshing the page. If the problem persists, contact the support team.
-        """)
+        
+        # Show detailed error message and recovery options
+        with st.expander("Error Details", expanded=True):
+            st.code(traceback.format_exc())
+            
+            st.markdown("""
+            ### Troubleshooting Options
+            
+            1. **Refresh the page** to restart the application
+            2. **Clear browser cache** and try again
+            3. If the problem persists, please contact support with the error details above
+            """)
+            
+            if st.button("Reset Application State"):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
