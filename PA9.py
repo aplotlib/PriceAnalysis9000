@@ -17,180 +17,76 @@ from matplotlib.backends.backend_pdf import PdfPages
 import warnings
 import traceback
 from typing import Dict, List, Tuple, Optional, Union, Any
-
-# Suppress warnings
-warnings.filterwarnings('ignore')
+from io import BytesIO
+import logging
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Product Profitability Analysis",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Product Profitability Analysis", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
-# --- THEME COLORS - Professional palette ---
-PRIMARY_COLOR = "#0096C7"         # Blue - primary actions, headers
-SECONDARY_COLOR = "#48CAE4"       # Light blue - secondary elements
-TERTIARY_COLOR = "#90E0EF"        # Lighter blue - tertiary elements
-BACKGROUND_COLOR = "#F8F9FA"      # Light grey - backgrounds
-CARD_BACKGROUND = "#FFFFFF"       # White - card backgrounds
-TEXT_PRIMARY = "#212529"          # Dark grey - primary text
-TEXT_SECONDARY = "#6C757D"        # Medium grey - secondary text
-TEXT_MUTED = "#ADB5BD"            # Light grey - muted text
-SUCCESS_COLOR = "#40916C"         # Green - success metrics
-WARNING_COLOR = "#E9C46A"         # Amber - warning metrics
-DANGER_COLOR = "#E76F51"          # Red - danger/error metrics
-BORDER_COLOR = "#DEE2E6"          # Light grey - borders
+# --- THEME COLORS ---
+PRIMARY_COLOR   = "#0096C7"
+SECONDARY_COLOR = "#48CAE4"
+TERTIARY_COLOR  = "#90E0EF"
+BACKGROUND_COLOR= "#F8F9FA"
+CARD_BACKGROUND = "#FFFFFF"
+TEXT_PRIMARY    = "#212529"
+TEXT_SECONDARY  = "#6C757D"
+TEXT_MUTED      = "#ADB5BD"
+SUCCESS_COLOR   = "#40916C"
+WARNING_COLOR   = "#E9C46A"
+DANGER_COLOR    = "#E76F51"
+BORDER_COLOR    = "#DEE2E6"
 
-# --- CUSTOM STYLING ---
+# --- SESSION STATE INITIALIZATION ---
+if 'quality_analysis_results' not in st.session_state:
+    st.session_state.quality_analysis_results = None
+if 'analysis_submitted' not in st.session_state:
+    st.session_state.analysis_submitted = False
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "analysis"
+if 'view_mode' not in st.session_state:
+    st.session_state.view_mode = "basic"
+if 'batch_analysis_results' not in st.session_state:
+    st.session_state.batch_analysis_results = {}
+if 'tariff_calculations' not in st.session_state:
+    st.session_state.tariff_calculations = None
+if 'monte_carlo_scenario' not in st.session_state:
+    st.session_state.monte_carlo_scenario = None
+if 'compare_list' not in st.session_state:
+    st.session_state.compare_list = []
+
+# --- CSS INJECTION ---
 st.markdown(f"""
 <style>
-    /* Main theme colors and base styles */
-    :root {{
-        --primary: {PRIMARY_COLOR};
-        --secondary: {SECONDARY_COLOR};
-        --tertiary: {TERTIARY_COLOR};
-        --background: {BACKGROUND_COLOR};
-        --card-bg: {CARD_BACKGROUND};
-        --text-primary: {TEXT_PRIMARY};
-        --text-secondary: {TEXT_SECONDARY};
-        --text-muted: {TEXT_MUTED};
-        --success: {SUCCESS_COLOR};
-        --warning: {WARNING_COLOR};
-        --danger: {DANGER_COLOR};
-        --border: {BORDER_COLOR};
+    :root {{ 
+        --primary: {PRIMARY_COLOR}; 
+        --secondary: {SECONDARY_COLOR}; 
+        --tertiary: {TERTIARY_COLOR}; 
+        --background: {BACKGROUND_COLOR}; 
+        --card-bg: {CARD_BACKGROUND}; 
+        --text-primary: {TEXT_PRIMARY}; 
+        --text-secondary: {TEXT_SECONDARY}; 
+        --text-muted: {TEXT_MUTED}; 
+        --success: {SUCCESS_COLOR}; 
+        --warning: {WARNING_COLOR}; 
+        --danger: {DANGER_COLOR}; 
+        --border: {BORDER_COLOR}; 
     }}
     
-    /* Global styles */
-    .stApp {{
-        background-color: var(--background);
+    .metric-card {{ 
+        background-color: var(--card-bg); 
+        border-radius: 8px; 
+        padding: 1rem; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+        margin-bottom: 1rem; 
     }}
     
-    /* Typography */
-    h1, h2, h3, h4, h5, h6 {{
-        color: var(--text-primary);
-        font-weight: 600;
-    }}
-    
-    p, li, label, .stMarkdown {{
-        color: var(--text-primary);
-    }}
-    
-    a {{
-        color: var(--primary);
-        text-decoration: none;
-    }}
-    
-    a:hover {{
-        text-decoration: underline;
-    }}
-    
-    /* Buttons */
-    .stButton>button {{
-        background-color: var(--primary);
-        color: white;
-        border: none;
-        border-radius: 4px;
-        padding: 0.5rem 1rem;
-        font-weight: 500;
-        transition: all 0.2s ease;
-    }}
-    
-    .stButton>button:hover {{
-        background-color: #007BA7;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        transform: translateY(-1px);
-    }}
-    
-    .secondary-button > button {{
-        background-color: #F8F9FA;
-        color: var(--text-primary);
-        border: 1px solid var(--border);
-    }}
-    
-    .secondary-button > button:hover {{
-        background-color: #E9ECEF;
-    }}
-    
-    /* Form elements */
-    .stCheckbox label p {{
-        color: var(--text-primary);
-    }}
-    
-    .stTextInput>div>div>input, 
-    .stNumberInput>div>div>input,
-    .stSelectbox>div>div>div,
-    .stMultiselect>div>div>div {{
-        border-radius: 4px;
-        border-color: var(--border);
-    }}
-    
-    .stTextInput>div>div>input:focus, 
-    .stNumberInput>div>div>input:focus {{
-        border-color: var(--primary);
-        box-shadow: 0 0 0 1px var(--tertiary);
-    }}
-    
-    /* Headers */
-    .main-header {{
-        font-size: 1.8rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 1rem;
-        border-bottom: 2px solid var(--primary);
-        padding-bottom: 0.5rem;
-    }}
-    
-    .sub-header {{
-        font-size: 1.4rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 0.8rem;
-        border-left: 3px solid var(--primary);
-        padding-left: 0.5rem;
-    }}
-    
-    .section-header {{
-        font-size: 1.2rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin: 1rem 0 0.5rem 0;
-    }}
-    
-    /* Cards */
-    .card {{
-        background-color: var(--card-bg);
-        border-radius: 8px;
-        padding: 1.5rem;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-        margin-bottom: 1.5rem;
-        border-top: 3px solid var(--primary);
-    }}
-    
-    .metric-card {{
-        background-color: var(--card-bg);
-        border-radius: 8px;
-        padding: 1.25rem;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
-        margin-bottom: 1rem;
-        border-left: 3px solid var(--primary);
-        transition: transform 0.2s, box-shadow 0.2s;
-    }}
-    
-    .metric-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08);
-    }}
-    
-    /* Metrics */
     .metric-label {{
-        font-size: 0.9rem;
-        font-weight: 500;
+        font-size: 0.85rem;
         color: var(--text-secondary);
         margin-bottom: 0.25rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
     }}
     
     .metric-value {{
@@ -199,573 +95,225 @@ st.markdown(f"""
         color: var(--text-primary);
     }}
     
-    .metric-comparison {{
-        font-size: 0.85rem;
-        font-weight: 500;
-        margin-top: 0.25rem;
+    .metric-subvalue {{
+        font-size: 0.8rem;
+        color: var(--text-muted);
     }}
     
-    .metric-positive {{
-        color: var(--success);
-    }}
-    
-    .metric-negative {{
-        color: var(--danger);
-    }}
-    
-    /* Recommendations */
-    .recommendation-high {{
-        background-color: rgba(64, 145, 108, 0.1);
-        color: var(--success);
-        padding: 0.75rem;
+    .badge {{
+        padding: 0.25rem 0.5rem;
         border-radius: 4px;
+        font-size: 0.75rem;
         font-weight: 600;
-        margin-top: 0.5rem;
-        border-left: 4px solid var(--success);
     }}
     
-    .recommendation-medium {{
-        background-color: rgba(233, 196, 106, 0.1);
-        color: #A27B11;
-        padding: 0.75rem;
-        border-radius: 4px;
-        font-weight: 600;
-        margin-top: 0.5rem;
-        border-left: 4px solid var(--warning);
+    .badge-success {{
+        background-color: var(--success);
+        color: white;
     }}
     
-    .recommendation-low {{
-        background-color: rgba(231, 111, 81, 0.1);
-        color: #B23C18;
-        padding: 0.75rem;
-        border-radius: 4px;
-        font-weight: 600;
-        margin-top: 0.5rem;
-        border-left: 4px solid var(--danger);
+    .badge-warning {{
+        background-color: var(--warning);
+        color: white;
     }}
     
-    /* Mode Toggle */
-    .mode-toggle {{
-        background-color: var(--card-bg);
-        border-radius: 8px;
-        padding: 0.75rem;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-        margin-bottom: 1rem;
-        display: flex;
-        justify-content: center;
-        border: 1px solid var(--border);
+    .badge-danger {{
+        background-color: var(--danger);
+        color: white;
     }}
     
-    .basic-mode-btn,
-    .advanced-mode-btn {{
-        padding: 0.5rem 1rem;
-        border-radius: 4px;
-        cursor: pointer;
-        font-weight: 500;
-        text-align: center;
-        transition: all 0.2s;
-        flex: 1;
+    .assistant-bubble {{ 
+        background: white; 
+        border-left: 3px solid var(--primary); 
+        padding: 0.75rem; 
+        margin-bottom: 0.5rem;
+        border-radius: 0 4px 4px 0;
     }}
     
-    .mode-active {{
+    .user-bubble {{ 
+        background: {TERTIARY_COLOR}; 
+        padding: 0.75rem; 
+        margin-left: auto; 
+        margin-bottom: 0.5rem;
+        border-radius: 4px 0 0 4px;
+        max-width: 80%;
+    }}
+    
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 1rem;
+    }}
+    
+    .stTabs [data-baseweb="tab"] {{
+        height: 3rem;
+        white-space: pre-wrap;
+        background-color: white;
+        border-radius: 4px 4px 0 0;
+        gap: 0.5rem;
+        padding-top: 0.5rem;
+    }}
+    
+    .stTabs [aria-selected="true"] {{
+        background-color: {PRIMARY_COLOR} !important;
+        color: white !important;
+    }}
+    
+    div.block-container {{
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }}
+    
+    .export-button {{
         background-color: var(--primary);
         color: white;
-    }}
-    
-    .mode-inactive {{
-        background-color: var(--card-bg);
-        color: var(--text-secondary);
-    }}
-    
-    /* Form sections */
-    .form-section {{
-        background-color: var(--card-bg);
-        border-radius: 8px;
-        padding: 1.5rem;
-        margin-bottom: 1.5rem;
-        border: 1px solid var(--border);
-    }}
-    
-    .form-section-header {{
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 1rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid var(--border);
-    }}
-    
-    /* Sidebar */
-    section[data-testid="stSidebar"] {{
-        background-color: #F8FAFC;
-    }}
-    
-    section[data-testid="stSidebar"] > div {{
-        padding-top: 2rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }}
-    
-    section[data-testid="stSidebar"] .sidebar-title {{
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 1.5rem;
-        text-align: center;
-        padding-bottom: 0.5rem;
-        border-bottom: 2px solid var(--primary);
-    }}
-    
-    /* Charts and Visualizations */
-    .chart-container {{
-        background-color: var(--card-bg);
-        border-radius: 8px;
-        padding: 1.25rem;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
-        margin-bottom: 1.5rem;
-    }}
-    
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 2px;
-    }}
-
-    .stTabs [data-baseweb="tab"] {{
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #f8f9fa;
-        border-radius: 4px 4px 0 0;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }}
-
-    .stTabs [aria-selected="true"] {{
-        background-color: {PRIMARY_COLOR};
-        color: white;
-    }}
-    
-    /* Field requirements */
-    .required-field::after {{
-        content: " *";
-        color: var(--danger);
-        font-weight: bold;
-    }}
-    
-    /* Help tooltips */
-    .tooltip {{
-        position: relative;
-        display: inline-block;
-        margin-left: 5px;
-        cursor: help;
-    }}
-    
-    .tooltip .tooltiptext {{
-        visibility: hidden;
-        width: 200px;
-        background-color: var(--text-primary);
-        color: var(--card-bg);
-        text-align: center;
+        padding: 0.5rem 1rem;
         border-radius: 4px;
-        padding: 5px;
-        position: absolute;
-        z-index: 1;
-        bottom: 125%;
-        left: 50%;
-        margin-left: -100px;
-        opacity: 0;
-        transition: opacity 0.3s;
-        font-size: 0.8rem;
-    }}
-    
-    .tooltip:hover .tooltiptext {{
-        visibility: visible;
-        opacity: 1;
-    }}
-    
-    /* Status indicators */
-    .status-indicator {{
+        text-decoration: none;
         display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        margin-right: 5px;
-    }}
-    
-    .status-success {{
-        background-color: var(--success);
-    }}
-    
-    .status-warning {{
-        background-color: var(--warning);
-    }}
-    
-    .status-danger {{
-        background-color: var(--danger);
-    }}
-    
-    /* Alerts and notifications */
-    .alert {{
-        padding: 0.75rem 1rem;
-        border-radius: 4px;
-        margin-bottom: 1rem;
-    }}
-    
-    .alert-info {{
-        background-color: rgba(0, 150, 199, 0.1);
-        border-left: 4px solid var(--primary);
-    }}
-    
-    .alert-success {{
-        background-color: rgba(64, 145, 108, 0.1);
-        border-left: 4px solid var(--success);
-    }}
-    
-    .alert-warning {{
-        background-color: rgba(233, 196, 106, 0.1);
-        border-left: 4px solid var(--warning);
-    }}
-    
-    .alert-danger {{
-        background-color: rgba(231, 111, 81, 0.1);
-        border-left: 4px solid var(--danger);
-    }}
-    
-    /* File upload */
-    [data-testid="stFileUploader"] {{
-        background-color: var(--card-bg);
-        padding: 1rem;
-        border-radius: 8px;
-        border: 1px dashed var(--border);
-    }}
-    
-    [data-testid="stFileUploader"] div:first-child {{
-        background-color: var(--background);
-    }}
-    
-    /* Results badge */
-    .results-badge {{
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 16px;
-        font-size: 0.85rem;
-        font-weight: 600;
         margin-right: 0.5rem;
     }}
     
-    .results-badge-success {{
-        background-color: rgba(64, 145, 108, 0.1);
-        color: var(--success);
-    }}
-    
-    .results-badge-warning {{
-        background-color: rgba(233, 196, 106, 0.1);
-        color: #A27B11;
-    }}
-    
-    .results-badge-danger {{
-        background-color: rgba(231, 111, 81, 0.1);
-        color: #B23C18;
-    }}
-    
-    /* Help page styles */
-    .formula-box {{
-        background-color: rgba(0, 150, 199, 0.05);
-        border-radius: 4px;
-        padding: 1rem;
-        margin: 0.5rem 0 1rem 0;
-        border-left: 3px solid var(--primary);
-        font-family: monospace;
-    }}
-    
-    .help-section {{
-        margin-bottom: 2rem;
-    }}
-    
-    .help-title {{
-        font-size: 1.2rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin: 1rem 0 0.5rem 0;
-        padding-bottom: 0.25rem;
-        border-bottom: 1px solid var(--border);
-    }}
-    
-    /* Tariff Tool Styling */
-    .info-box {{
-        background-color: #E3F2FD;
-        padding: 15px;
-        border-radius: 5px;
-        border-left: 5px solid #1E88E5;
-        margin-bottom: 15px;
-    }}
-    
-    .result-box {{
-        background-color: #E8F5E9;
-        padding: 15px;
-        border-radius: 5px;
-        border-left: 5px solid #43A047;
-        margin: 15px 0;
-    }}
-    
-    .warning-box {{
-        background-color: #FFF3E0;
-        padding: 15px;
-        border-radius: 5px;
-        border-left: 5px solid #FF9800;
-        margin-bottom: 15px;
-    }}
-    
-    .positive-value {{
-        color: #4CAF50;
-        font-weight: bold;
-    }}
-    
-    .negative-value {{
-        color: #F44336;
-        font-weight: bold;
-    }}
-    
-    .section-divider {{
-        height: 3px;
-        background-color: #f0f2f6;
-        margin: 20px 0;
+    .export-button:hover {{
+        background-color: var(--secondary);
     }}
 </style>
 """, unsafe_allow_html=True)
 
-#------------------------------------
-# SESSION STATE INITIALIZATION
-#------------------------------------
-if 'quality_analysis_results' not in st.session_state:
-    st.session_state.quality_analysis_results = None
-    
-if 'analysis_submitted' not in st.session_state:
-    st.session_state.analysis_submitted = False
-    
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-    
-if 'batch_analysis_results' not in st.session_state:
-    st.session_state.batch_analysis_results = []
-    
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = "analysis"
-    
-if 'view_mode' not in st.session_state:
-    st.session_state.view_mode = "basic"  # "basic" or "advanced"
-    
-if 'analysis_results_expanded' not in st.session_state:
-    st.session_state.analysis_results_expanded = {}
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-if 'tariff_calculations' not in st.session_state:
-    st.session_state.tariff_calculations = []
-    
-if 'monte_carlo_scenario' not in st.session_state:
-    st.session_state.monte_carlo_scenario = None
-    
-if 'compare_list' not in st.session_state:
-    st.session_state.compare_list = []
-
-#------------------------------------
-# UTILITY FUNCTIONS
-#------------------------------------
-def app_header():
-    """Displays a branded header"""
-    st.markdown(f"""
-    <div style="background-color:{PRIMARY_COLOR}; padding:1rem; border-radius:8px; display:flex; align-items:center; margin-bottom:1.5rem;">
-        <div style="font-size:1.5rem; font-weight:600; color:white; margin-right:1rem;">PRODUCT PROFITABILITY ANALYZER</div>
-        <div style="color:white; font-weight:500;">Comprehensive Medical Device Analysis Tool</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def format_currency(value: float) -> str:
-    """Format a value as currency with $ symbol"""
-    if value is None:
-        return "N/A"
-    return f"${value:,.2f}"
-
-def format_percentage(value: float) -> str:
-    """Format a value as percentage with % symbol"""
-    if value is None:
-        return "N/A"
-    return f"{value:.1f}%"
-
-def format_number(value: float) -> str:
-    """Format a value as number with commas"""
-    if value is None:
-        return "N/A"
-    return f"{value:,.2f}"
-
-def toggle_mode():
-    """Toggle between basic and advanced view modes"""
-    if st.session_state.view_mode == "basic":
-        st.session_state.view_mode = "advanced"
+# --- SENTRY INTEGRATION ---
+try:
+    import sentry_sdk
+    sentry_dsn = st.secrets.get("sentry_dsn", None)
+    if sentry_dsn:
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            traces_sample_rate=0.2,
+            release="product-profitability-analysis@1.0.0"
+        )
+        logger.info("Sentry integration initialized")
     else:
-        st.session_state.view_mode = "basic"
+        logger.warning("Sentry DSN not found in secrets")
+except ImportError:
+    logger.warning("Sentry SDK not installed")
+except Exception as e:
+    logger.exception("Error initializing Sentry")
 
-def display_mode_toggle():
-    """Display the mode toggle UI element"""
-    cols = st.columns([1, 1])
-    with cols[0]:
-        if st.button("Basic Mode", key="basic_mode_btn", use_container_width=True):
-            st.session_state.view_mode = "basic"
-            st.rerun()
-    with cols[1]:
-        if st.button("Advanced Mode", key="advanced_mode_btn", use_container_width=True):
-            st.session_state.view_mode = "advanced"
-            st.rerun()
-
-def navigate_to_page(page_name):
-    """Navigate to a specific page in the application"""
-    st.session_state.current_page = page_name
-    st.rerun()
-
-def reset_analysis():
-    """Reset the analysis and return to the input form"""
-    st.session_state.quality_analysis_results = None
-    st.session_state.analysis_submitted = False
-    st.session_state.chat_history = []
-    st.rerun()
-
-def export_as_pdf(results):
-    """Generate a PDF report of the analysis results"""
-    buffer = BytesIO()
-    
-    with PdfPages(buffer) as pdf:
-        # Create a figure for the report
-        fig, ax = plt.subplots(figsize=(8.5, 11))
-        ax.axis('off')
-        
-        # Add report title
-        ax.text(0.5, 0.98, "Product Profitability Analysis Report", fontsize=16, fontweight='bold', ha='center')
-        ax.text(0.5, 0.96, f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=10, ha='center')
-        
-        # Add product info
-        ax.text(0.1, 0.92, f"Product: {results['sku']}", fontsize=12, fontweight='bold')
-        ax.text(0.1, 0.90, f"Type: {results['product_type']}", fontsize=10)
-        
-        # Add key metrics
-        ax.text(0.1, 0.86, "Key Metrics", fontsize=12, fontweight='bold')
-        ax.text(0.1, 0.84, f"Return Rate (30d): {format_percentage(results['current_metrics']['return_rate_30d'])}", fontsize=10)
-        ax.text(0.1, 0.82, f"Monthly Return Cost: {format_currency(results['financial_impact']['monthly_return_cost'])}", fontsize=10)
-        ax.text(0.1, 0.80, f"Estimated Monthly Savings: {format_currency(results['financial_impact']['estimated_monthly_savings'])}", fontsize=10)
-        ax.text(0.1, 0.78, f"Payback Period: {results['financial_impact']['payback_months']:.1f} months", fontsize=10)
-        ax.text(0.1, 0.76, f"3-Year ROI: {format_percentage(results['financial_impact']['roi_3yr'])}", fontsize=10)
-        
-        # Add recommendation
-        ax.text(0.1, 0.72, "Recommendation:", fontsize=12, fontweight='bold')
-        ax.text(0.1, 0.70, results['recommendation'], fontsize=10)
-        
-        # Add issue description
-        ax.text(0.1, 0.66, "Issue Description:", fontsize=12, fontweight='bold')
-        
-        # Wrap the text to fit the page
-        import textwrap
-        wrapped_desc = textwrap.fill(results['issue_description'], width=80)
-        y_pos = 0.64
-        for line in wrapped_desc.split('\n'):
-            ax.text(0.1, y_pos, line, fontsize=9)
-            y_pos -= 0.02
-        
-        # Add ROI graph
-        if y_pos > 0.3:  # Only add graph if there's enough space
-            # Create ROI data
-            periods = ['Initial', 'Year 1', 'Year 2', 'Year 3']
-            initial_investment = -results['financial_impact']['fix_cost_upfront']
-            per_unit_cost_total = results['financial_impact']['fix_cost_per_unit'] * results['financial_impact']['projected_sales_36m'] / 3
-            annual_savings = results['financial_impact']['annual_savings']
-            
-            year1_net = annual_savings - per_unit_cost_total
-            year2_net = year1_net
-            year3_net = year1_net
-            
-            cumulative = [initial_investment, 
-                         initial_investment + year1_net, 
-                         initial_investment + year1_net + year2_net,
-                         initial_investment + year1_net + year2_net + year3_net]
-            
-            # Plot the ROI graph at the bottom of the page
-            roi_ax = fig.add_axes([0.1, 0.1, 0.8, 0.4])
-            roi_ax.bar(periods, [initial_investment, year1_net, year2_net, year3_net], color=['#E76F51', '#40916C', '#40916C', '#40916C'])
-            roi_ax.plot(periods, cumulative, 'o-', color='#0096C7', linewidth=2)
-            roi_ax.axhline(y=0, color='#ADB5BD', linestyle='-', linewidth=0.5)
-            roi_ax.set_title('ROI Analysis Over 3 Years', fontsize=12)
-            roi_ax.set_ylabel('Amount ($)', fontsize=10)
-            
-            # Add value labels
-            for i, v in enumerate([initial_investment, year1_net, year2_net, year3_net]):
-                roi_ax.text(i, v + (0.1 * v if v > 0 else -0.1 * abs(v)), 
-                         f"${abs(v):,.0f}", 
-                         ha='center', 
-                         fontsize=8,
-                         color='#212529')
-        
-        pdf.savefig(fig)
-        plt.close()
-    
-    # Reset buffer position to the beginning
-    buffer.seek(0)
-    return buffer
-
-def safe_divide(a: float, b: float, default: float = 0.0) -> float:
-    """Safely divide two numbers, returning a default if divisor is zero."""
+# --- UTILITY FUNCTIONS ---
+def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
+    """Safely divide two numbers, returning default if denominator is zero."""
     try:
-        if b == 0:
+        if denominator == 0:
             return default
-        return a / b
-    except:
+        return numerator / denominator
+    except Exception:
         return default
 
-#------------------------------------
-# AI ASSISTANT FUNCTIONS
-#------------------------------------
+def format_currency(value: float) -> str:
+    """Format a value as a currency string."""
+    if value >= 1000000:
+        return f"${value/1000000:.2f}M"
+    elif value >= 1000:
+        return f"${value/1000:.1f}K"
+    else:
+        return f"${value:.2f}"
+
+def format_percentage(value: float) -> str:
+    """Format a value as a percentage string."""
+    return f"{value:.2f}%"
+
+def generate_download_link(df: pd.DataFrame, filename: str, text: str) -> str:
+    """Generate a download link for a DataFrame as CSV."""
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}" class="export-button">{text}</a>'
+    return href
+
+def generate_color_scale(value: float, good_threshold: float, bad_threshold: float) -> str:
+    """Generate a color from green to red based on a value and thresholds."""
+    if value >= good_threshold:
+        return SUCCESS_COLOR
+    elif value <= bad_threshold:
+        return DANGER_COLOR
+    else:
+        # Linear interpolation between warning and success colors
+        ratio = (value - bad_threshold) / (good_threshold - bad_threshold)
+        return WARNING_COLOR
+
+def get_recommendation_badge(recommendation: str) -> str:
+    """Generate an HTML badge for a recommendation."""
+    if "Fix Immediately" in recommendation:
+        return f'<span class="badge badge-danger">{recommendation}</span>'
+    elif "High Priority" in recommendation:
+        return f'<span class="badge badge-warning">{recommendation}</span>'
+    else:
+        return f'<span class="badge badge-success">{recommendation}</span>'
+
+# --- AI ASSISTANT FUNCTIONS ---
 def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
-    """
-    Call OpenAI API with the provided messages
-    """
+    """Call the OpenAI API with the given messages."""
+    api_key = st.secrets.get("openai_api_key", None)
+    if not api_key:
+        return "AI assistant not available. API key not configured."
+    
     try:
-        # Try to get the API key from Streamlit secrets
-        api_key = st.secrets.get("openai_api_key", None)
-        
-        if not api_key:
-            return "AI assistant not available. API key not configured in secrets."
-        
-        import requests
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+        payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30)
         
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"]
         else:
+            logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
             return f"Error from API: {response.status_code} - {response.text}"
-    
     except Exception as e:
-        st.error(f"Error calling OpenAI API: {str(e)}")
-        return f"Error: {str(e)}"
+        logger.exception("Error calling OpenAI API")
+        return f"Error calling AI assistant: {str(e)}"
 
-#------------------------------------
-# QUALITY ANALYSIS FUNCTIONS
-#------------------------------------
+def get_system_prompt(results: Dict[str, Any]) -> str:
+    """Generate the system prompt for the AI assistant based on analysis results."""
+    if not results:
+        return """
+        You are a Quality Management expert for medical devices. 
+        Provide guidance on quality issues, cost analysis, and regulatory compliance.
+        """
+    
+    return f"""
+    You are a Quality Management expert for medical devices.
+    
+    Product details:
+    - SKU: {results['sku']}
+    - Product Type: {results['product_type']}
+    - Issue Description: {results['issue_description']}
+    - Return Rate (30d): {results['current_metrics']['return_rate_30d']:.2f}%
+    - Current Unit Cost: ${results['current_metrics']['unit_cost']:.2f}
+    - Sales Price: ${results['current_metrics']['sales_price']:.2f}
+    
+    Financial Impact:
+    - Annual Loss Due to Returns: ${results['financial_impact']['annual_loss']:.2f}
+    - ROI (3yr): {results['financial_impact']['roi_3yr']:.2f}%
+    - Payback Period: {results['financial_impact']['payback_period']:.2f} months
+    
+    Recommendation: {results['recommendation']}
+    
+    Your task is to provide expert advice on:
+    1. Next steps based on the analysis
+    2. Additional data that might be needed
+    3. Regulatory considerations for medical devices
+    4. Best practices for implementing the recommended solution
+    
+    Be concise but thorough in your responses. Prioritize patient safety and regulatory compliance.
+    """
+
+# --- CORE ANALYSIS FUNCTIONS ---
 def analyze_quality_issue(
     sku: str,
-    product_type: str,  # B2B, B2C, or Both
+    product_type: str,
     sales_30d: float,
     returns_30d: float,
     issue_description: str,
@@ -773,3575 +321,2286 @@ def analyze_quality_issue(
     fix_cost_upfront: float,
     fix_cost_per_unit: float,
     sales_price: float,
-    expected_reduction: float,  # Expected return rate reduction percentage
-    solution_confidence: float,  # Confidence in solution percentage
-    new_sales_price: Optional[float] = None,
-    asin: Optional[str] = None,
-    ncx_rate: Optional[float] = None,
-    sales_365d: Optional[float] = None,
-    returns_365d: Optional[float] = None,
-    star_rating: Optional[float] = None,
-    total_reviews: Optional[int] = None,
-    fba_fee: Optional[float] = None,
-    risk_level: str = "Medium",
-    regulatory_impact: str = "None"
+    expected_reduction: float = 50.0,
+    solution_confidence: float = 90.0,
+    monthly_growth_rate: float = 5.0,
+    additional_params: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
-    Enhanced quality issue analysis with additional fields for sales price, 
-    expected reduction, and solution confidence.
+    Analyze a quality issue and calculate financial impact, ROI, and recommendations.
+    
+    Parameters:
+    -----------
+    sku : str
+        Product SKU
+    product_type : str
+        Product type (B2B, B2C, etc.)
+    sales_30d : float
+        Sales volume in the last 30 days
+    returns_30d : float
+        Returns volume in the last 30 days
+    issue_description : str
+        Description of the quality issue
+    current_unit_cost : float
+        Current unit cost of the product
+    fix_cost_upfront : float
+        Upfront cost to implement the fix
+    fix_cost_per_unit : float
+        Additional cost per unit after implementing the fix
+    sales_price : float
+        Sales price of the product
+    expected_reduction : float, optional
+        Expected percentage reduction in returns after the fix (default: 50.0)
+    solution_confidence : float, optional
+        Confidence level in the solution (default: 90.0)
+    monthly_growth_rate : float, optional
+        Expected monthly sales growth rate percentage (default: 5.0)
+    additional_params : Dict[str, Any], optional
+        Additional parameters for the analysis
+    
+    Returns:
+    --------
+    Dict[str, Any]
+        Dictionary with analysis results
     """
+    logger.info(f"Starting analysis for SKU={sku}, sales_30d={sales_30d}")
+    
     try:
-        # Calculate basic metrics with error handling
-        return_rate_30d = (returns_30d / sales_30d) * 100 if sales_30d > 0 else 0
+        # Initialize additional parameters if not provided
+        if additional_params is None:
+            additional_params = {}
         
-        # Include 365-day data if available
-        return_rate_365d = None
-        if sales_365d is not None and returns_365d is not None and sales_365d > 0:
-            return_rate_365d = (returns_365d / sales_365d) * 100
-        
-        # Calculate current financial metrics
-        monthly_return_cost = returns_30d * current_unit_cost
-        monthly_revenue = sales_30d * sales_price
-        monthly_profit = monthly_revenue - (sales_30d * current_unit_cost)
-        profit_margin = (monthly_profit / monthly_revenue) * 100 if monthly_revenue > 0 else 0
-        
-        # Use the expected reduction provided by the user
-        reduction_factor = expected_reduction / 100.0
-        
-        # Adjust reduction based on confidence
-        adjusted_reduction = reduction_factor * (solution_confidence / 100.0)
-        
-        # Estimate reduced returns
-        reduced_returns_30d = returns_30d * (1 - adjusted_reduction)
-        returns_saved_30d = returns_30d - reduced_returns_30d
-        
-        # Calculate financial impact
-        estimated_monthly_savings = returns_saved_30d * current_unit_cost
-        
-        # Calculate new revenue if price changes
-        if new_sales_price is not None and new_sales_price > 0:
-            new_monthly_revenue = sales_30d * new_sales_price
-            revenue_change = new_monthly_revenue - monthly_revenue
-        else:
-            new_sales_price = sales_price
-            new_monthly_revenue = monthly_revenue
-            revenue_change = 0
-        
-        # Calculate new unit cost with fix
-        new_unit_cost = current_unit_cost + fix_cost_per_unit
-        
-        # Calculate new profit
-        new_monthly_profit = new_monthly_revenue - (sales_30d * new_unit_cost)
-        new_profit_margin = (new_monthly_profit / new_monthly_revenue) * 100 if new_monthly_revenue > 0 else 0
-        
-        # Annual projections
-        annual_return_cost = monthly_return_cost * 12
-        annual_savings = estimated_monthly_savings * 12
-        annual_revenue_change = revenue_change * 12
-        
-        # Simple payback period (months) with error handling
-        total_monthly_benefit = estimated_monthly_savings + revenue_change
-        if total_monthly_benefit > 0:
-            payback_months = fix_cost_upfront / total_monthly_benefit
-        else:
-            payback_months = float('inf')
-        
-        # Calculate 3-year ROI
-        projected_sales_36m = sales_30d * 36  # 36 months projection
-        total_investment = fix_cost_upfront + (fix_cost_per_unit * projected_sales_36m)
-        total_savings = (annual_savings + annual_revenue_change) * 3
-        
-        if total_investment > 0:
-            roi_3yr = ((total_savings - total_investment) / total_investment) * 100
-        else:
-            roi_3yr = float('inf') if total_savings > 0 else 0
-        
-        # Determine recommendation based on metrics, risk level, and regulatory impact
-        if regulatory_impact == "Significant":
-            recommendation = "Highly Recommended - Regulatory compliance required"
-            recommendation_class = "recommendation-high"
-        elif risk_level == "High" and payback_months < 12:
-            recommendation = "Highly Recommended - High risk issue with positive ROI"
-            recommendation_class = "recommendation-high"
-        elif payback_months < 3:
-            recommendation = "Highly Recommended - Quick ROI expected"
-            recommendation_class = "recommendation-high"
-        elif payback_months < 6:
-            recommendation = "Recommended - Good medium-term ROI"
-            recommendation_class = "recommendation-medium"
-        elif payback_months < 12:
-            recommendation = "Consider - Long-term benefits may outweigh costs"
-            recommendation_class = "recommendation-medium"
-        elif risk_level == "High":
-            recommendation = "Consider despite ROI - High risk issue"
-            recommendation_class = "recommendation-medium"
-        else:
-            recommendation = "Not Recommended - Poor financial return"
-            recommendation_class = "recommendation-low"
-        
-        # Adjust recommendation based on B2B/B2C and review metrics
-        brand_impact = None
-        if product_type in ["B2C", "Both"] and star_rating is not None:
-            if star_rating < 3.5:
-                brand_impact = "Significant - Low star rating indicates potential brand damage"
-                # Adjust recommendation if star rating is concerning
-                if recommendation_class == "recommendation-low" and risk_level != "Low":
-                    recommendation = "Recommended despite ROI - Brand protection needed"
-                    recommendation_class = "recommendation-medium"
-        
-        # For B2B products, return rate is more important
-        if product_type in ["B2B", "Both"] and return_rate_30d > 10:
-            if recommendation_class == "recommendation-low":
-                recommendation = "Consider despite ROI - High return rate for B2B product"
-                recommendation_class = "recommendation-medium"
-                if not brand_impact:
-                    brand_impact = "Moderate - High return rate for B2B product may affect customer relationships"
-        
-        # Calculate customer impact metrics
-        customer_impact_metrics = {}
-        if total_reviews is not None and star_rating is not None:
-            # Calculate potential rating improvement
-            potential_rating_improvement = min(5.0, star_rating + (star_rating < 4.0) * 0.5)
-            customer_impact_metrics["potential_rating"] = potential_rating_improvement
-            
-            # Calculate potential review impact
-            negative_reviews_ratio = max(0, min(1, (5 - star_rating) / 4))
-            potential_review_improvement = int(total_reviews * negative_reviews_ratio * adjusted_reduction * 0.5)
-            customer_impact_metrics["potential_review_improvement"] = potential_review_improvement
-        
-        # Add medical impact data
-        medical_device_impact = {
-            "risk_level": risk_level,
-            "regulatory_impact": regulatory_impact,
-            "patient_safety_impact": "High" if risk_level == "High" else ("Medium" if risk_level == "Medium" else "Low"),
-        }
-        
-        # Build the complete results dictionary
+        # Initialize results dictionary
         results = {
             "sku": sku,
-            "asin": asin,
             "product_type": product_type,
-            "current_metrics": {
-                "return_rate_30d": return_rate_30d,
-                "return_rate_365d": return_rate_365d,
-                "ncx_rate": ncx_rate,
-                "star_rating": star_rating,
-                "total_reviews": total_reviews,
+            "issue_description": issue_description,
+            "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "current_metrics": {},
+            "projected_metrics": {},
+            "financial_impact": {},
+            "risk_assessment": {},
+            "recommendation": ""
+        }
+        
+        # Calculate current metrics
+        return_rate_30d = safe_divide(returns_30d * 100, sales_30d)
+        unit_margin = sales_price - current_unit_cost
+        margin_percentage = safe_divide(unit_margin * 100, sales_price)
+        monthly_return_cost = returns_30d * current_unit_cost
+        
+        results["current_metrics"] = {
+            "sales_30d": sales_30d,
+            "returns_30d": returns_30d,
+            "return_rate_30d": return_rate_30d,
+            "unit_cost": current_unit_cost,
+            "sales_price": sales_price,
+            "unit_margin": unit_margin,
+            "margin_percentage": margin_percentage,
+            "monthly_return_cost": monthly_return_cost
+        }
+        
+        # Project future metrics
+        annual_sales = sales_30d * 12 * (1 + (monthly_growth_rate / 100)) ** 6  # Average growth over year
+        annual_returns_current = (return_rate_30d / 100) * annual_sales
+        annual_returns_after_fix = annual_returns_current * (1 - (expected_reduction / 100))
+        annual_returns_reduction = annual_returns_current - annual_returns_after_fix
+        
+        new_unit_cost = current_unit_cost + fix_cost_per_unit
+        new_unit_margin = sales_price - new_unit_cost
+        new_margin_percentage = safe_divide(new_unit_margin * 100, sales_price)
+        
+        results["projected_metrics"] = {
+            "annual_sales": annual_sales,
+            "annual_returns_current": annual_returns_current,
+            "annual_returns_after_fix": annual_returns_after_fix,
+            "annual_returns_reduction": annual_returns_reduction,
+            "new_unit_cost": new_unit_cost,
+            "new_unit_margin": new_unit_margin,
+            "new_margin_percentage": new_margin_percentage,
+            "expected_reduction": expected_reduction,
+            "solution_confidence": solution_confidence
+        }
+        
+        # Calculate financial impact
+        annual_loss_current = annual_returns_current * current_unit_cost
+        annual_loss_after_fix = annual_returns_after_fix * new_unit_cost
+        annual_savings = annual_loss_current - annual_loss_after_fix
+        
+        # Apply solution confidence factor
+        risk_adjusted_savings = annual_savings * (solution_confidence / 100)
+        total_investment = fix_cost_upfront + (fix_cost_per_unit * annual_sales)
+        
+        # Calculate ROI and payback period
+        roi_1yr = safe_divide(risk_adjusted_savings * 100, total_investment)
+        roi_3yr = safe_divide(risk_adjusted_savings * 3 * 100, total_investment)
+        payback_period = safe_divide(total_investment * 12, risk_adjusted_savings)  # in months
+        
+        results["financial_impact"] = {
+            "annual_loss": annual_loss_current,
+            "annual_loss_after_fix": annual_loss_after_fix,
+            "annual_savings": annual_savings,
+            "risk_adjusted_savings": risk_adjusted_savings,
+            "total_investment": total_investment,
+            "roi_1yr": roi_1yr,
+            "roi_3yr": roi_3yr,
+            "payback_period": payback_period
+        }
+        
+        # Risk assessment
+        brand_impact = additional_params.get("brand_impact", "Medium")
+        medical_impact = additional_params.get("medical_impact", "Low")
+        regulatory_risk = additional_params.get("regulatory_risk", "Low")
+        
+        results["risk_assessment"] = {
+            "brand_impact": brand_impact,
+            "medical_impact": medical_impact,
+            "regulatory_risk": regulatory_risk
+        }
+        
+        # Generate recommendation
+        if roi_3yr > 200 or return_rate_30d > 10 or medical_impact == "High":
+            recommendation = "Fix Immediately"
+        elif roi_3yr > 100 or return_rate_30d > 5 or medical_impact == "Medium":
+            recommendation = "High Priority Fix"
+        elif roi_3yr > 50:
+            recommendation = "Recommended Fix"
+        else:
+            recommendation = "Monitor Issue"
+        
+        results["recommendation"] = recommendation
+        
+        # Log results
+        logger.debug(f"Computed ROI: {roi_3yr:.2f}%")
+        logger.info(f"Analysis completed for SKU={sku} with recommendation: {recommendation}")
+        
+        return results
+    
+    except Exception as e:
+        logger.exception(f"Error in analyze_quality_issue for SKU={sku}")
+        raise
+
+def calculate_landed_cost(
+    sales_price: float,
+    unit_cost: float,
+    tariff_percentage: float,
+    shipping_cost: float = 0.0,
+    storage_cost: float = 0.0,
+    customs_fee: float = 0.0,
+    broker_fee: float = 0.0,
+    other_costs: float = 0.0,
+    units_per_shipment: int = 1,
+    currency_exchange_rate: float = 1.0
+) -> Dict[str, float]:
+    """
+    Calculate the landed cost and relevant metrics for a product.
+    
+    Parameters:
+    -----------
+    sales_price : float
+        Selling price of the product
+    unit_cost : float
+        Base cost of the product
+    tariff_percentage : float
+        Tariff percentage to apply
+    shipping_cost : float, optional
+        Shipping cost per shipment (default: 0.0)
+    storage_cost : float, optional
+        Storage cost per unit (default: 0.0)
+    customs_fee : float, optional
+        Customs fees per shipment (default: 0.0)
+    broker_fee : float, optional
+        Broker fees per shipment (default: 0.0)
+    other_costs : float, optional
+        Other miscellaneous costs per shipment (default: 0.0)
+    units_per_shipment : int, optional
+        Number of units per shipment (default: 1)
+    currency_exchange_rate : float, optional
+        Exchange rate to apply to costs (default: 1.0)
+    
+    Returns:
+    --------
+    Dict[str, float]
+        Dictionary with landed cost calculations
+    """
+    logger.info(f"Calculating landed cost for unit_cost={unit_cost}, tariff_percentage={tariff_percentage}")
+    
+    try:
+        # Apply exchange rate to costs
+        adjusted_unit_cost = unit_cost * currency_exchange_rate
+        
+        # Calculate tariff amount
+        tariff_amount = adjusted_unit_cost * (tariff_percentage / 100)
+        
+        # Calculate per-unit shipping and fees
+        per_unit_shipping = safe_divide(shipping_cost, units_per_shipment)
+        per_unit_customs = safe_divide(customs_fee, units_per_shipment)
+        per_unit_broker = safe_divide(broker_fee, units_per_shipment)
+        per_unit_other = safe_divide(other_costs, units_per_shipment)
+        
+        # Calculate total landed cost
+        landed_cost = (
+            adjusted_unit_cost + 
+            tariff_amount + 
+            per_unit_shipping + 
+            storage_cost + 
+            per_unit_customs + 
+            per_unit_broker + 
+            per_unit_other
+        )
+        
+        # Calculate margins
+        gross_margin = sales_price - landed_cost
+        margin_percentage = safe_divide(gross_margin * 100, sales_price)
+        
+        # Calculate percentage breakdown
+        total_extra_costs = landed_cost - adjusted_unit_cost
+        base_cost_pct = safe_divide(adjusted_unit_cost * 100, landed_cost)
+        tariff_pct = safe_divide(tariff_amount * 100, landed_cost)
+        shipping_pct = safe_divide(per_unit_shipping * 100, landed_cost)
+        storage_pct = safe_divide(storage_cost * 100, landed_cost)
+        customs_pct = safe_divide(per_unit_customs * 100, landed_cost)
+        broker_pct = safe_divide(per_unit_broker * 100, landed_cost)
+        other_pct = safe_divide(per_unit_other * 100, landed_cost)
+        
+        return {
+            "sales_price": sales_price,
+            "base_unit_cost": adjusted_unit_cost,
+            "tariff_amount": tariff_amount,
+            "per_unit_shipping": per_unit_shipping,
+            "storage_cost": storage_cost,
+            "per_unit_customs": per_unit_customs,
+            "per_unit_broker": per_unit_broker,
+            "per_unit_other": per_unit_other,
+            "landed_cost": landed_cost,
+            "gross_margin": gross_margin,
+            "margin_percentage": margin_percentage,
+            "base_cost_pct": base_cost_pct,
+            "tariff_pct": tariff_pct,
+            "shipping_pct": shipping_pct,
+            "storage_pct": storage_pct,
+            "customs_pct": customs_pct,
+            "broker_pct": broker_pct,
+            "other_pct": other_pct
+        }
+    
+    except Exception as e:
+        logger.exception("Error in calculate_landed_cost")
+        raise
+
+def generate_tariff_scenarios(
+    base_result: Dict[str, float],
+    tariff_ranges: List[float]
+) -> Dict[str, Dict[str, float]]:
+    """
+    Generate multiple tariff scenarios based on different tariff percentages.
+    
+    Parameters:
+    -----------
+    base_result : Dict[str, float]
+        Base landed cost calculation result
+    tariff_ranges : List[float]
+        List of tariff percentages to simulate
+    
+    Returns:
+    --------
+    Dict[str, Dict[str, float]]
+        Dictionary with scenarios for each tariff percentage
+    """
+    logger.info(f"Generating tariff scenarios for {len(tariff_ranges)} different rates")
+    
+    try:
+        scenarios = {}
+        
+        sales_price = base_result["sales_price"]
+        unit_cost = base_result["base_unit_cost"]
+        shipping_cost = base_result["per_unit_shipping"] * (units_per_shipment if "units_per_shipment" in base_result else 1)
+        storage_cost = base_result["storage_cost"]
+        customs_fee = base_result["per_unit_customs"] * (units_per_shipment if "units_per_shipment" in base_result else 1)
+        broker_fee = base_result["per_unit_broker"] * (units_per_shipment if "units_per_shipment" in base_result else 1)
+        other_costs = base_result["per_unit_other"] * (units_per_shipment if "units_per_shipment" in base_result else 1)
+        units_per_shipment = 1  # Default if not in base_result
+        
+        for tariff in tariff_ranges:
+            scenario = calculate_landed_cost(
+                sales_price=sales_price,
+                unit_cost=unit_cost,
+                tariff_percentage=tariff,
+                shipping_cost=shipping_cost,
+                storage_cost=storage_cost,
+                customs_fee=customs_fee,
+                broker_fee=broker_fee,
+                other_costs=other_costs,
+                units_per_shipment=units_per_shipment
+            )
+            scenarios[f"{tariff:.1f}%"] = scenario
+        
+        return scenarios
+    
+    except Exception as e:
+        logger.exception("Error in generate_tariff_scenarios")
+        raise
+
+def calculate_ad_roi(
+    campaign_cost: float,
+    average_order_value: float,
+    conversion_rate: float,
+    impressions: float,
+    profit_margin_percentage: float,
+    existing_conversion_rate: float = 0.0,
+    existing_impressions: float = 0.0
+) -> Dict[str, float]:
+    """
+    Calculate ROI and metrics for advertising campaigns.
+    
+    Parameters:
+    -----------
+    campaign_cost : float
+        Total cost of the campaign
+    average_order_value : float
+        Average value of an order
+    conversion_rate : float
+        Conversion rate percentage from impression to purchase
+    impressions : float
+        Number of campaign impressions
+    profit_margin_percentage : float
+        Profit margin percentage on sales
+    existing_conversion_rate : float, optional
+        Existing baseline conversion rate percentage (default: 0.0)
+    existing_impressions : float, optional
+        Existing baseline impressions (default: 0.0)
+    
+    Returns:
+    --------
+    Dict[str, float]
+        Dictionary with calculated ROI metrics
+    """
+    logger.info(f"Calculating ad ROI for campaign_cost={campaign_cost}, impressions={impressions}")
+    
+    try:
+        # Convert percentages to decimals
+        conv_rate_decimal = conversion_rate / 100
+        profit_margin_decimal = profit_margin_percentage / 100
+        existing_conv_rate_decimal = existing_conversion_rate / 100
+        
+        # Calculate conversions (purchases)
+        campaign_conversions = impressions * conv_rate_decimal
+        existing_conversions = existing_impressions * existing_conv_rate_decimal
+        incremental_conversions = campaign_conversions - existing_conversions
+        
+        # Calculate revenue and profit
+        campaign_revenue = campaign_conversions * average_order_value
+        campaign_profit = campaign_revenue * profit_margin_decimal
+        
+        # Calculate ROI and other metrics
+        roi_percentage = safe_divide((campaign_profit - campaign_cost) * 100, campaign_cost)
+        cpa = safe_divide(campaign_cost, campaign_conversions)  # Cost per acquisition
+        cpc = safe_divide(campaign_cost, impressions * 0.1)  # Estimated cost per click (10% CTR)
+        cpm = safe_divide(campaign_cost * 1000, impressions)  # Cost per thousand impressions
+        
+        return {
+            "campaign_cost": campaign_cost,
+            "impressions": impressions,
+            "conversions": campaign_conversions,
+            "conversion_rate": conversion_rate,
+            "average_order_value": average_order_value,
+            "campaign_revenue": campaign_revenue,
+            "campaign_profit": campaign_profit,
+            "roi_percentage": roi_percentage,
+            "cpa": cpa,
+            "cpc": cpc,
+            "cpm": cpm,
+            "profit_margin_percentage": profit_margin_percentage
+        }
+    
+    except Exception as e:
+        logger.exception("Error in calculate_ad_roi")
+        raise
+
+def run_monte_carlo_simulation(
+    base_unit_cost: float,
+    sales_price: float,
+    monthly_sales: float,
+    monthly_returns: float,
+    fix_cost_upfront: float,
+    fix_cost_per_unit: float,
+    expected_reduction: float,
+    solution_confidence: float,
+    num_simulations: int = 1000,
+    time_horizon_months: int = 36
+) -> Dict[str, Any]:
+    """
+    Run a Monte Carlo simulation for quality issue fixes.
+    
+    Parameters:
+    -----------
+    base_unit_cost : float
+        Current unit cost of the product
+    sales_price : float
+        Sales price of the product
+    monthly_sales : float
+        Current monthly sales volume
+    monthly_returns : float
+        Current monthly returns volume
+    fix_cost_upfront : float
+        Upfront cost to implement the fix
+    fix_cost_per_unit : float
+        Additional cost per unit after implementing the fix
+    expected_reduction : float
+        Expected percentage reduction in returns after the fix
+    solution_confidence : float
+        Confidence level in the solution
+    num_simulations : int, optional
+        Number of Monte Carlo simulations to run (default: 1000)
+    time_horizon_months : int, optional
+        Time horizon in months for the simulation (default: 36)
+    
+    Returns:
+    --------
+    Dict[str, Any]
+        Dictionary with simulation results
+    """
+    logger.info(f"Running Monte Carlo simulation with {num_simulations} iterations")
+    
+    try:
+        # Initialize results and random generator
+        np.random.seed(int(time.time()))
+        
+        # Initialize arrays to store simulation results
+        roi_results = np.zeros(num_simulations)
+        payback_results = np.zeros(num_simulations)
+        npv_results = np.zeros(num_simulations)
+        
+        # Define variation ranges
+        sales_variation = 0.15  # ±15% monthly sales fluctuation
+        return_rate_variation = 0.2  # ±20% return rate fluctuation
+        fix_effectiveness_variation = 0.3  # ±30% fix effectiveness variation
+        discount_rate = 0.1 / 12  # Monthly discount rate (10% annual)
+        
+        # Calculate base return rate
+        base_return_rate = safe_divide(monthly_returns, monthly_sales)
+        
+        # Run simulations
+        for i in range(num_simulations):
+            # Randomize parameters for this simulation
+            sim_monthly_sales = monthly_sales * np.random.uniform(1 - sales_variation, 1 + sales_variation)
+            sim_return_rate = base_return_rate * np.random.uniform(1 - return_rate_variation, 1 + return_rate_variation)
+            sim_fix_effectiveness = expected_reduction / 100 * np.random.uniform(
+                1 - fix_effectiveness_variation, 
+                1 + fix_effectiveness_variation
+            )
+            
+            # Cap effectiveness at 95%
+            sim_fix_effectiveness = min(sim_fix_effectiveness, 0.95)
+            
+            # Calculate monthly cash flows
+            monthly_cashflows = np.zeros(time_horizon_months)
+            
+            # Initial investment (negative cash flow)
+            monthly_cashflows[0] = -fix_cost_upfront
+            
+            for month in range(time_horizon_months):
+                # Sales grow slightly each month (random between 0-2%)
+                month_growth = 1 + np.random.uniform(0, 0.02)
+                if month > 0:
+                    sim_monthly_sales *= month_growth
+                
+                # Calculate returns before and after fix
+                monthly_returns_before = sim_monthly_sales * sim_return_rate
+                monthly_returns_after = monthly_returns_before * (1 - sim_fix_effectiveness)
+                returns_reduction = monthly_returns_before - monthly_returns_after
+                
+                # Calculate savings from reduced returns
+                savings = returns_reduction * base_unit_cost
+                
+                # Calculate additional costs from fix
+                additional_costs = sim_monthly_sales * fix_cost_per_unit
+                
+                # Net monthly benefit
+                net_benefit = savings - additional_costs
+                
+                # Add to cash flow (offset by 1 for initial investment)
+                if month > 0:
+                    monthly_cashflows[month] = net_benefit
+            
+            # Calculate NPV
+            npv = -fix_cost_upfront  # Start with initial investment
+            for month in range(1, time_horizon_months):
+                npv += monthly_cashflows[month] / ((1 + discount_rate) ** month)
+            
+            # Calculate ROI (using NPV)
+            total_investment = fix_cost_upfront + (fix_cost_per_unit * sim_monthly_sales * time_horizon_months)
+            roi = safe_divide(npv * 100, total_investment)
+            
+            # Calculate payback period
+            cumulative_cashflow = np.cumsum(monthly_cashflows)
+            payback_month = np.argmax(cumulative_cashflow >= 0)
+            if payback_month == 0 and cumulative_cashflow[-1] < 0:
+                payback_month = time_horizon_months  # Never pays back
+            
+            # Store results
+            roi_results[i] = roi
+            payback_results[i] = payback_month
+            npv_results[i] = npv
+        
+        # Calculate statistics
+        roi_mean = np.mean(roi_results)
+        roi_median = np.median(roi_results)
+        roi_std = np.std(roi_results)
+        roi_percentiles = np.percentile(roi_results, [5, 25, 75, 95])
+        
+        payback_mean = np.mean(payback_results)
+        payback_median = np.median(payback_results)
+        payback_std = np.std(payback_results)
+        payback_percentiles = np.percentile(payback_results, [5, 25, 75, 95])
+        
+        npv_mean = np.mean(npv_results)
+        npv_median = np.median(npv_results)
+        npv_std = np.std(npv_results)
+        npv_percentiles = np.percentile(npv_results, [5, 25, 75, 95])
+        
+        # Calculate success probabilities
+        prob_positive_roi = np.mean(roi_results > 0) * 100
+        prob_roi_above_50 = np.mean(roi_results > 50) * 100
+        prob_roi_above_100 = np.mean(roi_results > 100) * 100
+        prob_payback_under_12 = np.mean(payback_results < 12) * 100
+        
+        # Prepare histogram data
+        roi_histogram = np.histogram(roi_results, bins=20)
+        payback_histogram = np.histogram(payback_results, bins=20)
+        npv_histogram = np.histogram(npv_results, bins=20)
+        
+        results = {
+            "simulation_parameters": {
+                "base_unit_cost": base_unit_cost,
                 "sales_price": sales_price,
-                "monthly_revenue": monthly_revenue,
-                "profit_margin": profit_margin
-            },
-            "solution_metrics": {
-                "expected_reduction": expected_reduction,
-                "solution_confidence": solution_confidence,
-                "adjusted_reduction": adjusted_reduction * 100,  # Convert to percentage
-                "new_sales_price": new_sales_price
-            },
-            "financial_impact": {
-                "monthly_return_cost": monthly_return_cost,
-                "annual_return_cost": annual_return_cost,
-                "returns_saved_30d": returns_saved_30d,
-                "reduced_returns_30d": reduced_returns_30d,
-                "estimated_monthly_savings": estimated_monthly_savings,
-                "revenue_change": revenue_change,
-                "total_monthly_benefit": total_monthly_benefit,
-                "annual_savings": annual_savings,
-                "annual_revenue_change": annual_revenue_change,
-                "payback_months": payback_months,
-                "roi_3yr": roi_3yr,
+                "monthly_sales": monthly_sales,
+                "monthly_returns": monthly_returns,
                 "fix_cost_upfront": fix_cost_upfront,
                 "fix_cost_per_unit": fix_cost_per_unit,
-                "current_unit_cost": current_unit_cost,
-                "new_unit_cost": new_unit_cost,
-                "fba_fee": fba_fee,
-                "projected_sales_36m": projected_sales_36m,
-                "total_investment": total_investment,
-                "total_savings": total_savings,
-                "new_profit_margin": new_profit_margin,
-                "profit_margin_change": new_profit_margin - profit_margin
+                "expected_reduction": expected_reduction,
+                "solution_confidence": solution_confidence,
+                "num_simulations": num_simulations,
+                "time_horizon_months": time_horizon_months
             },
-            "recommendation": recommendation,
-            "recommendation_class": recommendation_class,
-            "brand_impact": brand_impact,
-            "issue_description": issue_description,
-            "customer_impact_metrics": customer_impact_metrics,
-            "medical_device_impact": medical_device_impact
+            "roi_statistics": {
+                "mean": roi_mean,
+                "median": roi_median,
+                "std": roi_std,
+                "percentile_5": roi_percentiles[0],
+                "percentile_25": roi_percentiles[1],
+                "percentile_75": roi_percentiles[2],
+                "percentile_95": roi_percentiles[3]
+            },
+            "payback_statistics": {
+                "mean": payback_mean,
+                "median": payback_median,
+                "std": payback_std,
+                "percentile_5": payback_percentiles[0],
+                "percentile_25": payback_percentiles[1],
+                "percentile_75": payback_percentiles[2],
+                "percentile_95": payback_percentiles[3]
+            },
+            "npv_statistics": {
+                "mean": npv_mean,
+                "median": npv_median,
+                "std": npv_std,
+                "percentile_5": npv_percentiles[0],
+                "percentile_25": npv_percentiles[1],
+                "percentile_75": npv_percentiles[2],
+                "percentile_95": npv_percentiles[3]
+            },
+            "probabilities": {
+                "positive_roi": prob_positive_roi,
+                "roi_above_50": prob_roi_above_50,
+                "roi_above_100": prob_roi_above_100,
+                "payback_under_12": prob_payback_under_12
+            },
+            "histogram_data": {
+                "roi_histogram": {
+                    "counts": roi_histogram[0].tolist(),
+                    "bins": roi_histogram[1].tolist()
+                },
+                "payback_histogram": {
+                    "counts": payback_histogram[0].tolist(),
+                    "bins": payback_histogram[1].tolist()
+                },
+                "npv_histogram": {
+                    "counts": npv_histogram[0].tolist(),
+                    "bins": npv_histogram[1].tolist()
+                }
+            },
+            "raw_data": {
+                "roi_results": roi_results.tolist(),
+                "payback_results": payback_results.tolist(),
+                "npv_results": npv_results.tolist()
+            }
         }
         
         return results
     
     except Exception as e:
-        st.error(f"Error in quality analysis: {str(e)}")
-        # Return minimal results with error
-        return {
-            "sku": sku,
-            "error": str(e),
-            "recommendation": "Analysis Error - Please check inputs",
-            "recommendation_class": "recommendation-low"
+        logger.exception("Error in run_monte_carlo_simulation")
+        raise
+
+# --- EXPORT FUNCTIONS ---
+def export_as_csv(results: Dict[str, Any]) -> str:
+    """Export analysis results as a CSV download link."""
+    try:
+        if not results:
+            return ""
+        
+        # Create a DataFrame with key metrics
+        data = {
+            "Metric": [
+                "SKU",
+                "Product Type",
+                "Return Rate (30d)",
+                "Monthly Sales",
+                "Monthly Returns",
+                "Unit Cost",
+                "Sales Price",
+                "Margin (%)",
+                "Monthly Return Cost",
+                "Annual Return Cost",
+                "Fix Cost (Upfront)",
+                "Fix Cost (Per Unit)",
+                "Expected Reduction (%)",
+                "Solution Confidence (%)",
+                "Annual Savings",
+                "ROI (1 Year)",
+                "ROI (3 Year)",
+                "Payback Period (Months)",
+                "Recommendation"
+            ],
+            "Value": [
+                results["sku"],
+                results["product_type"],
+                f"{results['current_metrics']['return_rate_30d']:.2f}%",
+                results["current_metrics"]["sales_30d"],
+                results["current_metrics"]["returns_30d"],
+                f"${results['current_metrics']['unit_cost']:.2f}",
+                f"${results['current_metrics']['sales_price']:.2f}",
+                f"{results['current_metrics']['margin_percentage']:.2f}%",
+                f"${results['current_metrics']['monthly_return_cost']:.2f}",
+                f"${results['financial_impact']['annual_loss']:.2f}",
+                f"${results.get('fix_cost_upfront', 0):.2f}",
+                f"${results.get('fix_cost_per_unit', 0):.2f}",
+                f"{results['projected_metrics']['expected_reduction']:.2f}%",
+                f"{results['projected_metrics']['solution_confidence']:.2f}%",
+                f"${results['financial_impact']['annual_savings']:.2f}",
+                f"{results['financial_impact']['roi_1yr']:.2f}%",
+                f"{results['financial_impact']['roi_3yr']:.2f}%",
+                f"{results['financial_impact']['payback_period']:.2f}",
+                results["recommendation"]
+            ]
         }
+        
+        df = pd.DataFrame(data)
+        
+        # Generate timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"quality_analysis_{results['sku']}_{timestamp}.csv"
+        
+        # Generate download link
+        download_link = generate_download_link(df, filename, "📊 Download CSV Report")
+        
+        return download_link
+    
+    except Exception as e:
+        logger.exception("Error in export_as_csv")
+        return ""
+
+def export_as_pdf(results: Dict[str, Any]) -> str:
+    """Export analysis results as a PDF download link."""
+    try:
+        if not results:
+            return ""
+        
+        # Create a BytesIO object to store the PDF
+        pdf_buffer = BytesIO()
+        
+        # Create PDF with matplotlib
+        with PdfPages(pdf_buffer) as pdf:
+            # Create figures for the report
+            
+            # Figure 1: Summary page
+            fig1, ax1 = plt.subplots(figsize=(8.5, 11))
+            ax1.axis('off')
+            
+            # Add title and metadata
+            plt.suptitle("Quality Issue Analysis Report", fontsize=16, y=0.98)
+            plt.figtext(0.1, 0.95, f"SKU: {results['sku']} | Product Type: {results['product_type']}", fontsize=12)
+            plt.figtext(0.1, 0.92, f"Analysis Date: {results['analysis_date']}", fontsize=10)
+            plt.figtext(0.1, 0.89, f"Issue: {results['issue_description']}", fontsize=10)
+            
+            # Add recommendation
+            recommendation = results["recommendation"]
+            rec_color = "green" if "Monitor" in recommendation else "red" if "Immediately" in recommendation else "orange"
+            plt.figtext(0.1, 0.85, "Recommendation:", fontsize=12, fontweight='bold')
+            plt.figtext(0.3, 0.85, recommendation, fontsize=12, color=rec_color, fontweight='bold')
+            
+            # Current metrics section
+            plt.figtext(0.1, 0.80, "Current Metrics", fontsize=12, fontweight='bold')
+            plt.figtext(0.1, 0.77, f"Monthly Sales: {results['current_metrics']['sales_30d']}")
+            plt.figtext(0.1, 0.75, f"Monthly Returns: {results['current_metrics']['returns_30d']}")
+            plt.figtext(0.1, 0.73, f"Return Rate: {results['current_metrics']['return_rate_30d']:.2f}%")
+            plt.figtext(0.1, 0.71, f"Unit Cost: ${results['current_metrics']['unit_cost']:.2f}")
+            plt.figtext(0.1, 0.69, f"Sales Price: ${results['current_metrics']['sales_price']:.2f}")
+            plt.figtext(0.1, 0.67, f"Margin: ${results['current_metrics']['unit_margin']:.2f} ({results['current_metrics']['margin_percentage']:.2f}%)")
+            
+            # Financial impact section
+            plt.figtext(0.5, 0.77, f"Annual Loss: ${results['financial_impact']['annual_loss']:.2f}")
+            plt.figtext(0.5, 0.75, f"Annual Savings: ${results['financial_impact']['annual_savings']:.2f}")
+            plt.figtext(0.5, 0.73, f"Total Investment: ${results['financial_impact']['total_investment']:.2f}")
+            plt.figtext(0.5, 0.71, f"ROI (1yr): {results['financial_impact']['roi_1yr']:.2f}%")
+            plt.figtext(0.5, 0.69, f"ROI (3yr): {results['financial_impact']['roi_3yr']:.2f}%")
+            plt.figtext(0.5, 0.67, f"Payback: {results['financial_impact']['payback_period']:.2f} months")
+            
+            # Projected metrics section
+            plt.figtext(0.1, 0.62, "Projected Improvements", fontsize=12, fontweight='bold')
+            plt.figtext(0.1, 0.59, f"Expected Reduction: {results['projected_metrics']['expected_reduction']:.2f}%")
+            plt.figtext(0.1, 0.57, f"Solution Confidence: {results['projected_metrics']['solution_confidence']:.2f}%")
+            plt.figtext(0.1, 0.55, f"New Unit Cost: ${results['projected_metrics']['new_unit_cost']:.2f}")
+            plt.figtext(0.1, 0.53, f"New Margin: ${results['projected_metrics']['new_unit_margin']:.2f} ({results['projected_metrics']['new_margin_percentage']:.2f}%)")
+            
+            # Risk assessment section
+            plt.figtext(0.5, 0.59, f"Brand Impact: {results['risk_assessment']['brand_impact']}")
+            plt.figtext(0.5, 0.57, f"Medical Impact: {results['risk_assessment']['medical_impact']}")
+            plt.figtext(0.5, 0.55, f"Regulatory Risk: {results['risk_assessment']['regulatory_risk']}")
+            
+            # Add page to PDF
+            pdf.savefig(fig1)
+            plt.close(fig1)
+            
+            # Figure 2: ROI Chart
+            fig2, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.5, 11))
+            
+            # ROI bar chart
+            roi_data = [results['financial_impact']['roi_1yr'], results['financial_impact']['roi_3yr']]
+            ax1.bar(['1 Year', '3 Year'], roi_data, color=[SECONDARY_COLOR, PRIMARY_COLOR])
+            ax1.set_title('Return on Investment')
+            ax1.set_ylabel('ROI (%)')
+            ax1.grid(axis='y', linestyle='--', alpha=0.7)
+            
+            # Highlight levels
+            ax1.axhline(y=50, color='green', linestyle='--', alpha=0.5)
+            ax1.axhline(y=100, color='blue', linestyle='--', alpha=0.5)
+            
+            # Payback chart
+            months = np.arange(1, 25)
+            upfront = results.get('fix_cost_upfront', 0)
+            monthly_savings = results['financial_impact']['annual_savings'] / 12
+            cumulative_cashflow = [-upfront + (i * monthly_savings) for i in months]
+            
+            ax2.plot(months, cumulative_cashflow, marker='o', color=PRIMARY_COLOR)
+            ax2.set_title('Payback Period')
+            ax2.set_xlabel('Months')
+            ax2.set_ylabel('Cumulative Cashflow ($)')
+            ax2.grid(True, linestyle='--', alpha=0.7)
+            ax2.axhline(y=0, color='red', linestyle='-', alpha=0.3)
+            
+            plt.tight_layout()
+            pdf.savefig(fig2)
+            plt.close(fig2)
+        
+        # Reset buffer position
+        pdf_buffer.seek(0)
+        
+        # Generate timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"quality_analysis_{results['sku']}_{timestamp}.pdf"
+        
+        # Create download link
+        b64 = base64.b64encode(pdf_buffer.read()).decode()
+        href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}" class="export-button">📄 Download PDF Report</a>'
+        
+        return href
+    
+    except Exception as e:
+        logger.exception("Error in export_as_pdf")
+        return ""
+
+# --- UI COMPONENTS ---
+def display_header():
+    """Display the application header."""
+    st.markdown("""
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h1>Product Profitability Analysis</h1>
+        <div>
+            <span style="background-color: #F8F9FA; padding: 0.5rem; border-radius: 4px; margin-right: 1rem;">
+                <span style="color: #6C757D; font-weight: 500;">Quality Manager</span>
+            </span>
+        </div>
+    </div>
+    <hr style="margin-top: 0;">
+    """, unsafe_allow_html=True)
+
+def display_sidebar():
+    """Display the sidebar navigation."""
+    with st.sidebar:
+        st.image("https://via.placeholder.com/150x80?text=Logo", use_column_width=True)
+        st.markdown("### Navigation")
+        
+        if st.button("📊 Analysis Dashboard", use_container_width=True):
+            st.session_state.current_page = "analysis"
+            st.rerun()
+        
+        if st.button("📈 Historical Reports", use_container_width=True):
+            st.session_state.current_page = "reports"
+            st.rerun()
+        
+        if st.button("⚙️ Settings", use_container_width=True):
+            st.session_state.current_page = "settings"
+            st.rerun()
+        
+        st.markdown("---")
+        
+        st.markdown("### View Mode")
+        view_mode = st.radio(
+            "Select detail level:",
+            ["Basic", "Advanced"],
+            index=0 if st.session_state.view_mode == "basic" else 1,
+            label_visibility="collapsed"
+        )
+        
+        if view_mode == "Basic" and st.session_state.view_mode != "basic":
+            st.session_state.view_mode = "basic"
+            st.rerun()
+        elif view_mode == "Advanced" and st.session_state.view_mode != "advanced":
+            st.session_state.view_mode = "advanced"
+            st.rerun()
+        
+        st.markdown("---")
+        
+        # Add help section
+        with st.expander("Help"):
+            st.markdown("""
+            ### Quick Guide
+            
+            - **Analysis Dashboard**: Analyze quality issues and their financial impact
+            - **Historical Reports**: View previous analyses and compare results
+            - **Settings**: Configure application settings and preferences
+            
+            For more help, contact support@vivehealth.com
+            """)
+
+def display_metric_card(label, value, subvalue=None, delta=None, delta_suffix=None, good_delta_up=True):
+    """Display a metric card with label, value, and optional delta."""
+    delta_html = ""
+    if delta is not None:
+        delta_value = float(delta.strip('%').strip('$').replace(',', ''))
+        delta_color = SUCCESS_COLOR if (delta_value > 0 and good_delta_up) or (delta_value < 0 and not good_delta_up) else DANGER_COLOR
+        delta_prefix = "+" if delta_value > 0 else ""
+        delta_html = f"""
+        <div style="font-size: 0.8rem; color: {delta_color}; margin-top: 0.25rem;">
+            {delta_prefix}{delta}{" " + delta_suffix if delta_suffix else ""}
+        </div>
+        """
+    
+    subvalue_html = ""
+    if subvalue:
+        subvalue_html = f'<div class="metric-subvalue">{subvalue}</div>'
+    
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">{label}</div>
+        <div class="metric-value">{value}</div>
+        {subvalue_html}
+        {delta_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+def display_badge(text, badge_type="success"):
+    """Display a badge with the specified text and type."""
+    st.markdown(f'<span class="badge badge-{badge_type}">{text}</span>', unsafe_allow_html=True)
 
 def display_quality_issue_results(results, expanded=True):
-    """Display the quality issue analysis results in a visually appealing way"""
-    st.markdown(f'<div class="card">', unsafe_allow_html=True)
-    
-    # Results header with summary metrics
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        st.markdown(f'<div class="sub-header">Analysis Results: {results["sku"]}</div>', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div style="text-align: right;">
-            <span class="results-badge results-badge-{results['recommendation_class'].split('-')[1]}">
-                ROI: {format_percentage(results['financial_impact']['roi_3yr'])}
-            </span>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f"""
-        <div style="text-align: right;">
-            <span class="results-badge results-badge-{results['recommendation_class'].split('-')[1]}">
-                Payback: {results['financial_impact']['payback_months']:.1f} months
-            </span>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Check for error in results
-    if "error" in results:
-        st.error(f"Analysis Error: {results['error']}")
-        st.info("Please check your inputs and try again.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    """Display the results of a quality issue analysis."""
+    if not results:
         return
     
-    # If not expanded, show just summary and recommendation
-    if not expanded:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown('<div class="metric-label">Return Rate</div>', unsafe_allow_html=True)
-            return_rate = results["current_metrics"]["return_rate_30d"]
-            color = DANGER_COLOR if return_rate > 10 else (WARNING_COLOR if return_rate > 5 else SUCCESS_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{color}">{return_rate:.2f}%</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Monthly Return Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["monthly_return_cost"])}</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="metric-label">Est. Monthly Savings</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value" style="color:{SUCCESS_COLOR}">{format_currency(results["financial_impact"]["estimated_monthly_savings"])}</div>', unsafe_allow_html=True)
-            
-            if results["financial_impact"]["revenue_change"] > 0:
-                st.markdown('<div class="metric-label">Monthly Revenue Change</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value" style="color:{SUCCESS_COLOR}">{format_currency(results["financial_impact"]["revenue_change"])}</div>', unsafe_allow_html=True)
-        
-        # Recommendation
-        st.markdown(f'<div class="{results["recommendation_class"]}">{results["recommendation"]}</div>', unsafe_allow_html=True)
-        
-        # Add button to expand
-        if st.button("Show Details", key=f"expand_{results['sku']}"):
-            return True
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        return False
+    # Create columns for metrics
+    col1, col2, col3 = st.columns(3)
     
-    # Tabs for different aspects of the analysis
-    tabs = st.tabs(["Overview", "Financial Impact", "Quality Metrics", "Solution Details"])
+    with col1:
+        display_metric_card(
+            "Return Rate (30d)",
+            f"{results['current_metrics']['return_rate_30d']:.2f}%",
+            subvalue=f"{results['current_metrics']['returns_30d']} of {results['current_metrics']['sales_30d']} units"
+        )
     
-    with tabs[0]:  # Overview tab
-        # Current metrics in a 3-column layout
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Return Rate (30d)</div>', unsafe_allow_html=True)
-            
-            # Color-code return rate based on severity
-            return_rate = results["current_metrics"]["return_rate_30d"]
-            if return_rate > 10:
-                color = DANGER_COLOR
-            elif return_rate > 5:
-                color = WARNING_COLOR
-            else:
-                color = SUCCESS_COLOR
-                
-            st.markdown(f'<div class="metric-value" style="color:{color}">{return_rate:.2f}%</div>', unsafe_allow_html=True)
-            
-            if results["current_metrics"]["return_rate_365d"] is not None:
-                st.markdown('<div class="metric-label">Return Rate (365d)</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">{results["current_metrics"]["return_rate_365d"]:.2f}%</div>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Monthly Return Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["monthly_return_cost"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Annual Return Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["annual_return_cost"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Est. Monthly Savings</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value" style="color:{SUCCESS_COLOR}">{format_currency(results["financial_impact"]["estimated_monthly_savings"])}</div>', unsafe_allow_html=True)
-            
-            if "adjusted_reduction" in results["solution_metrics"]:
-                st.markdown(f'<div style="font-size:0.9rem;color:{TEXT_SECONDARY}">({results["solution_metrics"]["adjusted_reduction"]:.0f}% adjusted reduction)</div>', unsafe_allow_html=True)
-            
-            if results["financial_impact"]["revenue_change"] != 0:
-                revenue_change = results["financial_impact"]["revenue_change"]
-                revenue_color = SUCCESS_COLOR if revenue_change > 0 else DANGER_COLOR
-                st.markdown('<div class="metric-label">Monthly Revenue Change</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value" style="color:{revenue_color}">{format_currency(revenue_change)}</div>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Risk and regulatory info
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Medical Risk Level</div>', unsafe_allow_html=True)
-            risk_level = results["medical_device_impact"]["risk_level"]
-            risk_color = {"Low": SUCCESS_COLOR, "Medium": WARNING_COLOR, "High": DANGER_COLOR}.get(risk_level, WARNING_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{risk_color}">{risk_level}</div>', unsafe_allow_html=True)
-            
-            if results["medical_device_impact"]["regulatory_impact"] != "None":
-                st.markdown('<div class="metric-label">Regulatory Impact</div>', unsafe_allow_html=True)
-                reg_impact = results["medical_device_impact"]["regulatory_impact"]
-                reg_color = DANGER_COLOR if reg_impact == "Significant" else WARNING_COLOR
-                st.markdown(f'<div class="metric-value" style="color:{reg_color}">{reg_impact}</div>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Payback Period</div>', unsafe_allow_html=True)
-            if results["financial_impact"]["payback_months"] == float('inf'):
-                payback_text = "N/A"
-                payback_color = DANGER_COLOR
-            else:
-                payback_months = results['financial_impact']['payback_months']
-                payback_text = f"{payback_months:.1f} months"
-                
-                if payback_months < 3:
-                    payback_color = SUCCESS_COLOR
-                elif payback_months < 6:
-                    payback_color = SECONDARY_COLOR
-                elif payback_months < 12:
-                    payback_color = WARNING_COLOR
-                else:
-                    payback_color = DANGER_COLOR
-                    
-            st.markdown(f'<div class="metric-value" style="color:{payback_color}">{payback_text}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">3-Year ROI</div>', unsafe_allow_html=True)
-            roi = results["financial_impact"]["roi_3yr"]
-            
-            if roi == float('inf'):
-                roi_text = "∞"
-                roi_color = SUCCESS_COLOR
-            else:
-                roi_text = f"{roi:.1f}%"
-                roi_color = SUCCESS_COLOR if roi > 0 else DANGER_COLOR
-                
-            st.markdown(f'<div class="metric-value" style="color:{roi_color}">{roi_text}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Recommendation box
-        st.markdown('<div class="metric-label" style="margin-top:10px;">Recommendation</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="{results["recommendation_class"]}">{results["recommendation"]}</div>', unsafe_allow_html=True)
-        
-        # Brand impact if available
-        if results["brand_impact"]:
-            st.markdown('<div class="metric-label" style="margin-top:10px;">Brand Impact Assessment</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{results["brand_impact"]}</div>', unsafe_allow_html=True)
-        
-        # Issue description
-        st.markdown('<div class="metric-label" style="margin-top:15px;">Issue Description</div>', unsafe_allow_html=True)
-        st.markdown(f'<div style="padding: 10px; background-color:{BACKGROUND_COLOR}; border-radius:5px;">{results["issue_description"]}</div>', unsafe_allow_html=True)
+    with col2:
+        display_metric_card(
+            "Annual Loss From Returns",
+            format_currency(results['financial_impact']['annual_loss']),
+            subvalue=f"Monthly: {format_currency(results['current_metrics']['monthly_return_cost'])}"
+        )
     
-    with tabs[1]:  # Financial Impact tab
-        # Financial metrics in a comparison view
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown('<div class="section-header">Current Financial State</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Monthly Revenue</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["current_metrics"]["monthly_revenue"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Unit Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["current_unit_cost"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Profit Margin</div>', unsafe_allow_html=True)
-            margin = results["current_metrics"]["profit_margin"]
-            margin_color = SUCCESS_COLOR if margin > 20 else (WARNING_COLOR if margin > 10 else DANGER_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{margin_color}">{format_percentage(margin)}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Monthly Return Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value" style="color:{DANGER_COLOR}">{format_currency(results["financial_impact"]["monthly_return_cost"])}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="section-header">Projected Financial State After Fix</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            if results["solution_metrics"]["new_sales_price"] != results["current_metrics"]["sales_price"]:
-                new_revenue = results["current_metrics"]["monthly_revenue"] + results["financial_impact"]["revenue_change"]
-                st.markdown('<div class="metric-label">New Monthly Revenue</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">{format_currency(new_revenue)}</div>', unsafe_allow_html=True)
-                
-                revenue_change = results["financial_impact"]["revenue_change"]
-                change_color = SUCCESS_COLOR if revenue_change > 0 else DANGER_COLOR
-                change_sign = "+" if revenue_change > 0 else ""
-                st.markdown(f'<div class="metric-comparison" style="color:{change_color}">{change_sign}{format_currency(revenue_change)}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="metric-label">Monthly Revenue</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">{format_currency(results["current_metrics"]["monthly_revenue"])}</div>', unsafe_allow_html=True)
-                st.markdown('<div class="metric-comparison">(unchanged)</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">New Unit Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["new_unit_cost"])}</div>', unsafe_allow_html=True)
-            
-            cost_increase = results["financial_impact"]["fix_cost_per_unit"]
-            if cost_increase > 0:
-                st.markdown(f'<div class="metric-comparison" style="color:{DANGER_COLOR}">+{format_currency(cost_increase)}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">New Profit Margin</div>', unsafe_allow_html=True)
-            new_margin = results["financial_impact"]["new_profit_margin"]
-            margin_color = SUCCESS_COLOR if new_margin > 20 else (WARNING_COLOR if new_margin > 10 else DANGER_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{margin_color}">{format_percentage(new_margin)}</div>', unsafe_allow_html=True)
-            
-            margin_change = results["financial_impact"]["profit_margin_change"]
-            change_color = SUCCESS_COLOR if margin_change > 0 else DANGER_COLOR
-            change_sign = "+" if margin_change > 0 else ""
-            st.markdown(f'<div class="metric-comparison" style="color:{change_color}">{change_sign}{format_percentage(margin_change)}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Reduced Monthly Return Cost</div>', unsafe_allow_html=True)
-            reduced_return_cost = results["financial_impact"]["reduced_returns_30d"] * results["financial_impact"]["current_unit_cost"]
-            st.markdown(f'<div class="metric-value" style="color:{DANGER_COLOR}">{format_currency(reduced_return_cost)}</div>', unsafe_allow_html=True)
-            
-            savings = results["financial_impact"]["monthly_return_cost"] - reduced_return_cost
-            st.markdown(f'<div class="metric-comparison" style="color:{SUCCESS_COLOR}">-{format_currency(savings)} ({format_percentage(results["solution_metrics"]["adjusted_reduction"])} reduction)</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Overall financial impact summary
-        st.markdown('<div class="section-header">Investment & Returns</div>', unsafe_allow_html=True)
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Initial Investment</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value" style="color:{DANGER_COLOR}">{format_currency(results["financial_impact"]["fix_cost_upfront"])}</div>', unsafe_allow_html=True)
-            
-            if results["financial_impact"]["fix_cost_per_unit"] > 0:
-                st.markdown('<div class="metric-label">Additional Cost Per Unit</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value" style="color:{WARNING_COLOR}">{format_currency(results["financial_impact"]["fix_cost_per_unit"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Total Monthly Benefit</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value" style="color:{SUCCESS_COLOR}">{format_currency(results["financial_impact"]["total_monthly_benefit"])}</div>', unsafe_allow_html=True)
-            
-            if results["financial_impact"]["revenue_change"] != 0:
-                revenue_note = f"Includes {format_currency(results['financial_impact']['revenue_change'])} revenue change"
-                st.markdown(f'<div style="font-size:0.9rem;color:{TEXT_SECONDARY}">{revenue_note}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Annual Savings</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value" style="color:{SUCCESS_COLOR}">{format_currency(results["financial_impact"]["annual_savings"] + results["financial_impact"]["annual_revenue_change"])}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Payback Period</div>', unsafe_allow_html=True)
-            
-            if results["financial_impact"]["payback_months"] == float('inf'):
-                payback_text = "N/A"
-                payback_color = DANGER_COLOR
-            else:
-                payback_months = results['financial_impact']['payback_months']
-                payback_text = f"{payback_months:.1f} months"
-                
-                if payback_months < 3:
-                    payback_color = SUCCESS_COLOR
-                elif payback_months < 6:
-                    payback_color = SECONDARY_COLOR
-                elif payback_months < 12:
-                    payback_color = WARNING_COLOR
-                else:
-                    payback_color = DANGER_COLOR
-                    
-            st.markdown(f'<div class="metric-value" style="color:{payback_color}">{payback_text}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">3-Year ROI</div>', unsafe_allow_html=True)
-            roi = results["financial_impact"]["roi_3yr"]
-            
-            if roi == float('inf'):
-                roi_text = "∞"
-                roi_color = SUCCESS_COLOR
-            else:
-                roi_text = f"{roi:.1f}%"
-                roi_color = SUCCESS_COLOR if roi > 0 else DANGER_COLOR
-                
-            st.markdown(f'<div class="metric-value" style="color:{roi_color}">{roi_text}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # ROI chart with improved design
-        st.markdown('<div style="margin-top:20px;" class="chart-container">', unsafe_allow_html=True)
+    with col3:
+        display_metric_card(
+            "Recommendation",
+            results['recommendation'],
+            subvalue=f"Confidence: {results['projected_metrics']['solution_confidence']}%"
+        )
+    
+    # Financial impact section
+    st.markdown("### Financial Impact")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        display_metric_card(
+            "ROI (3 Year)",
+            f"{results['financial_impact']['roi_3yr']:.2f}%",
+            subvalue=f"1 Year: {results['financial_impact']['roi_1yr']:.2f}%"
+        )
+    
+    with col2:
+        display_metric_card(
+            "Payback Period",
+            f"{results['financial_impact']['payback_period']:.1f} months",
+            subvalue=f"For ${format_currency(results['financial_impact']['total_investment'])}"
+        )
+    
+    with col3:
+        display_metric_card(
+            "Annual Savings",
+            format_currency(results['financial_impact']['annual_savings']),
+            subvalue=f"Risk-adjusted: {format_currency(results['financial_impact']['risk_adjusted_savings'])}"
+        )
+    
+    with col4:
+        display_metric_card(
+            "Expected Return Reduction",
+            f"{results['projected_metrics']['expected_reduction']:.1f}%",
+            subvalue=f"From {results['current_metrics']['return_rate_30d']:.2f}% to " + 
+                    f"{results['current_metrics']['return_rate_30d'] * (1 - results['projected_metrics']['expected_reduction']/100):.2f}%"
+        )
+    
+    # Visualizations
+    st.markdown("### Visualizations")
+    
+    tab1, tab2, tab3 = st.tabs(["ROI Analysis", "Return Rate Impact", "Cost Breakdown"])
+    
+    with tab1:
+        # ROI Visualization
         fig = go.Figure()
         
-        # Initial investment
-        fig.add_trace(go.Bar(
-            x=['Initial Investment'],
-            y=[-results["financial_impact"]["fix_cost_upfront"]],
-            name='Initial Investment',
-            marker_color=DANGER_COLOR
-        ))
+        # Add ROI bars
+        roi_data = [
+            results['financial_impact']['roi_1yr'],
+            results['financial_impact']['roi_3yr']
+        ]
         
-        # Per-unit cost increase (total over 3 years)
-        per_unit_cost_total = results["financial_impact"]["fix_cost_per_unit"] * results["financial_impact"]["projected_sales_36m"]
-        
-        if per_unit_cost_total > 0:
-            fig.add_trace(go.Bar(
-                x=['Additional Unit Costs (3 years)'],
-                y=[-per_unit_cost_total],
-                name='Additional Unit Costs',
-                marker_color=WARNING_COLOR
-            ))
-        
-        # Revenue change component
-        annual_revenue_change = results["financial_impact"]["annual_revenue_change"]
-        
-        # 1-year, 2-year, 3-year benefits (savings + revenue)
-        annual_benefit = results["financial_impact"]["annual_savings"] + annual_revenue_change
+        colors = [SECONDARY_COLOR, PRIMARY_COLOR]
         
         fig.add_trace(go.Bar(
-            x=['Year 1', 'Year 2', 'Year 3'],
-            y=[annual_benefit, annual_benefit, annual_benefit],
-            name='Annual Benefit',
-            marker_color=SUCCESS_COLOR
+            x=['1 Year ROI', '3 Year ROI'],
+            y=roi_data,
+            text=[f"{roi:.1f}%" for roi in roi_data],
+            textposition='auto',
+            marker_color=colors
         ))
         
-        # Split between savings and revenue if applicable
-        if annual_revenue_change != 0:
-            # Create a stacked bar chart for the benefits
-            fig = go.Figure()
-            
-            # Initial investment (negative value)
-            fig.add_trace(go.Bar(
-                x=['Initial Investment'],
-                y=[-results["financial_impact"]["fix_cost_upfront"]],
-                name='Initial Investment',
-                marker_color=DANGER_COLOR
-            ))
-            
-            # Per-unit cost increase (negative value)
-            if per_unit_cost_total > 0:
-                fig.add_trace(go.Bar(
-                    x=['Additional Unit Costs (3 years)'],
-                    y=[-per_unit_cost_total],
-                    name='Additional Unit Costs',
-                    marker_color=WARNING_COLOR
-                ))
-            
-            # Return savings component for each year
-            fig.add_trace(go.Bar(
-                x=['Year 1', 'Year 2', 'Year 3'],
-                y=[results["financial_impact"]["annual_savings"], 
-                   results["financial_impact"]["annual_savings"], 
-                   results["financial_impact"]["annual_savings"]],
-                name='Return Savings',
-                marker_color=SECONDARY_COLOR
-            ))
-            
-            # Revenue change component for each year (if applicable)
-            if annual_revenue_change != 0:
-                fig.add_trace(go.Bar(
-                    x=['Year 1', 'Year 2', 'Year 3'],
-                    y=[annual_revenue_change, annual_revenue_change, annual_revenue_change],
-                    name='Revenue Change',
-                    marker_color=SUCCESS_COLOR if annual_revenue_change > 0 else DANGER_COLOR
-                ))
+        # Add threshold lines
+        fig.add_shape(
+            type="line",
+            x0=-0.5,
+            x1=1.5,
+            y0=50,
+            y1=50,
+            line=dict(color=SUCCESS_COLOR, width=2, dash="dash"),
+            name="Good ROI"
+        )
         
-        # Cumulative net benefit line
-        year1_net = -results["financial_impact"]["fix_cost_upfront"] - (per_unit_cost_total/3) + annual_benefit
-        year2_net = year1_net - (per_unit_cost_total/3) + annual_benefit
-        year3_net = year2_net - (per_unit_cost_total/3) + annual_benefit
+        fig.add_shape(
+            type="line",
+            x0=-0.5,
+            x1=1.5,
+            y0=100,
+            y1=100,
+            line=dict(color=SUCCESS_COLOR, width=3),
+            name="Excellent ROI"
+        )
         
-        fig.add_trace(go.Scatter(
-            x=['Initial', 'Year 1', 'Year 2', 'Year 3'],
-            y=[-results["financial_impact"]["fix_cost_upfront"], year1_net, year2_net, year3_net],
-            name='Cumulative Net Benefit',
-            line=dict(color=PRIMARY_COLOR, width=3, dash='solid'),
-            mode='lines+markers'
+        # Update layout
+        fig.update_layout(
+            title="Return on Investment Analysis",
+            xaxis_title="Time Period",
+            yaxis_title="ROI (%)",
+            yaxis=dict(
+                ticksuffix="%",
+                zeroline=True,
+                zerolinewidth=2,
+                zerolinecolor=BORDER_COLOR
+            ),
+            height=400,
+            margin=dict(l=40, r=40, t=50, b=40),
+            plot_bgcolor="white"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with tab2:
+        # Return Rate Impact Visualization
+        current_return_rate = results['current_metrics']['return_rate_30d']
+        projected_return_rate = current_return_rate * (1 - results['projected_metrics']['expected_reduction'] / 100)
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Indicator(
+            mode="gauge+number+delta",
+            value=projected_return_rate,
+            title={"text": "Return Rate After Fix"},
+            delta={"reference": current_return_rate, "valueformat": ".2f", "relative": False, "decreasing": {"color": SUCCESS_COLOR}, "increasing": {"color": DANGER_COLOR}},
+            gauge={
+                "axis": {"range": [0, max(current_return_rate * 1.2, 10)]},
+                "bar": {"color": SUCCESS_COLOR},
+                "bgcolor": "white",
+                "borderwidth": 2,
+                "bordercolor": "gray",
+                "steps": [
+                    {"range": [0, 1], "color": SUCCESS_COLOR},
+                    {"range": [1, 3], "color": WARNING_COLOR},
+                    {"range": [3, 10], "color": DANGER_COLOR}
+                ],
+                "threshold": {
+                    "line": {"color": "red", "width": 4},
+                    "thickness": 0.75,
+                    "value": current_return_rate
+                }
+            }
         ))
         
         fig.update_layout(
-            title='ROI Analysis Over 3 Years',
-            xaxis_title='Timeline',
-            yaxis_title='Amount ($)',
-            barmode='stack',
-            height=400,
-            margin=dict(l=20, r=20, t=40, b=20),
+            height=300,
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Monthly projection
+        months = list(range(1, 13))
+        current_returns = [current_return_rate] * 12
+        
+        # Calculate gradual improvement over 12 months
+        improvement_rate = results['projected_metrics']['expected_reduction'] / 100
+        projected_returns = [current_return_rate * (1 - (improvement_rate * min(i / 3, 1))) for i in months]
+        
+        fig2 = go.Figure()
+        
+        fig2.add_trace(go.Scatter(
+            x=months,
+            y=current_returns,
+            mode='lines',
+            name='Without Fix',
+            line=dict(color=DANGER_COLOR, dash='dash')
+        ))
+        
+        fig2.add_trace(go.Scatter(
+            x=months,
+            y=projected_returns,
+            mode='lines+markers',
+            name='With Fix',
+            line=dict(color=SUCCESS_COLOR)
+        ))
+        
+        fig2.update_layout(
+            title="Projected Return Rate Over Time",
+            xaxis_title="Month",
+            yaxis_title="Return Rate (%)",
+            yaxis=dict(
+                ticksuffix="%",
+                zeroline=True,
+                zerolinewidth=2,
+                zerolinecolor=BORDER_COLOR
+            ),
+            height=300,
+            margin=dict(l=40, r=40, t=50, b=40),
+            plot_bgcolor="white",
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
                 y=1.02,
                 xanchor="right",
                 x=1
-            ),
-            template="plotly_white",
-            plot_bgcolor='rgba(0,0,0,0)',
+            )
+        )
+        
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    with tab3:
+        # Cost Breakdown Visualization
+        fig = go.Figure()
+        
+        # Create waterfall chart for cost breakdown
+        measures = ["absolute", "relative", "relative", "relative", "total"]
+        
+        original_cost = results['current_metrics']['monthly_return_cost'] * 12  # Annual return cost
+        reduced_returns_savings = original_cost * (results['projected_metrics']['expected_reduction'] / 100)
+        increased_unit_cost = results['projected_metrics'].get('annual_sales', results['current_metrics']['sales_30d'] * 12) * results.get('fix_cost_per_unit', 0)
+        upfront_cost_annual = results.get('fix_cost_upfront', 0) / 3  # Amortized over 3 years
+        
+        values = [original_cost, -reduced_returns_savings, increased_unit_cost, upfront_cost_annual, 
+                 original_cost - reduced_returns_savings + increased_unit_cost + upfront_cost_annual]
+        
+        labels = ["Current Annual Loss", "Reduced Returns", "Increased Unit Cost", "Upfront Cost (Annual)", "New Annual Cost"]
+        
+        colors = [DANGER_COLOR, SUCCESS_COLOR, WARNING_COLOR, WARNING_COLOR, 
+                 DANGER_COLOR if values[-1] > original_cost else SUCCESS_COLOR]
+        
+        fig.add_trace(go.Waterfall(
+            name="Cost Breakdown",
+            orientation="v",
+            measure=measures,
+            x=labels,
+            textposition="outside",
+            text=[format_currency(abs(val)) for val in values],
+            y=values,
+            connector={"line": {"color": "rgb(63, 63, 63)"}},
+            marker={"color": colors}
+        ))
+        
+        fig.update_layout(
+            title="Cost Breakdown Analysis (Annual)",
+            yaxis_title="Cost ($)",
+            height=500,
+            margin=dict(l=40, r=40, t=50, b=120),
+            plot_bgcolor="white",
+            showlegend=False
         )
         
         st.plotly_chart(fig, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
     
-    with tabs[2]:  # Quality Metrics tab
-        # Quality metrics visualization
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown('<div class="section-header">Returns Analysis</div>', unsafe_allow_html=True)
-            
-            # Create returns funnel chart
-            returns_fig = go.Figure()
-            
-            # Current returns
-            returns_fig.add_trace(go.Bar(
-                x=['Current Returns'],
-                y=[returns_30d := results["returns_30d"] if "returns_30d" in results else results["financial_impact"]["monthly_return_cost"] / results["financial_impact"]["current_unit_cost"]],
-                name='Current Returns',
-                marker_color=DANGER_COLOR,
-                width=0.4
-            ))
-            
-            # Expected reduction
-            returns_fig.add_trace(go.Bar(
-                x=['Expected Returns (After Fix)'],
-                y=[reduced_returns := results["financial_impact"]["reduced_returns_30d"]],
-                name='Expected Returns',
-                marker_color=SECONDARY_COLOR,
-                width=0.4
-            ))
-            
-            # Calculate reduction percentage
-            reduction_pct = ((returns_30d - reduced_returns) / returns_30d) * 100 if returns_30d > 0 else 0
-            
-            # Add value labels
-            returns_fig.add_annotation(
-                x='Current Returns',
-                y=returns_30d,
-                text=f"{returns_30d:.0f}",
-                showarrow=False,
-                yshift=10,
-                font=dict(color=TEXT_PRIMARY)
-            )
-            
-            returns_fig.add_annotation(
-                x='Expected Returns (After Fix)',
-                y=reduced_returns,
-                text=f"{reduced_returns:.0f} ({reduction_pct:.0f}% reduction)",
-                showarrow=False,
-                yshift=10,
-                font=dict(color=TEXT_PRIMARY)
-            )
-            
-            # Connect the bars with an arrow
-            returns_fig.add_shape(
-                type="line",
-                x0=0, y0=returns_30d,
-                x1=1, y1=reduced_returns,
-                line=dict(color="black", width=2, dash="dot"),
-                xref="x", yref="y"
-            )
-            
-            returns_fig.update_layout(
-                title='Return Rate Reduction',
-                xaxis_title='',
-                yaxis_title='Number of Returns (30 Days)',
-                showlegend=False,
-                height=300,
-                margin=dict(l=20, r=20, t=40, b=20),
-                template="plotly_white",
-                plot_bgcolor='rgba(0,0,0,0)',
-            )
-            
-            st.plotly_chart(returns_fig, use_container_width=True)
-        
-        with col2:
-            st.markdown('<div class="section-header">Customer Metrics</div>', unsafe_allow_html=True)
-            
-            if results["current_metrics"]["star_rating"] is not None:
-                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                st.markdown('<div class="metric-label">Current Star Rating</div>', unsafe_allow_html=True)
-                
-                # Color-code star rating
-                star_rating = results["current_metrics"]["star_rating"]
-                if star_rating >= 4.0:
-                    rating_color = SUCCESS_COLOR
-                elif star_rating >= 3.0:
-                    rating_color = WARNING_COLOR
-                else:
-                    rating_color = DANGER_COLOR
-                    
-                st.markdown(f'<div class="metric-value" style="color:{rating_color}">{star_rating:.1f}★</div>', unsafe_allow_html=True)
-                
-                if results["current_metrics"]["total_reviews"]:
-                    st.markdown(f'<div style="font-size:0.9rem;color:{TEXT_SECONDARY}">({results["current_metrics"]["total_reviews"]} reviews)</div>', unsafe_allow_html=True)
-                
-                # Potential improved rating
-                if "potential_rating" in results["customer_impact_metrics"]:
-                    potential_rating = results["customer_impact_metrics"]["potential_rating"]
-                    st.markdown('<div class="metric-label">Potential Improved Rating</div>', unsafe_allow_html=True)
-                    
-                    potential_color = SUCCESS_COLOR if potential_rating >= 4.0 else (WARNING_COLOR if potential_rating >= 3.0 else DANGER_COLOR)
-                    st.markdown(f'<div class="metric-value" style="color:{potential_color}">{potential_rating:.1f}★</div>', unsafe_allow_html=True)
-                    
-                    rating_increase = potential_rating - star_rating
-                    if rating_increase > 0:
-                        st.markdown(f'<div class="metric-comparison metric-positive">+{rating_increase:.1f} stars</div>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Medical Risk Level</div>', unsafe_allow_html=True)
-            risk_level = results["medical_device_impact"]["risk_level"]
-            risk_color = DANGER_COLOR if risk_level == "High" else (WARNING_COLOR if risk_level == "Medium" else SUCCESS_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{risk_color}">{risk_level}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Regulatory Impact</div>', unsafe_allow_html=True)
-            reg_impact = results["medical_device_impact"]["regulatory_impact"]
-            reg_color = DANGER_COLOR if reg_impact == "Significant" else (WARNING_COLOR if reg_impact == "Possible" else TEXT_SECONDARY)
-            st.markdown(f'<div class="metric-value" style="color:{reg_color}">{reg_impact}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Patient Safety Impact</div>', unsafe_allow_html=True)
-            safety_impact = results["medical_device_impact"]["patient_safety_impact"]
-            safety_color = DANGER_COLOR if safety_impact == "High" else (WARNING_COLOR if safety_impact == "Medium" else SUCCESS_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{safety_color}">{safety_impact}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # NCX rate if available
-        if results["current_metrics"]["ncx_rate"] is not None:
-            st.markdown('<div class="section-header">Negative Customer Experience Analysis</div>', unsafe_allow_html=True)
-            
-            ncx_rate = results["current_metrics"]["ncx_rate"]
-            
-            # Calculate potential improved NCX rate
-            potential_ncx_rate = ncx_rate * (1 - (results["solution_metrics"]["adjusted_reduction"] / 100))
-            
-            # Create NCX gauge charts
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                current_ncx_fig = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = ncx_rate,
-                    number = {"suffix": "%", "font": {"size": 24}},
-                    gauge = {
-                        "axis": {"range": [None, 30], "tickwidth": 1, "tickcolor": TEXT_SECONDARY},
-                        "bar": {"color": DANGER_COLOR},
-                        "bgcolor": "white",
-                        "borderwidth": 2,
-                        "bordercolor": TEXT_SECONDARY,
-                        "steps": [
-                            {"range": [0, 5], "color": "rgba(64, 145, 108, 0.3)"},
-                            {"range": [5, 10], "color": "rgba(233, 196, 106, 0.3)"},
-                            {"range": [10, 30], "color": "rgba(231, 111, 81, 0.3)"}
-                        ],
-                        "threshold": {
-                            "line": {"color": DANGER_COLOR, "width": 4},
-                            "thickness": 0.75,
-                            "value": ncx_rate
-                        }
-                    },
-                    title = {"text": "Current NCX Rate"}
-                ))
-                
-                current_ncx_fig.update_layout(
-                    height=250,
-                    margin=dict(l=20, r=20, t=30, b=20),
-                )
-                
-                st.plotly_chart(current_ncx_fig, use_container_width=True)
-            
-            with col2:
-                potential_ncx_fig = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta",
-                    value = potential_ncx_rate,
-                    number = {"suffix": "%", "font": {"size": 24}},
-                    delta = {"reference": ncx_rate, "decreasing": {"color": SUCCESS_COLOR}},
-                    gauge = {
-                        "axis": {"range": [None, 30], "tickwidth": 1, "tickcolor": TEXT_SECONDARY},
-                        "bar": {"color": SECONDARY_COLOR},
-                        "bgcolor": "white",
-                        "borderwidth": 2,
-                        "bordercolor": TEXT_SECONDARY,
-                        "steps": [
-                            {"range": [0, 5], "color": "rgba(64, 145, 108, 0.3)"},
-                            {"range": [5, 10], "color": "rgba(233, 196, 106, 0.3)"},
-                            {"range": [10, 30], "color": "rgba(231, 111, 81, 0.3)"}
-                        ],
-                        "threshold": {
-                            "line": {"color": SECONDARY_COLOR, "width": 4},
-                            "thickness": 0.75,
-                            "value": potential_ncx_rate
-                        }
-                    },
-                    title = {"text": "Projected NCX Rate After Fix"}
-                ))
-                
-                potential_ncx_fig.update_layout(
-                    height=250,
-                    margin=dict(l=20, r=20, t=30, b=20),
-                )
-                
-                st.plotly_chart(potential_ncx_fig, use_container_width=True)
-    
-    with tabs[3]:  # Solution Details tab
-        # Display solution details and confidence
+    # Detailed metrics (expandable section)
+    with st.expander("Detailed Metrics", expanded=expanded):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Expected Return Rate Reduction</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_percentage(results["solution_metrics"]["expected_reduction"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Solution Confidence</div>', unsafe_allow_html=True)
-            confidence = results["solution_metrics"]["solution_confidence"]
-            confidence_color = SUCCESS_COLOR if confidence >= 80 else (WARNING_COLOR if confidence >= 50 else DANGER_COLOR)
-            st.markdown(f'<div class="metric-value" style="color:{confidence_color}">{format_percentage(confidence)}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Adjusted Return Rate Reduction</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_percentage(results["solution_metrics"]["adjusted_reduction"])}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div style="font-size:0.9rem;color:{TEXT_SECONDARY}">(Expected reduction × Confidence)</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.markdown('<div class="metric-label">Initial Fix Cost</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["fix_cost_upfront"])}</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="metric-label">Additional Cost Per Unit</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{format_currency(results["financial_impact"]["fix_cost_per_unit"])}</div>', unsafe_allow_html=True)
-            
-            if results["solution_metrics"]["new_sales_price"] != results["current_metrics"]["sales_price"]:
-                st.markdown('<div class="metric-label">Original Sales Price</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">{format_currency(results["current_metrics"]["sales_price"])}</div>', unsafe_allow_html=True)
-                
-                st.markdown('<div class="metric-label">New Sales Price</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-value">{format_currency(results["solution_metrics"]["new_sales_price"])}</div>', unsafe_allow_html=True)
-                
-                price_change = results["solution_metrics"]["new_sales_price"] - results["current_metrics"]["sales_price"]
-                price_pct = (price_change / results["current_metrics"]["sales_price"]) * 100
-                change_color = SUCCESS_COLOR if price_change > 0 else DANGER_COLOR
-                change_sign = "+" if price_change > 0 else ""
-                st.markdown(f'<div class="metric-comparison" style="color:{change_color}">{change_sign}{format_currency(price_change)} ({change_sign}{price_pct:.1f}%)</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Confidence visualization
-        st.markdown('<div class="section-header">Solution Confidence Analysis</div>', unsafe_allow_html=True)
-        
-        # Create confidence gauge
-        confidence_fig = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = results["solution_metrics"]["solution_confidence"],
-            number = {"suffix": "%", "font": {"size": 30}},
-            gauge = {
-                "axis": {"range": [None, 100], "tickwidth": 1, "tickcolor": TEXT_SECONDARY},
-                "bar": {"color": 
-                       (SUCCESS_COLOR if confidence >= 80 else 
-                        (WARNING_COLOR if confidence >= 50 else DANGER_COLOR))},
-                "bgcolor": "white",
-                "borderwidth": 2,
-                "bordercolor": TEXT_SECONDARY,
-                "steps": [
-                    {"range": [0, 30], "color": "rgba(231, 111, 81, 0.2)"},
-                    {"range": [30, 70], "color": "rgba(233, 196, 106, 0.2)"},
-                    {"range": [70, 100], "color": "rgba(64, 145, 108, 0.2)"}
+            st.markdown("#### Current Metrics")
+            metrics_df = pd.DataFrame({
+                "Metric": [
+                    "Monthly Sales", 
+                    "Monthly Returns", 
+                    "Return Rate", 
+                    "Unit Cost", 
+                    "Sales Price", 
+                    "Unit Margin", 
+                    "Margin Percentage"
                 ],
-                "threshold": {
-                    "line": {"color": TEXT_PRIMARY, "width": 4},
-                    "thickness": 0.75,
-                    "value": results["solution_metrics"]["solution_confidence"]
-                }
-            },
-            title = {"text": "Solution Confidence Level", "font": {"size": 16}}
-        ))
-        
-        confidence_fig.update_layout(
-            height=300,
-            margin=dict(l=20, r=20, t=40, b=20),
-        )
-        
-        col1, col2, col3 = st.columns([1, 3, 1])
-        with col2:
-            st.plotly_chart(confidence_fig, use_container_width=True)
-        
-        # Reduction visualization
-        st.markdown('<div class="section-header">Return Rate Reduction Impact</div>', unsafe_allow_html=True)
-        
-        # Create waterfall chart to show the reduction journey
-        waterfall_fig = go.Figure(go.Waterfall(
-            name = "Return Rate Analysis",
-            orientation = "v",
-            measure = ["absolute", "relative", "relative", "total"],
-            x = ["Current Return Rate", "Expected Reduction", "Confidence Adjustment", "Adjusted Reduction"],
-            textposition = "outside",
-            text = [
-                f"{results['current_metrics']['return_rate_30d']:.2f}%",
-                f"-{results['solution_metrics']['expected_reduction']:.1f}%",
-                f"+{(results['solution_metrics']['expected_reduction'] - results['solution_metrics']['adjusted_reduction']):.1f}%",
-                f"{results['current_metrics']['return_rate_30d'] - results['solution_metrics']['adjusted_reduction']:.2f}%"
-            ],
-            y = [
-                results["current_metrics"]["return_rate_30d"], 
-                -results["solution_metrics"]["expected_reduction"],
-                (results["solution_metrics"]["expected_reduction"] - results["solution_metrics"]["adjusted_reduction"]),
-                0  # Total is calculated automatically
-            ],
-            connector = {"line":{"color": TEXT_SECONDARY}},
-            decreasing = {"marker":{"color": SUCCESS_COLOR}},
-            increasing = {"marker":{"color": DANGER_COLOR}},
-            totals = {"marker":{"color": SECONDARY_COLOR}}
-        ))
-        
-        waterfall_fig.update_layout(
-            title = "Return Rate Reduction Analysis",
-            showlegend = False,
-            height = 400,
-            margin=dict(l=20, r=20, t=40, b=20),
-        )
-        
-        st.plotly_chart(waterfall_fig, use_container_width=True)
-        
-    # Add collapse button
-    if st.button("Hide Details", key=f"collapse_{results['sku']}"):
-        return False
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    return True
-
-def chat_with_ai(results, issue_description, chat_history=None):
-    """Initialize or continue chat with AI about quality issues"""
-    if chat_history is None:
-        chat_history = []
-            
-        # Generate initial AI analysis using direct API call
-        system_prompt = f"""
-        You are a Quality Management expert for medical devices at Vive Health. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
-        
-        Product details:
-        - SKU: {results["sku"]}
-        - Type: {results["product_type"]}
-        - Issue: {issue_description}
-        
-        Metrics:
-        - Return Rate (30 days): {results["current_metrics"]["return_rate_30d"]:.2f}%
-        - Monthly Return Cost: ${results["financial_impact"]["monthly_return_cost"]:.2f}
-        - Estimated Savings: ${results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
-        - Payback Period: {results["financial_impact"]["payback_months"]:.1f} months
-        - Medical Risk Level: {results["medical_device_impact"]["risk_level"]}
-        - Regulatory Impact: {results["medical_device_impact"]["regulatory_impact"]}
-        
-        Recommendation: {results["recommendation"]}
-        
-        As a Quality Management expert for medical devices, you should provide specific, actionable insights about this quality issue.
-        Focus on:
-        1. Root cause analysis of the issue
-        2. Practical solutions to fix the quality problem
-        3. Implementation recommendations considering FDA/regulatory requirements for medical devices
-        4. Risk assessment for the proposed solution
-        5. Quality management systems (QMS) considerations
-        
-        Keep your analysis concise, practical, and specific to medical devices and FDA/regulatory requirements.
-        """
-        
-        initial_message = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Based on the product information and quality metrics, provide your initial analysis of the issue and suggested next steps. Be specific about potential fixes, quality improvements, and regulatory considerations."}
-        ]
-        
-        initial_analysis = call_openai_api(initial_message)
-        
-        # Add initial AI message
-        chat_history.append({
-            "role": "assistant",
-            "content": initial_analysis
-        })
-    
-    return chat_history
-
-def import_batch_data(uploaded_file):
-    """Process uploaded CSV or Excel file for batch analysis"""
-    try:
-        file_name = uploaded_file.name
-        file_extension = file_name.split('.')[-1].lower()
-        
-        if file_extension == 'csv':
-            df = pd.read_csv(uploaded_file)
-        elif file_extension in ['xlsx', 'xls']:
-            df = pd.read_excel(uploaded_file)
-        else:
-            st.error(f"Unsupported file format: {file_extension}. Please upload CSV or Excel file.")
-            return None
-        
-        # Check for required columns
-        required_columns = ['sku', 'product_type', 'sales_30d', 'returns_30d', 
-                          'issue_description', 'current_unit_cost', 'fix_cost_upfront', 
-                          'fix_cost_per_unit', 'sales_price', 'expected_reduction', 
-                          'solution_confidence']
-        
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        
-        if missing_columns:
-            st.error(f"Missing required columns: {', '.join(missing_columns)}")
-            return None
-        
-        return df
-    
-    except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
-        return None
-
-def batch_analyze_quality_issues(df):
-    """Run quality analysis on batch data"""
-    results = []
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    total_rows = len(df)
-    
-    for i, row in df.iterrows():
-        try:
-            # Update progress
-            progress = int((i / total_rows) * 100)
-            progress_bar.progress(progress)
-            status_text.text(f"Analyzing {i+1}/{total_rows}: {row['sku']}")
-            
-            # Extract values with defaults for optional fields
-            analysis_result = analyze_quality_issue(
-                sku=row['sku'],
-                product_type=row['product_type'],
-                sales_30d=row['sales_30d'],
-                returns_30d=row['returns_30d'],
-                issue_description=row['issue_description'],
-                current_unit_cost=row['current_unit_cost'],
-                fix_cost_upfront=row['fix_cost_upfront'],
-                fix_cost_per_unit=row['fix_cost_per_unit'],
-                sales_price=row['sales_price'],
-                expected_reduction=row['expected_reduction'],
-                solution_confidence=row['solution_confidence'],
-                new_sales_price=row.get('new_sales_price', None),
-                asin=row.get('asin', None),
-                ncx_rate=row.get('ncx_rate', None),
-                sales_365d=row.get('sales_365d', None),
-                returns_365d=row.get('returns_365d', None),
-                star_rating=row.get('star_rating', None),
-                total_reviews=row.get('total_reviews', None),
-                fba_fee=row.get('fba_fee', None),
-                risk_level=row.get('risk_level', 'Medium'),
-                regulatory_impact=row.get('regulatory_impact', 'None')
-            )
-            
-            results.append(analysis_result)
-        
-        except Exception as e:
-            # Add error result
-            results.append({
-                "sku": row.get('sku', f"Row {i+1}"),
-                "error": str(e),
-                "recommendation": "Analysis Error",
-                "recommendation_class": "recommendation-low"
+                "Value": [
+                    f"{results['current_metrics']['sales_30d']:.0f} units",
+                    f"{results['current_metrics']['returns_30d']:.0f} units",
+                    f"{results['current_metrics']['return_rate_30d']:.2f}%",
+                    f"${results['current_metrics']['unit_cost']:.2f}",
+                    f"${results['current_metrics']['sales_price']:.2f}",
+                    f"${results['current_metrics']['unit_margin']:.2f}",
+                    f"{results['current_metrics']['margin_percentage']:.2f}%"
+                ]
             })
-    
-    # Complete progress
-    progress_bar.progress(100)
-    status_text.text(f"Analysis complete: {total_rows} products analyzed")
-    
-    return results
-
-def display_help_page():
-    """Display the help page with formula explanations"""
-    st.markdown('<div class="main-header">Product Profitability Formula Guide</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="alert alert-info">
-        This guide explains all the formulas and calculations used in the Product Profitability Analysis tool.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('<div class="help-section">', unsafe_allow_html=True)
-    st.markdown('<div class="help-title">Basic Metrics</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <p>These fundamental metrics form the basis of our quality analysis:</p>
-    
-    <p><strong>Return Rate</strong>: The percentage of units returned relative to total sales in a given period.</p>
-    <div class="formula-box">Return Rate (%) = (Returns / Sales) × 100</div>
-    
-    <p><strong>Monthly Return Cost</strong>: The direct financial impact of returns based on unit cost.</p>
-    <div class="formula-box">Monthly Return Cost ($) = Returns × Unit Cost</div>
-    
-    <p><strong>Monthly Revenue</strong>: Total revenue from product sales in the period.</p>
-    <div class="formula-box">Monthly Revenue ($) = Sales × Sales Price</div>
-    
-    <p><strong>Profit Margin</strong>: The percentage of profit relative to revenue.</p>
-    <div class="formula-box">Profit Margin (%) = ((Sales × Sales Price) - (Sales × Unit Cost)) / (Sales × Sales Price) × 100</div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="help-section">', unsafe_allow_html=True)
-    st.markdown('<div class="help-title">Solution Impact Calculations</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <p>These calculations estimate the impact of implementing a quality fix:</p>
-    
-    <p><strong>Adjusted Reduction</strong>: Expected return rate reduction adjusted by confidence level.</p>
-    <div class="formula-box">Adjusted Reduction (%) = Expected Reduction (%) × (Solution Confidence (%) / 100)</div>
-    
-    <p><strong>Reduced Returns</strong>: Estimated number of returns after implementing the fix.</p>
-    <div class="formula-box">Reduced Returns = Current Returns × (1 - (Adjusted Reduction / 100))</div>
-    
-    <p><strong>Returns Saved</strong>: Estimated number of returns prevented by the fix.</p>
-    <div class="formula-box">Returns Saved = Current Returns - Reduced Returns</div>
-    
-    <p><strong>Estimated Monthly Savings</strong>: Financial impact of reduced returns.</p>
-    <div class="formula-box">Monthly Savings ($) = Returns Saved × Current Unit Cost</div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="help-section">', unsafe_allow_html=True)
-    st.markdown('<div class="help-title">Price Change Impact</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <p>If the product price changes after the fix, these calculations apply:</p>
-    
-    <p><strong>New Monthly Revenue</strong>: Revenue after implementing sales price change.</p>
-    <div class="formula-box">New Monthly Revenue ($) = Sales × New Sales Price</div>
-    
-    <p><strong>Revenue Change</strong>: The difference in monthly revenue due to price change.</p>
-    <div class="formula-box">Revenue Change ($) = New Monthly Revenue - Current Monthly Revenue</div>
-    
-    <p><strong>New Unit Cost</strong>: Unit cost after adding the per-unit fix cost.</p>
-    <div class="formula-box">New Unit Cost ($) = Current Unit Cost + Fix Cost Per Unit</div>
-    
-    <p><strong>New Profit Margin</strong>: Profit margin after implementing the fix and price changes.</p>
-    <div class="formula-box">New Profit Margin (%) = ((Sales × New Sales Price) - (Sales × New Unit Cost)) / (Sales × New Sales Price) × 100</div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="help-section">', unsafe_allow_html=True)
-    st.markdown('<div class="help-title">ROI Calculations</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <p>These calculations determine the financial return on investment:</p>
-    
-    <p><strong>Total Monthly Benefit</strong>: Combined impact of return savings and revenue changes.</p>
-    <div class="formula-box">Total Monthly Benefit ($) = Monthly Savings + Revenue Change</div>
-    
-    <p><strong>Payback Period</strong>: Time required to recover the initial investment.</p>
-    <div class="formula-box">Payback Period (months) = Fix Cost Upfront / Total Monthly Benefit</div>
-    
-    <p><strong>Annual Projections</strong>: Yearly projections of financial impact.</p>
-    <div class="formula-box">Annual Return Cost ($) = Monthly Return Cost × 12
-Annual Savings ($) = Monthly Savings × 12
-Annual Revenue Change ($) = Monthly Revenue Change × 12</div>
-    
-    <p><strong>3-Year ROI</strong>: Return on investment over a 3-year period.</p>
-    <div class="formula-box">Projected Sales (36 months) = Monthly Sales × 36
-Total Investment ($) = Fix Cost Upfront + (Fix Cost Per Unit × Projected Sales)
-Total Savings ($) = (Annual Savings + Annual Revenue Change) × 3
-ROI (%) = ((Total Savings - Total Investment) / Total Investment) × 100</div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="help-section">', unsafe_allow_html=True)
-    st.markdown('<div class="help-title">Tariff & Import Cost Calculations</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <p>These calculations determine the impact of tariffs and import costs:</p>
-    
-    <p><strong>Tariff Amount</strong>: The duty applied to the manufacturing cost of imported goods.</p>
-    <div class="formula-box">Tariff Amount ($) = Manufacturing Cost ($) × (Tariff Rate (%) / 100)</div>
-    
-    <p><strong>Per-Unit Import Costs</strong>: Additional import costs distributed across units.</p>
-    <div class="formula-box">Per-Unit Import Cost ($) = Total Import Costs ($) / Units per Shipment</div>
-    
-    <p><strong>Landed Cost</strong>: Total cost per unit including manufacturing, tariffs, and import costs.</p>
-    <div class="formula-box">Landed Cost ($) = Manufacturing Cost + Tariff Amount + Shipping/Unit + Storage/Unit + Customs/Unit + Broker/Unit + Other/Unit</div>
-    
-    <p><strong>Profit After Import</strong>: Profit per unit after all import costs.</p>
-    <div class="formula-box">Profit ($) = Retail Price - Landed Cost</div>
-    
-    <p><strong>Profit Margin After Import</strong>: Margin percentage considering all import costs.</p>
-    <div class="formula-box">Margin (%) = (Profit / Retail Price) × 100</div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="help-section">', unsafe_allow_html=True)
-    st.markdown('<div class="help-title">Marketing ROI Calculations</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    <p>These calculations help evaluate the impact of marketing spend changes:</p>
-    
-    <p><strong>Sales Volume Change</strong>: Expected change in sales volume after price/marketing changes.</p>
-    <div class="formula-box">New Sales Volume = Current Sales × (1 + Estimated Sales Change (as decimal))</div>
-    
-    <p><strong>Marketing ROI</strong>: Return on investment for increased marketing spend.</p>
-    <div class="formula-box">Marketing ROI (%) = (Net Profit Change / Ad Spend Change) × 100</div>
-    
-    <p><strong>Break-even Additional Units</strong>: Number of additional units needed to break even on increased ad spend.</p>
-    <div class="formula-box">Breakeven Additional Units = Ad Spend Change / Unit Profit</div>
-    
-    <p><strong>Monthly Profit Impact</strong>: Change in monthly profit from marketing and price changes.</p>
-    <div class="formula-box">Monthly Profit Change = New Profit After Ads - Current Profit After Ads</div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Navigation back to main page
-    if st.button("Return to Analysis Tool"):
-        navigate_to_page("analysis")
-
-#------------------------------------
-# TARIFF ANALYSIS FUNCTIONS
-#------------------------------------
-def calculate_landed_cost(msrp, cost_to_produce, tariff_rate, shipping_cost=0, storage_cost=0, customs_fee=0, 
-                         broker_fee=0, other_costs=0, units_per_shipment=1):
-    """Calculate the landed cost and profitability with given tariff rate"""
-    
-    # Calculate per unit costs
-    if units_per_shipment <= 0:
-        units_per_shipment = 1
-    
-    shipping_per_unit = shipping_cost / units_per_shipment
-    storage_per_unit = storage_cost / units_per_shipment
-    customs_per_unit = customs_fee / units_per_shipment
-    broker_per_unit = broker_fee / units_per_shipment
-    other_per_unit = other_costs / units_per_shipment
-    
-    # Calculate tariff amount
-    tariff_amount = cost_to_produce * (tariff_rate / 100)
-    
-    # Calculate total landed cost per unit
-    landed_cost = cost_to_produce + tariff_amount + shipping_per_unit + storage_per_unit + customs_per_unit + broker_per_unit + other_per_unit
-    
-    # Calculate profit and margin
-    profit = msrp - landed_cost
-    margin_percentage = (profit / msrp) * 100 if msrp > 0 else 0
-    
-    # Calculate minimum profitable MSRP
-    min_profitable_msrp = landed_cost * 1.01  # Minimum 1% profit margin
-    
-    # Breakeven price
-    breakeven_price = landed_cost
-    
-    return {
-        "landed_cost": landed_cost,
-        "tariff_amount": tariff_amount,
-        "profit": profit,
-        "margin_percentage": margin_percentage,
-        "min_profitable_msrp": min_profitable_msrp,
-        "breakeven_price": breakeven_price,
-        "cost_breakdown": {
-            "production": cost_to_produce,
-            "tariff": tariff_amount,
-            "shipping": shipping_per_unit,
-            "storage": storage_per_unit,
-            "customs": customs_per_unit,
-            "broker": broker_per_unit,
-            "other": other_per_unit
-        }
-    }
-
-def generate_tariff_scenarios(base_msrp, cost_to_produce, min_tariff=0, max_tariff=100, steps=10, 
-                             shipping_cost=0, storage_cost=0, customs_fee=0, broker_fee=0, 
-                             other_costs=0, units_per_shipment=1):
-    """Generate scenarios for different tariff rates"""
-    
-    tariff_rates = np.linspace(min_tariff, max_tariff, steps)
-    scenarios = []
-    
-    for rate in tariff_rates:
-        result = calculate_landed_cost(
-            base_msrp, cost_to_produce, rate, shipping_cost, storage_cost, 
-            customs_fee, broker_fee, other_costs, units_per_shipment
-        )
+            st.table(metrics_df)
         
-        scenarios.append({
-            "tariff_rate": rate,
-            "landed_cost": result["landed_cost"],
-            "profit": result["profit"],
-            "margin": result["margin_percentage"],
-            "breakeven_price": result["breakeven_price"]
-        })
-    
-    return pd.DataFrame(scenarios)
-
-def generate_price_scenarios(tariff_rate, cost_to_produce, min_price_factor=0.8, max_price_factor=2.0, steps=10,
-                            shipping_cost=0, storage_cost=0, customs_fee=0, broker_fee=0, 
-                            other_costs=0, units_per_shipment=1):
-    """Generate scenarios for different price points at a fixed tariff rate"""
-    
-    # Calculate base landed cost without MSRP
-    base_result = calculate_landed_cost(
-        100, cost_to_produce, tariff_rate, shipping_cost, storage_cost, 
-        customs_fee, broker_fee, other_costs, units_per_shipment
-    )
-    base_landed_cost = base_result["landed_cost"]
-    
-    # Generate price range from min_price_factor to max_price_factor of landed cost
-    min_price = base_landed_cost * min_price_factor
-    max_price = base_landed_cost * max_price_factor
-    
-    price_points = np.linspace(min_price, max_price, steps)
-    scenarios = []
-    
-    for price in price_points:
-        result = calculate_landed_cost(
-            price, cost_to_produce, tariff_rate, shipping_cost, storage_cost, 
-            customs_fee, broker_fee, other_costs, units_per_shipment
-        )
+        with col2:
+            st.markdown("#### Projected Metrics")
+            projected_df = pd.DataFrame({
+                "Metric": [
+                    "Annual Sales",
+                    "Annual Returns (Current)",
+                    "Annual Returns (After Fix)",
+                    "Returns Reduction",
+                    "New Unit Cost",
+                    "New Unit Margin",
+                    "New Margin Percentage"
+                ],
+                "Value": [
+                    f"{results['projected_metrics']['annual_sales']:.0f} units",
+                    f"{results['projected_metrics']['annual_returns_current']:.0f} units",
+                    f"{results['projected_metrics']['annual_returns_after_fix']:.0f} units",
+                    f"{results['projected_metrics']['annual_returns_reduction']:.0f} units",
+                    f"${results['projected_metrics']['new_unit_cost']:.2f}",
+                    f"${results['projected_metrics']['new_unit_margin']:.2f}",
+                    f"{results['projected_metrics']['new_margin_percentage']:.2f}%"
+                ]
+            })
+            st.table(projected_df)
         
-        scenarios.append({
-            "msrp": price,
-            "profit": result["profit"],
-            "margin": result["margin_percentage"],
-            "landed_cost": result["landed_cost"]
-        })
-    
-    return pd.DataFrame(scenarios)
-
-def calculate_ad_roi(current_price, proposed_price, current_ad_spend, proposed_ad_spend, 
-                   current_sales_qty, estimated_sales_change, current_return_rate=0, 
-                   expected_return_rate=None, cost_to_produce=0, tariff_rate=0):
-    """
-    Calculate ROI for advertising spend change
-    
-    Args:
-        current_price: Current sales price per unit
-        proposed_price: Proposed new sales price per unit
-        current_ad_spend: Current monthly ad spend
-        proposed_ad_spend: Proposed monthly ad spend
-        current_sales_qty: Current monthly sales quantity
-        estimated_sales_change: Expected percentage change in sales volume (decimal: 0.1 = 10% increase)
-        current_return_rate: Current product return rate (decimal)
-        expected_return_rate: Expected product return rate after changes (decimal)
-        cost_to_produce: Cost to produce each unit
-        tariff_rate: Import tariff rate percentage
-    
-    Returns:
-        Dict with ROI metrics
-    """
-    # Set expected return rate to current if not provided
-    if expected_return_rate is None:
-        expected_return_rate = current_return_rate
-    
-    # Calculate current metrics
-    current_sales_dollars = current_sales_qty * current_price
-    current_returns_qty = current_sales_qty * current_return_rate
-    current_net_sales_qty = current_sales_qty - current_returns_qty
-    current_net_sales_dollars = current_net_sales_qty * current_price
-    
-    # Calculate tariff cost per unit
-    tariff_cost_per_unit = cost_to_produce * (tariff_rate / 100) if cost_to_produce > 0 else 0
-    
-    # Calculate current profit (excluding ad spend)
-    unit_profit = current_price - cost_to_produce - tariff_cost_per_unit
-    current_profit_before_ads = unit_profit * current_net_sales_qty
-    current_profit_after_ads = current_profit_before_ads - current_ad_spend
-    
-    # Calculate estimated new sales
-    new_sales_qty = current_sales_qty * (1 + estimated_sales_change)
-    new_returns_qty = new_sales_qty * expected_return_rate
-    new_net_sales_qty = new_sales_qty - new_returns_qty
-    new_unit_profit = proposed_price - cost_to_produce - tariff_cost_per_unit
-    
-    # Calculate new sales dollars
-    new_sales_dollars = new_sales_qty * proposed_price
-    new_net_sales_dollars = new_net_sales_qty * proposed_price
-    
-    # Calculate new profit
-    new_profit_before_ads = new_unit_profit * new_net_sales_qty
-    new_profit_after_ads = new_profit_before_ads - proposed_ad_spend
-    
-    # Calculate changes
-    sales_qty_change = new_sales_qty - current_sales_qty
-    sales_dollars_change = new_sales_dollars - current_sales_dollars
-    net_profit_change = new_profit_after_ads - current_profit_after_ads
-    ad_spend_change = proposed_ad_spend - current_ad_spend
-    
-    # Calculate ROI metrics
-    if ad_spend_change > 0:
-        roi_percentage = (net_profit_change / ad_spend_change) * 100 if ad_spend_change != 0 else 0
-    else:
-        roi_percentage = 0  # If ad spend decreased, traditional ROI doesn't apply
-    
-    # Calculate breakeven metrics for ad spend
-    if new_unit_profit > 0:
-        breakeven_additional_units = ad_spend_change / new_unit_profit if ad_spend_change > 0 else 0
-        breakeven_sales_change = breakeven_additional_units / current_sales_qty if current_sales_qty > 0 else 0
-    else:
-        breakeven_additional_units = float('inf')
-        breakeven_sales_change = float('inf')
-    
-    return {
-        # Current metrics
-        "current_price": current_price,
-        "current_ad_spend": current_ad_spend,
-        "current_sales_qty": current_sales_qty,
-        "current_sales_dollars": current_sales_dollars,
-        "current_return_rate": current_return_rate,
-        "current_returns_qty": current_returns_qty,
-        "current_net_sales_qty": current_net_sales_qty,
-        "current_net_sales_dollars": current_net_sales_dollars,
-        "current_profit_before_ads": current_profit_before_ads,
-        "current_profit_after_ads": current_profit_after_ads,
+        col1, col2 = st.columns(2)
         
-        # New metrics
-        "proposed_price": proposed_price,
-        "proposed_ad_spend": proposed_ad_spend,
-        "estimated_sales_change": estimated_sales_change,
-        "expected_return_rate": expected_return_rate,
-        "new_sales_qty": new_sales_qty,
-        "new_sales_dollars": new_sales_dollars,
-        "new_returns_qty": new_returns_qty,
-        "new_net_sales_qty": new_net_sales_qty,
-        "new_net_sales_dollars": new_net_sales_dollars,
-        "new_profit_before_ads": new_profit_before_ads,
-        "new_profit_after_ads": new_profit_after_ads,
+        with col1:
+            st.markdown("#### Financial Impact")
+            financial_df = pd.DataFrame({
+                "Metric": [
+                    "Annual Loss (Current)",
+                    "Annual Loss (After Fix)",
+                    "Annual Savings",
+                    "Risk-Adjusted Savings",
+                    "Total Investment",
+                    "ROI (1 Year)",
+                    "ROI (3 Year)",
+                    "Payback Period"
+                ],
+                "Value": [
+                    f"${results['financial_impact']['annual_loss']:.2f}",
+                    f"${results['financial_impact']['annual_loss_after_fix']:.2f}",
+                    f"${results['financial_impact']['annual_savings']:.2f}",
+                    f"${results['financial_impact']['risk_adjusted_savings']:.2f}",
+                    f"${results['financial_impact']['total_investment']:.2f}",
+                    f"{results['financial_impact']['roi_1yr']:.2f}%",
+                    f"{results['financial_impact']['roi_3yr']:.2f}%",
+                    f"{results['financial_impact']['payback_period']:.2f} months"
+                ]
+            })
+            st.table(financial_df)
         
-        # Changes
-        "sales_qty_change": sales_qty_change,
-        "sales_dollars_change": sales_dollars_change,
-        "ad_spend_change": ad_spend_change,
-        "net_profit_change": net_profit_change,
-        
-        # ROI metrics
-        "roi_percentage": roi_percentage,
-        "breakeven_additional_units": breakeven_additional_units,
-        "breakeven_sales_change": breakeven_sales_change,
-        
-        # Unit economics
-        "unit_profit": unit_profit,
-        "new_unit_profit": new_unit_profit
-    }
-
-def generate_ad_spend_scenarios(current_price, proposed_price, current_ad_spend, 
-                             current_sales_qty, estimated_sales_change_per_ad_dollar,
-                             min_spend_factor=0.5, max_spend_factor=3.0, steps=10,
-                             current_return_rate=0, expected_return_rate=None,
-                             cost_to_produce=0, tariff_rate=0):
-    """Generate scenarios for different ad spend levels"""
+        with col2:
+            st.markdown("#### Risk Assessment")
+            risk_df = pd.DataFrame({
+                "Factor": [
+                    "Brand Impact",
+                    "Medical Impact",
+                    "Regulatory Risk",
+                    "Expected Reduction",
+                    "Solution Confidence"
+                ],
+                "Assessment": [
+                    results['risk_assessment']['brand_impact'],
+                    results['risk_assessment']['medical_impact'],
+                    results['risk_assessment']['regulatory_risk'],
+                    f"{results['projected_metrics']['expected_reduction']:.2f}%",
+                    f"{results['projected_metrics']['solution_confidence']:.2f}%"
+                ]
+            })
+            st.table(risk_df)
     
-    # Generate range of ad spend values
-    min_spend = current_ad_spend * min_spend_factor
-    max_spend = current_ad_spend * max_spend_factor
-    ad_spend_points = np.linspace(min_spend, max_spend, steps)
-    
-    scenarios = []
-    
-    for ad_spend in ad_spend_points:
-        # Estimate sales change based on ad spend change
-        ad_spend_change_factor = (ad_spend - current_ad_spend) / current_ad_spend if current_ad_spend > 0 else 0
-        estimated_sales_change = ad_spend_change_factor * estimated_sales_change_per_ad_dollar
-        
-        # Calculate ROI
-        result = calculate_ad_roi(
-            current_price, proposed_price, current_ad_spend, ad_spend, 
-            current_sales_qty, estimated_sales_change, current_return_rate, 
-            expected_return_rate, cost_to_produce, tariff_rate
-        )
-        
-        scenarios.append({
-            "ad_spend": ad_spend,
-            "sales_qty": result["new_sales_qty"],
-            "sales_dollars": result["new_sales_dollars"],
-            "profit": result["new_profit_after_ads"],
-            "profit_change": result["net_profit_change"],
-            "roi": result["roi_percentage"]
-        })
-    
-    return pd.DataFrame(scenarios)
-
-#------------------------------------
-# MONTE CARLO SIMULATION FUNCTIONS
-#------------------------------------
-def run_monte_carlo_simulation(
-    scenario, 
-    num_simulations=1000, 
-    param_variations=None):
-    """
-    Run Monte Carlo simulation for a quality issue analysis scenario
-    
-    Args:
-        scenario: Base scenario data dictionary
-        num_simulations: Number of simulation runs
-        param_variations: Dict with parameters and their variation ranges as percentages
-                e.g. {'reduction_rate': 15, 'additional_cost_per_item': 10}
-                means reduction_rate can vary by ±15%, additional cost by ±10%
-                
-    Returns:
-        Tuple of (results_dataframe, message)
-    """
-    if not scenario:
-        return None, "Scenario not found"
-    
-    # Set default parameter variations if not provided
-    if not param_variations:
-        param_variations = {
-            'expected_reduction': 20,        # ±20% variation
-            'fix_cost_per_unit': 15,         # ±15% variation
-            'fix_cost_upfront': 10,          # ±10% variation
-            'sales_30d': 5,                  # ±5% variation
-            'returns_30d': 10,               # ±10% variation
-            'sales_price': 5                 # ±5% variation
-        }
-    
-    # Initialize results dataframe
-    results = pd.DataFrame(columns=[
-        'simulation_id', 'expected_reduction', 'fix_cost_per_unit', 'fix_cost_upfront',
-        'sales_30d', 'returns_30d', 'sales_price', 'roi_3yr', 'payback_months', 
-        'net_benefit', 'annual_savings', 'annual_additional_costs'
-    ])
-    
-    # Run simulations
-    for i in range(num_simulations):
-        try:
-            # Create variations of parameters
-            sim_expected_reduction = max(0, scenario['solution_metrics']['expected_reduction'] * np.random.uniform(
-                1 - param_variations['expected_reduction']/100,
-                1 + param_variations['expected_reduction']/100
-            ))
-            
-            sim_fix_cost_per_unit = max(0, scenario['financial_impact']['fix_cost_per_unit'] * np.random.uniform(
-                1 - param_variations['fix_cost_per_unit']/100,
-                1 + param_variations['fix_cost_per_unit']/100
-            ))
-            
-            sim_fix_cost_upfront = max(0, scenario['financial_impact']['fix_cost_upfront'] * np.random.uniform(
-                1 - param_variations['fix_cost_upfront']/100,
-                1 + param_variations['fix_cost_upfront']/100
-            ))
-            
-            sim_sales_30d = max(1, scenario['sales_30d'] if 'sales_30d' in scenario else 
-                               scenario['financial_impact']['monthly_return_cost'] / 
-                               (scenario['current_metrics']['return_rate_30d'] / 100 * 
-                                scenario['financial_impact']['current_unit_cost']))
-            sim_sales_30d *= np.random.uniform(
-                1 - param_variations['sales_30d']/100,
-                1 + param_variations['sales_30d']/100
-            )
-            
-            sim_returns_30d = scenario['returns_30d'] if 'returns_30d' in scenario else scenario['financial_impact']['monthly_return_cost'] / scenario['financial_impact']['current_unit_cost']
-            sim_returns_30d = min(sim_sales_30d, max(0, sim_returns_30d * np.random.uniform(
-                1 - param_variations['returns_30d']/100,
-                1 + param_variations['returns_30d']/100
-            )))
-            
-            sim_sales_price = max(scenario['financial_impact']['current_unit_cost'], scenario['current_metrics']['sales_price'] * np.random.uniform(
-                1 - param_variations['sales_price']/100,
-                1 + param_variations['sales_price']/100
-            ))
-            
-            # Run quality analysis with simulated values
-            sim_result = analyze_quality_issue(
-                sku=scenario['sku'],
-                product_type=scenario['product_type'],
-                sales_30d=sim_sales_30d,
-                returns_30d=sim_returns_30d,
-                issue_description=scenario['issue_description'],
-                current_unit_cost=scenario['financial_impact']['current_unit_cost'],
-                fix_cost_upfront=sim_fix_cost_upfront,
-                fix_cost_per_unit=sim_fix_cost_per_unit,
-                sales_price=sim_sales_price,
-                expected_reduction=sim_expected_reduction,
-                solution_confidence=scenario['solution_metrics']['solution_confidence'],
-                risk_level=scenario['medical_device_impact']['risk_level'],
-                regulatory_impact=scenario['medical_device_impact']['regulatory_impact']
-            )
-            
-            # Extract key metrics from simulation result
-            results.loc[i] = [
-                i, 
-                sim_expected_reduction,
-                sim_fix_cost_per_unit,
-                sim_fix_cost_upfront,
-                sim_sales_30d,
-                sim_returns_30d,
-                sim_sales_price,
-                sim_result['financial_impact']['roi_3yr'],
-                sim_result['financial_impact']['payback_months'],
-                sim_result['financial_impact']['annual_savings'] * 3 - sim_result['financial_impact']['total_investment'],
-                sim_result['financial_impact']['annual_savings'],
-                sim_fix_cost_per_unit * sim_sales_30d * 12  # Annual additional costs
-            ]
-            
-        except Exception as e:
-            # Log error and continue with next simulation
-            print(f"Error in simulation {i}: {str(e)}")
-            continue
-    
-    return results, "Simulation completed successfully"
-
-#------------------------------------
-# UI COMPONENTS
-#------------------------------------
-
-def display_landed_cost_calculator():
-    """Display the landed cost calculator UI"""
-    st.markdown("<h2 class='sub-header'>Import Cost Calculator</h2>", unsafe_allow_html=True)
-    
-    # Create two columns for basic product info
+    # Export options
+    st.markdown("### Export Results")
     col1, col2 = st.columns(2)
     
     with col1:
-        product_name = st.text_input(
-            "Product Name", 
-            value="",
-            help="Enter the full product name or description. Example: 'Premium Knee Brace'"
-        )
-        
-        sku = st.text_input(
-            "Product SKU", 
-            value="",
-            help="Enter the Stock Keeping Unit (unique identifier). Example: 'KB-2025-BLK'"
-        )
-        
-        msrp = st.number_input(
-            "MSRP / Retail Price ($)", 
-            min_value=0.01, 
-            value=100.00, 
-            step=0.01,
-            help="Manufacturer's Suggested Retail Price - the price at which you plan to sell the product. Enter in USD."
-        )
+        st.markdown(export_as_csv(results), unsafe_allow_html=True)
     
     with col2:
-        cost_to_produce = st.number_input(
-            "Manufacturing Cost per Unit ($)", 
-            min_value=0.01, 
-            value=50.00, 
-            step=0.01,
-            help="The direct cost to produce or acquire each unit before any import costs or tariffs. Enter in USD."
-        )
+        st.markdown(export_as_pdf(results), unsafe_allow_html=True)
+
+def display_chat_assistant(results=None):
+    """Display the AI chat assistant with conversation history."""
+    with st.expander("Quality Consultant AI Assistant", expanded=True):
+        # Display conversation history
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="user-bubble">{msg["content"]}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="assistant-bubble">{msg["content"]}</div>', unsafe_allow_html=True)
         
-        tariff_rate = st.slider(
-            "Tariff Rate (%)", 
-            min_value=0, 
-            max_value=100, 
-            value=25, 
-            step=1,
-            help="Import duty rate as a percentage of the manufacturing cost. Varies by product category and country of origin."
-        )
+        # Input for new message
+        user_input = st.text_area("Ask the AI assistant about quality issues, regulations, or recommendations:", key="chat_input", placeholder="e.g., What regulatory considerations should I keep in mind?")
         
-        currency = st.selectbox(
-            "Currency", 
-            options=["USD", "EUR", "GBP", "CAD", "AUD"], 
-            index=0,
-            help="Select the currency for all monetary values. Calculations will be performed in the selected currency."
-        )
-    
-    # Optional import costs section with expander
-    with st.expander("Additional Import Costs (Optional)", expanded=False):
-        st.info("These costs will be distributed across the number of units in your shipment. All fields are optional.")
-        
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            shipping_cost = st.number_input(
-                "Shipping Cost per Shipment ($)", 
-                min_value=0.0, 
-                value=1000.0, 
-                step=10.0,
-                help="Total cost to ship an entire container or shipment. Example: ocean freight, air freight, insurance."
-            )
-            
-            storage_cost = st.number_input(
-                "Storage/Warehousing Cost ($)", 
-                min_value=0.0, 
-                value=0.0, 
-                step=10.0,
-                help="Costs for warehousing or storage associated with this shipment. Example: receiving fees, monthly storage fees."
-            )
-            
-            customs_fee = st.number_input(
-                "Customs Processing Fee ($)", 
-                min_value=0.0, 
-                value=250.0, 
-                step=10.0,
-                help="Fees charged by customs for processing your shipment. Example: MPF (Merchandise Processing Fee), HMF (Harbor Maintenance Fee)."
-            )
-        
-        with col4:
-            broker_fee = st.number_input(
-                "Customs Broker Fee ($)", 
-                min_value=0.0, 
-                value=150.0, 
-                step=10.0,
-                help="Fees paid to customs brokers for handling import documentation. Example: entry preparation, ISF filing."
-            )
-            
-            other_costs = st.number_input(
-                "Other Import Costs ($)", 
-                min_value=0.0, 
-                value=0.0, 
-                step=10.0,
-                help="Any other import-related costs not covered by the categories above. Example: compliance testing, labeling, inspection fees."
-            )
-            
-            units_per_shipment = st.number_input(
-                "Units per Shipment", 
-                min_value=1, 
-                value=1000, 
-                step=10,
-                help="The total number of product units in this shipment. Used to calculate per-unit costs from total shipment costs."
-            )
-    
-    # Calculate button
-    calculate_button = st.button(
-        "Calculate Import Costs",
-        help="Click to calculate landed cost, profit margin, and breakeven price based on the inputs above."
-    )
-    
-    if calculate_button:
-        with st.spinner("Calculating..."):
-            # Perform calculation
-            result = calculate_landed_cost(
-                msrp, cost_to_produce, tariff_rate, shipping_cost, storage_cost,
-                customs_fee, broker_fee, other_costs, units_per_shipment
-            )
-            
-            # Add calculation to history
-            calculation_entry = {
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "product": product_name if product_name else "Unnamed Product",
-                "sku": sku if sku else "No SKU",
-                "msrp": msrp,
-                "cost": cost_to_produce,
-                "tariff_rate": tariff_rate,
-                "landed_cost": result['landed_cost'],
-                "profit": result['profit'],
-                "margin": result['margin_percentage']
-            }
-            
-            if 'tariff_calculations' not in st.session_state:
-                st.session_state.tariff_calculations = []
-            
-            st.session_state.tariff_calculations.append(calculation_entry)
-            
-            # Display results
-            st.markdown("<h2 class='sub-header'>Calculation Results</h2>", unsafe_allow_html=True)
-            
-            # Create metrics layout
-            col7, col8, col9, col10 = st.columns(4)
-            
-            with col7:
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Landed Cost</p>
-                    <p class='metric-value'>${result['landed_cost']:.2f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col8:
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Tariff Amount</p>
-                    <p class='metric-value'>${result['tariff_amount']:.2f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col9:
-                profit_color = SUCCESS_COLOR if result['profit'] > 0 else DANGER_COLOR
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Profit per Unit</p>
-                    <p class='metric-value' style='color: {profit_color}'>${result['profit']:.2f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col10:
-                margin_color = SUCCESS_COLOR if result['margin_percentage'] > 15 else (WARNING_COLOR if result['margin_percentage'] > 0 else DANGER_COLOR)
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Profit Margin</p>
-                    <p class='metric-value' style='color: {margin_color}'>{result['margin_percentage']:.1f}%</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Display breakeven and profitability
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("<h2 class='sub-header'>Calculation Results</h2>", unsafe_allow_html=True)
-            
-            # Create metrics layout
-            col11, col12 = st.columns(2)
-            
-            with col11:
-                st.markdown(f"""
-                <div class='result-box'>
-                    <h3>Breakeven Price: ${result['breakeven_price']:.2f}</h3>
-                    <p>At this selling price, you will neither make a profit nor incur a loss after covering all costs including tariffs.</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col12:
-                # Display minimum profitable MSRP
-                st.markdown(f"""
-                <div class='result-box'>
-                    <h3>Minimum Profitable MSRP: ${result['min_profitable_msrp']:.2f}</h3>
-                    <p>This is the minimum price needed to maintain at least a 1% profit margin after all costs and tariffs.</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Create cost breakdown
-            st.markdown("<h3 class='sub-header'>Cost Breakdown</h3>", unsafe_allow_html=True)
-            
-            # Create a pie chart for cost breakdown
-            cost_data = {
-                'Component': ['Production', 'Tariff', 'Shipping', 'Storage', 'Customs', 'Broker', 'Other'],
-                'Amount': [
-                    result['cost_breakdown']['production'],
-                    result['cost_breakdown']['tariff'],
-                    result['cost_breakdown']['shipping'],
-                    result['cost_breakdown']['storage'],
-                    result['cost_breakdown']['customs'],
-                    result['cost_breakdown']['broker'],
-                    result['cost_breakdown']['other']
+        # Send button
+        if st.button("Send", key="send_chat"):
+            if user_input.strip():
+                # Add user message to history
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                
+                # Create system prompt if results are available
+                system_prompt = get_system_prompt(results)
+                
+                # Build messages for API call
+                messages = [{"role": "system", "content": system_prompt}] + [
+                    {"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history
                 ]
+                
+                # Get response from AI
+                with st.spinner("Getting expert advice..."):
+                    ai_resp = call_openai_api(messages)
+                
+                # Add assistant response to history
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_resp})
+                
+                # Clear input and refresh
+                st.rerun()
+
+def display_quality_analysis_form():
+    """Display the quality issue analysis form."""
+    with st.form("quality_analysis_form"):
+        st.markdown("### Quality Issue Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            sku = st.text_input("SKU Number", placeholder="e.g., VH-MED-1001")
+            product_type = st.selectbox(
+                "Product Type",
+                options=["B2C", "B2B", "Hospital", "Home Health", "Specialty"],
+                index=0
+            )
+            sales_30d = st.number_input("Sales (Last 30 Days)", min_value=0, value=1000)
+            returns_30d = st.number_input("Returns (Last 30 Days)", min_value=0, value=50)
+            current_unit_cost = st.number_input("Current Unit Cost ($)", min_value=0.0, value=25.0, format="%.2f")
+            sales_price = st.number_input("Sales Price ($)", min_value=0.0, value=59.99, format="%.2f")
+        
+        with col2:
+            fix_cost_upfront = st.number_input("Fix Cost - Upfront ($)", min_value=0.0, value=5000.0, format="%.2f")
+            fix_cost_per_unit = st.number_input("Fix Cost - Per Unit ($)", min_value=0.0, value=1.50, format="%.2f")
+            expected_reduction = st.slider("Expected Returns Reduction (%)", min_value=0, max_value=100, value=50)
+            solution_confidence = st.slider("Solution Confidence (%)", min_value=0, max_value=100, value=90)
+            monthly_growth_rate = st.slider("Monthly Growth Rate (%)", min_value=0.0, max_value=20.0, value=5.0)
+        
+        # Additional parameters in advanced mode
+        if st.session_state.view_mode == "advanced":
+            st.markdown("### Advanced Parameters")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                brand_impact = st.selectbox(
+                    "Brand Impact",
+                    options=["Low", "Medium", "High"],
+                    index=1
+                )
+            
+            with col2:
+                medical_impact = st.selectbox(
+                    "Medical Impact",
+                    options=["Low", "Medium", "High"],
+                    index=0
+                )
+            
+            with col3:
+                regulatory_risk = st.selectbox(
+                    "Regulatory Risk",
+                    options=["Low", "Medium", "High"],
+                    index=0
+                )
+            
+            additional_params = {
+                "brand_impact": brand_impact,
+                "medical_impact": medical_impact,
+                "regulatory_risk": regulatory_risk
             }
+        else:
+            additional_params = None
+        
+        issue_description = st.text_area(
+            "Issue Description",
+            placeholder="Describe the quality issue in detail...",
+            height=100
+        )
+        
+        submitted = st.form_submit_button("Analyze Quality Issue")
+        
+        if submitted:
+            # Validation
+            if not sku:
+                st.error("SKU Number is required")
+                return
             
-            cost_df = pd.DataFrame(cost_data)
+            if sales_30d <= 0:
+                st.error("Sales must be greater than zero")
+                return
             
-            # Filter out zero values
-            cost_df = cost_df[cost_df['Amount'] > 0]
+            if current_unit_cost <= 0 or sales_price <= 0:
+                st.error("Unit cost and sales price must be greater than zero")
+                return
+            
+            # Run analysis
+            with st.spinner("Analyzing quality issue..."):
+                try:
+                    results = analyze_quality_issue(
+                        sku=sku,
+                        product_type=product_type,
+                        sales_30d=sales_30d,
+                        returns_30d=returns_30d,
+                        issue_description=issue_description,
+                        current_unit_cost=current_unit_cost,
+                        fix_cost_upfront=fix_cost_upfront,
+                        fix_cost_per_unit=fix_cost_per_unit,
+                        sales_price=sales_price,
+                        expected_reduction=expected_reduction,
+                        solution_confidence=solution_confidence,
+                        monthly_growth_rate=monthly_growth_rate,
+                        additional_params=additional_params
+                    )
+                    
+                    st.session_state.quality_analysis_results = results
+                    st.session_state.analysis_submitted = True
+                    st.rerun()
+                except Exception as e:
+                    logger.exception("Error running quality analysis")
+                    st.error(f"Error analyzing quality issue: {str(e)}")
+
+def display_landed_cost_calculator():
+    """Display the landed cost calculator form and results."""
+    st.markdown("### Landed Cost & Tariff Calculator")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        with st.form("landed_cost_form"):
+            st.markdown("#### Product Details")
+            
+            sales_price = st.number_input("Sales Price ($)", min_value=0.0, value=59.99, format="%.2f")
+            unit_cost = st.number_input("Unit Cost ($)", min_value=0.0, value=25.0, format="%.2f")
+            tariff_percentage = st.slider("Tariff Percentage (%)", min_value=0.0, max_value=50.0, value=20.0, step=0.5)
+            
+            st.markdown("#### Shipping & Logistics")
+            shipping_cost = st.number_input("Shipping Cost per Shipment ($)", min_value=0.0, value=250.0, format="%.2f")
+            units_per_shipment = st.number_input("Units per Shipment", min_value=1, value=100)
+            storage_cost = st.number_input("Storage Cost per Unit ($)", min_value=0.0, value=0.5, format="%.2f")
+            
+            st.markdown("#### Fees & Other Costs")
+            customs_fee = st.number_input("Customs Fees per Shipment ($)", min_value=0.0, value=75.0, format="%.2f")
+            broker_fee = st.number_input("Broker Fees per Shipment ($)", min_value=0.0, value=100.0, format="%.2f")
+            other_costs = st.number_input("Other Costs per Shipment ($)", min_value=0.0, value=50.0, format="%.2f")
+            
+            if st.session_state.view_mode == "advanced":
+                st.markdown("#### Advanced Options")
+                currency_exchange_rate = st.number_input("Currency Exchange Rate", min_value=0.1, value=1.0, format="%.4f")
+            else:
+                currency_exchange_rate = 1.0
+            
+            submitted = st.form_submit_button("Calculate Landed Cost")
+            
+            if submitted:
+                try:
+                    with st.spinner("Calculating landed cost..."):
+                        results = calculate_landed_cost(
+                            sales_price=sales_price,
+                            unit_cost=unit_cost,
+                            tariff_percentage=tariff_percentage,
+                            shipping_cost=shipping_cost,
+                            storage_cost=storage_cost,
+                            customs_fee=customs_fee,
+                            broker_fee=broker_fee,
+                            other_costs=other_costs,
+                            units_per_shipment=units_per_shipment,
+                            currency_exchange_rate=currency_exchange_rate
+                        )
+                        
+                        # Run alternative tariff scenarios
+                        tariff_ranges = [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0]
+                        scenarios = generate_tariff_scenarios(results, tariff_ranges)
+                        
+                        st.session_state.tariff_calculations = {
+                            "main_result": results,
+                            "scenarios": scenarios
+                        }
+                        st.rerun()
+                except Exception as e:
+                    logger.exception("Error calculating landed cost")
+                    st.error(f"Error calculating landed cost: {str(e)}")
+    
+    with col2:
+        if st.session_state.tariff_calculations:
+            results = st.session_state.tariff_calculations["main_result"]
+            scenarios = st.session_state.tariff_calculations["scenarios"]
+            
+            st.markdown("#### Landed Cost Results")
+            
+            # Key metrics
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                display_metric_card(
+                    "Landed Cost",
+                    f"${results['landed_cost']:.2f}",
+                    subvalue=f"Base: ${results['base_unit_cost']:.2f} + Extras: ${results['landed_cost'] - results['base_unit_cost']:.2f}"
+                )
+            
+            with col2:
+                display_metric_card(
+                    "Gross Margin",
+                    f"${results['gross_margin']:.2f}",
+                    subvalue=f"{results['margin_percentage']:.2f}%"
+                )
+            
+            with col3:
+                display_metric_card(
+                    "Tariff Amount",
+                    f"${results['tariff_amount']:.2f}",
+                    subvalue=f"{results['tariff_pct']:.2f}% of landed cost"
+                )
+            
+            # Cost breakdown chart
+            st.markdown("#### Cost Breakdown")
+            
+            labels = ['Base Cost', 'Tariff', 'Shipping', 'Storage', 'Customs', 'Broker', 'Other']
+            values = [
+                results['base_unit_cost'],
+                results['tariff_amount'],
+                results['per_unit_shipping'],
+                results['storage_cost'],
+                results['per_unit_customs'],
+                results['per_unit_broker'],
+                results['per_unit_other']
+            ]
             
             # Create pie chart
-            fig = px.pie(
-                cost_df, 
-                values='Amount', 
-                names='Component',
-                title='Cost Component Breakdown per Unit',
-                color_discrete_sequence=px.colors.sequential.Blues_r,
-                hole=0.4,
-            )
+            fig = go.Figure(data=[go.Pie(
+                labels=labels,
+                values=values,
+                hole=.4,
+                marker_colors=[PRIMARY_COLOR, DANGER_COLOR, WARNING_COLOR, TERTIARY_COLOR, SECONDARY_COLOR, SUCCESS_COLOR, TEXT_MUTED]
+            )])
             
             fig.update_layout(
-                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-                margin=dict(l=20, r=20, t=40, b=20),
+                title="Landed Cost Breakdown",
+                height=300,
+                margin=dict(l=40, r=40, t=50, b=40)
             )
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Create a waterfall chart to show how costs build up to landed cost
-            components = ['Production Cost', 'Tariff', 'Shipping', 'Storage', 'Customs', 'Broker', 'Other', 'Final Landed Cost']
-            measures = ['absolute'] + ['relative'] * 6 + ['total']
+            # Tariff scenario comparison
+            st.markdown("#### Tariff Scenario Comparison")
             
-            waterfall_values = [
-                result['cost_breakdown']['production'],
-                result['cost_breakdown']['tariff'],
-                result['cost_breakdown']['shipping'],
-                result['cost_breakdown']['storage'],
-                result['cost_breakdown']['customs'],
-                result['cost_breakdown']['broker'],
-                result['cost_breakdown']['other'],
-                0  # This will be calculated as the total
-            ]
+            tariff_rates = list(scenarios.keys())
+            margin_percentages = [scenario['margin_percentage'] for scenario in scenarios.values()]
+            landed_costs = [scenario['landed_cost'] for scenario in scenarios.values()]
             
-            waterfall_fig = go.Figure(go.Waterfall(
-                name="Cost Breakdown",
-                orientation="v",
-                measure=measures,
-                x=components,
-                textposition="outside",
-                y=waterfall_values,
-                connector={"line": {"color": TEXT_SECONDARY}},
-                increasing={"marker": {"color": SECONDARY_COLOR}},
-                totals={"marker": {"color": PRIMARY_COLOR}}
-            ))
+            # Create dual-axis chart
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            waterfall_fig.update_layout(
-                title="Build-up to Landed Cost",
-                showlegend=False,
-                height=400,
-                margin=dict(l=20, r=20, t=40, b=20),
+            fig.add_trace(
+                go.Bar(
+                    x=tariff_rates,
+                    y=landed_costs,
+                    name="Landed Cost",
+                    marker_color=SECONDARY_COLOR
+                ),
+                secondary_y=False,
             )
             
-            st.plotly_chart(waterfall_fig, use_container_width=True)
-
-# Create scenario analysis section
-if st.checkbox("Run Tariff Rate Scenario Analysis", key="tariff_scenario_check"):
-    st.markdown("<h3 class='sub-header'>Tariff Rate Scenario Analysis</h3>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        min_tariff = st.number_input("Minimum Tariff Rate (%)", min_value=0, max_value=100, value=0)
-    
-    with col2:
-        max_tariff = st.number_input("Maximum Tariff Rate (%)", min_value=0, max_value=100, value=50)
-    
-    with col3:
-        tariff_steps = st.number_input("Number of Steps", min_value=2, max_value=20, value=10)
-    
-    if st.button("Generate Tariff Scenarios"):
-        with st.spinner("Analyzing tariff scenarios..."):
-            # Generate scenarios
-            scenarios_df = generate_tariff_scenarios(
-                msrp, cost_to_produce, min_tariff, max_tariff, tariff_steps,
-                shipping_cost, storage_cost, customs_fee, broker_fee,
-                other_costs, units_per_shipment
-            )
-
-# Create plot
-fig = make_subplots(specs=[[{"secondary_y": True}]])
-                        
-# Add landed cost line
-fig.add_trace(
-    go.Scatter(
-        x=scenarios_df['tariff_rate'],
-        y=scenarios_df['landed_cost'],
-        name="Landed Cost",
-        line=dict(color=PRIMARY_COLOR, width=3)
-    )
-)
-                        
-# Add profit line on secondary axis
-fig.add_trace(
-    go.Scatter(
-        x=scenarios_df['tariff_rate'],
-        y=scenarios_df['profit'],
-        name="Profit per Unit",
-        line=dict(color=SUCCESS_COLOR, width=3, dash='dot')
-    ),
-    secondary_y=True
-)
-                        
-# Add margin line on secondary axis
-fig.add_trace(
-    go.Scatter(
-        x=scenarios_df['tariff_rate'],
-        y=scenarios_df['margin'],
-        name="Margin %",
-        line=dict(color=WARNING_COLOR, width=3, dash='dot')
-    ),
-    secondary_y=True
-)
-                        
-# Add breakeven line
-fig.add_trace(
-    go.Scatter(
-        x=scenarios_df['tariff_rate'],
-        y=scenarios_df['breakeven_price'],
-        name="Breakeven Price",
-        line=dict(color=DANGER_COLOR, width=2, dash='dash')
-    )
-)
-                        
-# Mark the current tariff rate
-fig.add_vline(
-    x=tariff_rate,
-    line_dash="solid",
-    line_color=TEXT_SECONDARY,
-    annotation_text=f"Current Rate ({tariff_rate}%)",
-    annotation_position="top right"
-)
-                        
-# Mark zero profit line
-fig.add_hline(
-    y=0,
-    line_dash="dash",
-    line_color=DANGER_COLOR,
-    secondary_y=True,
-    annotation_text="Break-even",
-    annotation_position="bottom right"
-)
-                        
-# Update layout
-fig.update_layout(
-    title_text="Impact of Tariff Rates on Cost, Price, and Profitability",
-    xaxis_title="Tariff Rate (%)",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=20, r=20, t=40, b=20),
-    height=500
-)
-                        
-# Update y-axes
-fig.update_yaxes(title_text="Cost & Price ($)", secondary_y=False)
-fig.update_yaxes(title_text="Profit ($) & Margin (%)", secondary_y=True)
-                        
-st.plotly_chart(fig, use_container_width=True)
-                        
-# Display data in table
-with st.expander("View Scenario Data Table", expanded=False):
-    st.write("Tariff Rate Impact Data:")
-    formatted_df = scenarios_df.copy()
-    formatted_df['tariff_rate'] = formatted_df['tariff_rate'].apply(lambda x: f"{x:.1f}%")
-    formatted_df['landed_cost'] = formatted_df['landed_cost'].apply(lambda x: f"${x:.2f}")
-    formatted_df['profit'] = formatted_df['profit'].apply(lambda x: f"${x:.2f}")
-    formatted_df['margin'] = formatted_df['margin'].apply(lambda x: f"{x:.1f}%")
-    formatted_df['breakeven_price'] = formatted_df['breakeven_price'].apply(lambda x: f"${x:.2f}")
-    
-    st.dataframe(formatted_df, use_container_width=True)
-    
-    # Download link for CSV
-    csv = scenarios_df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="tariff_scenarios.csv" class="download-link">Download Scenario Data as CSV</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-# Create price scenario analysis section
-if st.checkbox("Run Price Scenario Analysis", key="price_scenario_check"):
-    st.markdown("<h3 class='sub-header'>Price Scenario Analysis</h3>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        min_price_factor = st.slider("Minimum Price Factor", min_value=0.5, max_value=1.0, value=0.8, step=0.05,
-                               help="Minimum price as a factor of landed cost (e.g., 0.8 = 80% of landed cost)")
-    
-    with col2:
-        max_price_factor = st.slider("Maximum Price Factor", min_value=1.0, max_value=3.0, value=2.0, step=0.1,
-                               help="Maximum price as a factor of landed cost (e.g., 2.0 = 200% of landed cost)")
-    
-    with col3:
-        price_steps = st.number_input("Number of Price Points", min_value=2, max_value=20, value=10)
-    
-    if st.button("Generate Price Scenarios"):
-        with st.spinner("Analyzing price scenarios..."):
-            # Generate scenarios
-            price_scenarios_df = generate_price_scenarios(
-                tariff_rate, cost_to_produce, min_price_factor, max_price_factor, price_steps,
-                shipping_cost, storage_cost, customs_fee, broker_fee,
-                other_costs, units_per_shipment
+            fig.add_trace(
+                go.Scatter(
+                    x=tariff_rates,
+                    y=margin_percentages,
+                    name="Margin %",
+                    mode='lines+markers',
+                    marker=dict(color=PRIMARY_COLOR),
+                    line=dict(width=3)
+                ),
+                secondary_y=True,
             )
             
-            # Create plot
-            price_fig = px.line(
-                price_scenarios_df,
-                x="msrp",
-                y=["profit", "margin"],
-                labels={"msrp": "Selling Price ($)", "value": "Value", "variable": "Metric"},
-                title="Profit and Margin at Different Price Points",
-                color_discrete_map={"profit": SUCCESS_COLOR, "margin": WARNING_COLOR}
-            )
-            
-            # Add vertical line for current MSRP
-            price_fig.add_vline(
-                x=msrp,
-                line_dash="solid",
-                line_color=TEXT_SECONDARY,
-                annotation_text=f"Current MSRP (${msrp:.2f})",
-                annotation_position="top right"
-            )
-            
-            # Add horizontal line for zero profit
-            price_fig.add_hline(
-                y=0,
-                line_dash="dash",
-                line_color=DANGER_COLOR,
-                annotation_text="Break-even",
-                annotation_position="bottom right"
-            )
-            
-            # Add landed cost vertical line
-            price_fig.add_vline(
-                x=result['landed_cost'],
-                line_dash="dash",
-                line_color=DANGER_COLOR,
-                annotation_text=f"Landed Cost (${result['landed_cost']:.2f})",
-                annotation_position="bottom left"
-            )
-            
-            # Update layout
-            price_fig.update_layout(
-                xaxis_title="Selling Price ($)",
-                yaxis_title="Value",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=500
-            )
-            
-            st.plotly_chart(price_fig, use_container_width=True)
-            
-            # Create profit margin heat map
-            profit_margin_df = price_scenarios_df.copy()
-            
-            # Add profit margin categories
-            def categorize_margin(margin):
-                if margin <= 0:
-                    return "Loss"
-                elif margin < 15:
-                    return "Low"
-                elif margin < 30:
-                    return "Medium"
-                else:
-                    return "High"
-            
-            profit_margin_df['margin_category'] = profit_margin_df['margin'].apply(categorize_margin)
-            
-            # Create color map
-            color_map = {
-                "Loss": DANGER_COLOR,
-                "Low": WARNING_COLOR,
-                "Medium": SECONDARY_COLOR,
-                "High": SUCCESS_COLOR
-            }
-            
-            # Create margin category chart
-            margin_fig = px.bar(
-                profit_margin_df,
-                x="msrp",
-                y="profit",
-                color="margin_category",
-                labels={"msrp": "Selling Price ($)", "profit": "Profit per Unit ($)", "margin_category": "Margin Category"},
-                title="Profit by Selling Price and Margin Category",
-                color_discrete_map=color_map
-            )
-            
-            # Add current MSRP line
-            margin_fig.add_vline(
-                x=msrp,
-                line_dash="solid",
-                line_color=TEXT_SECONDARY,
-                annotation_text=f"Current MSRP (${msrp:.2f})",
-                annotation_position="top right"
-            )
-            
-            # Update layout
-            margin_fig.update_layout(
-                xaxis_title="Selling Price ($)",
-                yaxis_title="Profit per Unit ($)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=400
-            )
-            
-            st.plotly_chart(margin_fig, use_container_width=True)
-            
-            # Display data in table
-            with st.expander("View Price Scenario Data Table", expanded=False):
-                st.write("Price Impact Data:")
-                formatted_price_df = price_scenarios_df.copy()
-                formatted_price_df['msrp'] = formatted_price_df['msrp'].apply(lambda x: f"${x:.2f}")
-                formatted_price_df['profit'] = formatted_price_df['profit'].apply(lambda x: f"${x:.2f}")
-                formatted_price_df['margin'] = formatted_price_df['margin'].apply(lambda x: f"{x:.1f}%")
-                formatted_price_df['landed_cost'] = formatted_price_df['landed_cost'].apply(lambda x: f"${x:.2f}")
-                
-                st.dataframe(formatted_price_df, use_container_width=True)
-                
-                # Download link for CSV
-                price_csv = price_scenarios_df.to_csv(index=False)
-                price_b64 = base64.b64encode(price_csv.encode()).decode()
-                price_href = f'<a href="data:file/csv;base64,{price_b64}" download="price_scenarios.csv" class="download-link">Download Price Scenario Data as CSV</a>'
-                st.markdown(price_href, unsafe_allow_html=True)
-
-def calculate_ad_roi_ui():
-    """Display the advertising ROI calculator UI"""
-    st.markdown("<h2 class='sub-header'>Marketing ROI Calculator</h2>", unsafe_allow_html=True)
-    
-    # Create two columns for basic inputs
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        current_price = st.number_input(
-            "Current Sales Price ($)", 
-            min_value=0.01, 
-            value=100.00, 
-            step=0.01,
-            help="Current selling price per unit"
-        )
-        
-        proposed_price = st.number_input(
-            "Proposed Sales Price ($)", 
-            min_value=0.0, 
-            value=0.0, 
-            step=0.01,
-            help="Proposed new selling price per unit (leave at 0 to keep current price)"
-        )
-        
-        if proposed_price <= 0:
-            proposed_price = current_price
-        
-        current_ad_spend = st.number_input(
-            "Current Monthly Ad Spend ($)", 
-            min_value=0.0, 
-            value=1000.0, 
-            step=100.0,
-            help="Current monthly advertising spend"
-        )
-        
-        proposed_ad_spend = st.number_input(
-            "Proposed Monthly Ad Spend ($)", 
-            min_value=0.0, 
-            value=2000.0, 
-            step=100.0,
-            help="Proposed monthly advertising spend"
-        )
-    
-    with col2:
-        current_sales_qty = st.number_input(
-            "Current Monthly Sales Quantity", 
-            min_value=1, 
-            value=100, 
-            step=1,
-            help="Number of units sold per month at current ad spend"
-        )
-        
-        estimated_sales_change = st.slider(
-            "Estimated Sales Volume Change (%)", 
-            min_value=-50.0, 
-            max_value=200.0, 
-            value=20.0, 
-            step=5.0,
-            help="Estimated percentage change in sales volume after ad spend change"
-        ) / 100.0  # Convert to decimal
-        
-        current_return_rate = st.slider(
-            "Current Return Rate (%)", 
-            min_value=0.0, 
-            max_value=50.0, 
-            value=5.0, 
-            step=1.0,
-            help="Current product return rate percentage"
-        ) / 100.0  # Convert to decimal
-        
-        expected_return_rate = st.slider(
-            "Expected Return Rate After Changes (%)", 
-            min_value=0.0, 
-            max_value=50.0, 
-            value=5.0, 
-            step=1.0,
-            help="Expected return rate after implementing price and marketing changes"
-        ) / 100.0  # Convert to decimal
-    
-    # Optional production cost inputs
-    with st.expander("Production Cost Details (Optional)", expanded=False):
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            cost_to_produce = st.number_input(
-                "Cost to Produce per Unit ($)", 
-                min_value=0.0, 
-                value=50.0, 
-                step=1.0,
-                help="Cost to produce or acquire each unit before any other costs"
-            )
-            
-            tariff_rate = st.slider(
-                "Import Tariff Rate (%)", 
-                min_value=0.0, 
-                max_value=100.0, 
-                value=25.0, 
-                step=1.0,
-                help="Import duty rate as a percentage of the production cost, if applicable"
-            )
-    
-    # Calculate button
-    calculate_button = st.button(
-        "Calculate Marketing ROI",
-        help="Click to calculate ROI and financial impact of ad spend and price changes"
-    )
-    
-    if calculate_button:
-        with st.spinner("Calculating..."):
-            # Perform calculation
-            result = calculate_ad_roi(
-                current_price=current_price,
-                proposed_price=proposed_price,
-                current_ad_spend=current_ad_spend,
-                proposed_ad_spend=proposed_ad_spend,
-                current_sales_qty=current_sales_qty,
-                estimated_sales_change=estimated_sales_change,
-                current_return_rate=current_return_rate,
-                expected_return_rate=expected_return_rate,
-                cost_to_produce=cost_to_produce,
-                tariff_rate=tariff_rate
-            )
-            
-            # Display results
-            st.markdown("<h2 class='sub-header'>Marketing ROI Analysis Results</h2>", unsafe_allow_html=True)
-            
-            # Key metrics
-            col5, col6, col7, col8 = st.columns(4)
-            
-            with col5:
-                roi_color = SUCCESS_COLOR if result['roi_percentage'] > 0 else DANGER_COLOR
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>ROI on Ad Spend Change</p>
-                    <p class='metric-value' style='color:{roi_color}'>{result['roi_percentage']:.1f}%</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col6:
-                profit_change_color = SUCCESS_COLOR if result['net_profit_change'] > 0 else DANGER_COLOR
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Monthly Profit Change</p>
-                    <p class='metric-value' style='color:{profit_change_color}'>${result['net_profit_change']:.2f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col7:
-                sales_color = SUCCESS_COLOR if result['sales_qty_change'] > 0 else DANGER_COLOR
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Sales Volume Change</p>
-                    <p class='metric-value' style='color:{sales_color}'>{result['sales_qty_change']:.0f} units</p>
-                    <p style='font-size:0.8rem;'>({estimated_sales_change * 100:.1f}%)</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col8:
-                st.markdown(f"""
-                <div class='metric-card'>
-                    <p class='metric-label'>Breakeven Additional Units</p>
-                    <p class='metric-value'>{result['breakeven_additional_units']:.1f}</p>
-                    <p style='font-size:0.8rem;'>({result['breakeven_sales_change'] * 100:.1f}% increase)</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Comparison table
-            st.markdown("<h3>Current vs. Proposed Scenario</h3>", unsafe_allow_html=True)
-            
-            comparison_data = {
-                'Metric': [
-                    'Monthly Ad Spend',
-                    'Sales Price',
-                    'Sales Quantity',
-                    'Sales Revenue',
-                    'Return Rate',
-                    'Returns Quantity',
-                    'Net Sales Quantity',
-                    'Net Sales Revenue',
-                    'Profit Before Ads',
-                    'Profit After Ads'
-                ],
-                'Current': [
-                    f"${result['current_ad_spend']:.2f}",
-                    f"${result['current_price']:.2f}",
-                    f"{result['current_sales_qty']:.0f}",
-                    f"${result['current_sales_dollars']:.2f}",
-                    f"{result['current_return_rate'] * 100:.1f}%",
-                    f"{result['current_returns_qty']:.1f}",
-                    f"{result['current_net_sales_qty']:.1f}",
-                    f"${result['current_net_sales_dollars']:.2f}",
-                    f"${result['current_profit_before_ads']:.2f}",
-                    f"${result['current_profit_after_ads']:.2f}"
-                ],
-                'Proposed': [
-                    f"${result['proposed_ad_spend']:.2f}",
-                    f"${result['proposed_price']:.2f}",
-                    f"{result['new_sales_qty']:.0f}",
-                    f"${result['new_sales_dollars']:.2f}",
-                    f"{result['expected_return_rate'] * 100:.1f}%",
-                    f"{result['new_returns_qty']:.1f}",
-                    f"{result['new_net_sales_qty']:.1f}",
-                    f"${result['new_net_sales_dollars']:.2f}",
-                    f"${result['new_profit_before_ads']:.2f}",
-                    f"${result['new_profit_after_ads']:.2f}"
-                ],
-                'Change': [
-                    f"${result['ad_spend_change']:.2f}",
-                    f"${proposed_price - current_price:.2f}",
-                    f"{result['sales_qty_change']:.0f}",
-                    f"${result['sales_dollars_change']:.2f}",
-                    f"{(result['expected_return_rate'] - result['current_return_rate']) * 100:.1f}%",
-                    f"{result['new_returns_qty'] - result['current_returns_qty']:.1f}",
-                    f"{result['new_net_sales_qty'] - result['current_net_sales_qty']:.1f}",
-                    f"${result['new_net_sales_dollars'] - result['current_net_sales_dollars']:.2f}",
-                    f"${result['new_profit_before_ads'] - result['current_profit_before_ads']:.2f}",
-                    f"${result['net_profit_change']:.2f}"
-                ]
-            }
-            
-            comparison_df = pd.DataFrame(comparison_data)
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-            
-            # Create visualization
-            st.markdown("<h3>Visual Analysis</h3>", unsafe_allow_html=True)
-            
-            # Create bar chart comparison
-            fig = go.Figure()
-            
-            # Add current scenario
-            fig.add_trace(go.Bar(
-                name='Current Scenario',
-                x=['Ad Spend', 'Net Sales', 'Profit After Ads'],
-                y=[
-                    result['current_ad_spend'],
-                    result['current_net_sales_dollars'],
-                    result['current_profit_after_ads']
-                ],
-                marker_color=SECONDARY_COLOR
-            ))
-            
-            # Add proposed scenario
-            fig.add_trace(go.Bar(
-                name='Proposed Scenario',
-                x=['Ad Spend', 'Net Sales', 'Profit After Ads'],
-                y=[
-                    result['proposed_ad_spend'],
-                    result['new_net_sales_dollars'],
-                    result['new_profit_after_ads']
-                ],
-                marker_color=PRIMARY_COLOR
-            ))
-            
-            # Update layout
             fig.update_layout(
-                title='Financial Comparison: Current vs. Proposed',
-                barmode='group',
-                yaxis_title='Amount ($)',
+                title="Impact of Different Tariff Rates",
+                xaxis_title="Tariff Rate",
+                height=400,
+                margin=dict(l=40, r=40, t=50, b=40),
                 legend=dict(
                     orientation="h",
                     yanchor="bottom",
                     y=1.02,
-                    xanchor="center",
-                    x=0.5
-                ),
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            fig.update_yaxes(title_text="Landed Cost ($)", secondary_y=False)
+            fig.update_yaxes(title_text="Gross Margin (%)", secondary_y=True)
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Detailed breakdown in expandable section
+            with st.expander("Detailed Cost Breakdown"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### Cost Components")
+                    cost_df = pd.DataFrame({
+                        "Component": [
+                            "Base Unit Cost",
+                            "Tariff Amount",
+                            "Shipping (Per Unit)",
+                            "Storage Cost",
+                            "Customs Fee (Per Unit)",
+                            "Broker Fee (Per Unit)",
+                            "Other Costs (Per Unit)",
+                            "Total Landed Cost"
+                        ],
+                        "Amount": [
+                            f"${results['base_unit_cost']:.2f}",
+                            f"${results['tariff_amount']:.2f}",
+                            f"${results['per_unit_shipping']:.2f}",
+                            f"${results['storage_cost']:.2f}",
+                            f"${results['per_unit_customs']:.2f}",
+                            f"${results['per_unit_broker']:.2f}",
+                            f"${results['per_unit_other']:.2f}",
+                            f"${results['landed_cost']:.2f}"
+                        ],
+                        "Percentage": [
+                            f"{results['base_cost_pct']:.2f}%",
+                            f"{results['tariff_pct']:.2f}%",
+                            f"{results['shipping_pct']:.2f}%",
+                            f"{results['storage_pct']:.2f}%",
+                            f"{results['customs_pct']:.2f}%",
+                            f"{results['broker_pct']:.2f}%",
+                            f"{results['other_pct']:.2f}%",
+                            "100.00%"
+                        ]
+                    })
+                    st.table(cost_df)
+                
+                with col2:
+                    st.markdown("#### Margin Analysis")
+                    margin_df = pd.DataFrame({
+                        "Metric": [
+                            "Sales Price",
+                            "Landed Cost",
+                            "Gross Margin",
+                            "Margin Percentage"
+                        ],
+                        "Value": [
+                            f"${results['sales_price']:.2f}",
+                            f"${results['landed_cost']:.2f}",
+                            f"${results['gross_margin']:.2f}",
+                            f"{results['margin_percentage']:.2f}%"
+                        ]
+                    })
+                    st.table(margin_df)
+                
+                st.markdown("#### Tariff Scenarios")
+                scenarios_data = {
+                    "Tariff Rate": [],
+                    "Landed Cost": [],
+                    "Gross Margin": [],
+                    "Margin %": []
+                }
+                
+                for rate, scenario in scenarios.items():
+                    scenarios_data["Tariff Rate"].append(rate)
+                    scenarios_data["Landed Cost"].append(f"${scenario['landed_cost']:.2f}")
+                    scenarios_data["Gross Margin"].append(f"${scenario['gross_margin']:.2f}")
+                    scenarios_data["Margin %"].append(f"{scenario['margin_percentage']:.2f}%")
+                
+                st.table(pd.DataFrame(scenarios_data))
+
+def calculate_ad_roi_ui():
+    """Display the advertising ROI calculator form and results."""
+    st.markdown("### Marketing ROI Calculator")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        with st.form("ad_roi_form"):
+            st.markdown("#### Campaign Details")
+            
+            campaign_name = st.text_input("Campaign Name", placeholder="e.g., Summer Promotion")
+            campaign_cost = st.number_input("Campaign Cost ($)", min_value=0.0, value=5000.0, format="%.2f")
+            impressions = st.number_input("Estimated Impressions", min_value=0, value=100000)
+            
+            st.markdown("#### Conversion Metrics")
+            conversion_rate = st.slider("Conversion Rate (%)", min_value=0.0, max_value=10.0, value=2.0, step=0.1)
+            average_order_value = st.number_input("Average Order Value ($)", min_value=0.0, value=60.0, format="%.2f")
+            profit_margin_percentage = st.slider("Profit Margin (%)", min_value=0.0, max_value=100.0, value=40.0, step=1.0)
+            
+            if st.session_state.view_mode == "advanced":
+                st.markdown("#### Comparative Analysis")
+                existing_conversion_rate = st.slider("Existing Conversion Rate (%)", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
+                existing_impressions = st.number_input("Existing Impressions", min_value=0, value=50000)
+            else:
+                existing_conversion_rate = 0.0
+                existing_impressions = 0.0
+            
+            submitted = st.form_submit_button("Calculate ROI")
+            
+            if submitted:
+                try:
+                    with st.spinner("Calculating advertising ROI..."):
+                        results = calculate_ad_roi(
+                            campaign_cost=campaign_cost,
+                            average_order_value=average_order_value,
+                            conversion_rate=conversion_rate,
+                            impressions=impressions,
+                            profit_margin_percentage=profit_margin_percentage,
+                            existing_conversion_rate=existing_conversion_rate,
+                            existing_impressions=existing_impressions
+                        )
+                        
+                        results["campaign_name"] = campaign_name
+                        
+                        st.session_state.ad_roi_results = results
+                        st.rerun()
+                except Exception as e:
+                    logger.exception("Error calculating ad ROI")
+                    st.error(f"Error calculating ROI: {str(e)}")
+    
+    with col2:
+        if hasattr(st.session_state, 'ad_roi_results') and st.session_state.ad_roi_results:
+            results = st.session_state.ad_roi_results
+            
+            st.markdown(f"#### Results: {results['campaign_name']}")
+            
+            # Key metrics
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                roi_value = results['roi_percentage']
+                roi_color = SUCCESS_COLOR if roi_value > 0 else DANGER_COLOR
+                
+                display_metric_card(
+                    "Campaign ROI",
+                    f"{roi_value:.2f}%",
+                    subvalue=f"Profit: ${results['campaign_profit']:.2f}"
+                )
+            
+            with col2:
+                display_metric_card(
+                    "Conversions",
+                    f"{results['conversions']:.0f}",
+                    subvalue=f"Rate: {results['conversion_rate']:.2f}%"
+                )
+            
+            with col3:
+                display_metric_card(
+                    "Revenue",
+                    f"${results['campaign_revenue']:.2f}",
+                    subvalue=f"Cost: ${results['campaign_cost']:.2f}"
+                )
+            
+            # ROI visualization
+            st.markdown("#### ROI Breakdown")
+            
+            # Create waterfall chart for ROI breakdown
+            fig = go.Figure()
+            
+            fig.add_trace(go.Waterfall(
+                name="ROI Breakdown",
+                orientation="v",
+                measure=["absolute", "relative", "relative", "total"],
+                x=["Campaign Cost", "Revenue", "Profit Margin", "Net Profit"],
+                textposition="outside",
+                text=[
+                    f"-${results['campaign_cost']:.2f}", 
+                    f"+${results['campaign_revenue']:.2f}", 
+                    f"-${results['campaign_revenue'] - results['campaign_profit']:.2f}", 
+                    f"${results['campaign_profit'] - results['campaign_cost']:.2f}"
+                ],
+                y=[
+                    -results['campaign_cost'], 
+                    results['campaign_revenue'], 
+                    -(results['campaign_revenue'] - results['campaign_profit']), 
+                    results['campaign_profit'] - results['campaign_cost']
+                ],
+                connector={"line": {"color": "rgb(63, 63, 63)"}},
+                increasing={"marker": {"color": SUCCESS_COLOR}},
+                decreasing={"marker": {"color": DANGER_COLOR}},
+                totals={"marker": {"color": PRIMARY_COLOR}}
+            ))
+            
+            fig.update_layout(
+                title="Campaign ROI Breakdown",
                 height=400,
-                margin=dict(l=20, r=20, t=40, b=20)
+                margin=dict(l=40, r=40, t=50, b=40),
+                plot_bgcolor="white",
+                showlegend=False
             )
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Create ROI visualization
-            roi_fig = go.Figure()
-            
-            # Add waterfall chart
-            roi_fig.add_trace(go.Waterfall(
-                name='ROI Analysis',
-                orientation='v',
-                measure=['absolute', 'relative', 'relative', 'total'],
-                x=['Current Profit', 'Ad Spend Change', 'Revenue Change', 'New Profit'],
-                textposition='outside',
-                text=[
-                    f"${result['current_profit_after_ads']:.2f}",
-                    f"${result['ad_spend_change']:.2f}",
-                    f"${result['new_profit_before_ads'] - result['current_profit_before_ads']:.2f}",
-                    f"${result['new_profit_after_ads']:.2f}"
-                ],
-                y=[
-                    result['current_profit_after_ads'],
-                    result['ad_spend_change'],
-                    result['new_profit_before_ads'] - result['current_profit_before_ads'],
-                    0
-                ],
-                connector={'line': {'color': TEXT_SECONDARY}},
-                decreasing={'marker': {'color': DANGER_COLOR}},
-                increasing={'marker': {'color': SUCCESS_COLOR}},
-                totals={'marker': {'color': PRIMARY_COLOR}}
-            ))
-            
-            # Update layout
-            roi_fig.update_layout(
-                title='Profit Waterfall: Impact of Ad Spend and Revenue Changes',
-                yaxis_title='Amount ($)',
-                showlegend=False,
-                height=400,
-                margin=dict(l=20, r=20, t=40, b=20)
-            )
-            
-            st.plotly_chart(roi_fig, use_container_width=True)
-            
-            # Run ad spend sensitivity analysis
-            if st.checkbox("Run Ad Spend Sensitivity Analysis", key="ad_sensitivity"):
-                st.markdown("<h3 class='sub-header'>Ad Spend Sensitivity Analysis</h3>", unsafe_allow_html=True)
-                
-                col9, col10, col11 = st.columns(3)
-                
-                with col9:
-                    min_spend_factor = st.slider(
-                        "Minimum Ad Spend Factor", 
-                        min_value=0.1, 
-                        max_value=1.0, 
-                        value=0.5, 
-                        step=0.1,
-                        help="Minimum ad spend as a factor of current spend (e.g., 0.5 = 50% of current spend)"
-                    )
-                
-                with col10:
-                    max_spend_factor = st.slider(
-                        "Maximum Ad Spend Factor", 
-                        min_value=1.0, 
-                        max_value=5.0, 
-                        value=3.0, 
-                        step=0.25,
-                        help="Maximum ad spend as a factor of current spend (e.g., 3.0 = 300% of current spend)"
-                    )
-                
-                with col11:
-                    spend_steps = st.number_input(
-                        "Number of Spend Points", 
-                        min_value=5, 
-                        max_value=20, 
-                        value=10
-                    )
-                    
-                    sales_change_per_ad_dollar = st.number_input(
-                        "Est. Sales % Change per Ad Spend % Change", 
-                        min_value=0.0, 
-                        max_value=2.0, 
-                        value=0.8, 
-                        step=0.1,
-                        help="Estimated sales percentage change for each percentage of ad spend change (elasticity)"
-                    )
-                
-                if st.button("Generate Ad Spend Scenarios"):
-                    with st.spinner("Analyzing ad spend scenarios..."):
-                        # Generate scenarios
-                        ad_scenarios_df = generate_ad_spend_scenarios(
-                            current_price=current_price,
-                            proposed_price=proposed_price,
-                            current_ad_spend=current_ad_spend,
-                            current_sales_qty=current_sales_qty,
-                            estimated_sales_change_per_ad_dollar=sales_change_per_ad_dollar,
-                            min_spend_factor=min_spend_factor,
-                            max_spend_factor=max_spend_factor,
-                            steps=spend_steps,
-                            current_return_rate=current_return_rate,
-                            expected_return_rate=expected_return_rate,
-                            cost_to_produce=cost_to_produce,
-                            tariff_rate=tariff_rate
-                        )
-                        
-                        # Create line chart
-                        ad_fig = make_subplots(specs=[[{"secondary_y": True}]])
-                        
-                        # Add profit line
-                        ad_fig.add_trace(
-                            go.Scatter(
-                                x=ad_scenarios_df['ad_spend'],
-                                y=ad_scenarios_df['profit'],
-                                name="Profit After Ads",
-                                line=dict(color=SUCCESS_COLOR, width=3)
-                            ),
-                            secondary_y=False
-                        )
-                        
-                        # Add ROI line on secondary axis
-                        ad_fig.add_trace(
-                            go.Scatter(
-                                x=ad_scenarios_df['ad_spend'],
-                                y=ad_scenarios_df['roi'],
-                                name="ROI %",
-                                line=dict(color=PRIMARY_COLOR, width=3, dash='dot')
-                            ),
-                            secondary_y=True
-                        )
-                        
-                        # Mark the current ad spend
-                        ad_fig.add_vline(
-                            x=current_ad_spend,
-                            line_dash="dash",
-                            line_color=TEXT_SECONDARY,
-                            annotation_text=f"Current (${current_ad_spend})",
-                            annotation_position="top right"
-                        )
-                        
-                        # Mark the proposed ad spend
-                        ad_fig.add_vline(
-                            x=proposed_ad_spend,
-                            line_dash="solid",
-                            line_color=TEXT_PRIMARY,
-                            annotation_text=f"Proposed (${proposed_ad_spend})",
-                            annotation_position="top left"
-                        )
-                        
-                        # Update layout
-                        ad_fig.update_layout(
-                            title_text="Impact of Ad Spend on Profit and ROI",
-                            xaxis_title="Monthly Ad Spend ($)",
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                            margin=dict(l=20, r=20, t=40, b=20),
-                            height=500
-                        )
-                        
-                        # Update y-axes
-                        ad_fig.update_yaxes(title_text="Monthly Profit ($)", secondary_y=False)
-                        ad_fig.update_yaxes(title_text="ROI (%)", secondary_y=True)
-                        
-                        st.plotly_chart(ad_fig, use_container_width=True)
-                        
-                        # Add scatter plot of sales vs. ad spend
-                        sales_fig = px.scatter(
-                            ad_scenarios_df,
-                            x="ad_spend",
-                            y="sales_qty",
-                            size="profit",
-                            color="profit_change",
-                            hover_name="ad_spend",
-                            labels={
-                                "ad_spend": "Monthly Ad Spend ($)",
-                                "sales_qty": "Monthly Sales Volume",
-                                "profit": "Monthly Profit ($)",
-                                "profit_change": "Profit Change vs. Current ($)"
-                            },
-                            title="Sales Volume vs. Ad Spend with Profit Indicators",
-                            color_continuous_scale=px.colors.sequential.Blugrn,
-                        )
-                        
-                        # Mark the current ad spend
-                        sales_fig.add_vline(
-                            x=current_ad_spend,
-                            line_dash="dash",
-                            line_color=TEXT_SECONDARY,
-                            annotation_text=f"Current (${current_ad_spend})",
-                            annotation_position="top right"
-                        )
-                        
-                        # Mark the proposed ad spend
-                        sales_fig.add_vline(
-                            x=proposed_ad_spend,
-                            line_dash="solid",
-                            line_color=TEXT_PRIMARY,
-                            annotation_text=f"Proposed (${proposed_ad_spend})",
-                            annotation_position="top left"
-                        )
-                        
-                        # Update layout
-                        sales_fig.update_layout(
-                            margin=dict(l=20, r=20, t=40, b=20),
-                            height=500
-                        )
-                        
-                        st.plotly_chart(sales_fig, use_container_width=True)
-                        
-                        # Display data in table
-                        with st.expander("View Ad Spend Scenario Data Table", expanded=False):
-                            st.write("Ad Spend Impact Data:")
-                            formatted_ad_df = ad_scenarios_df.copy()
-                            formatted_ad_df['ad_spend'] = formatted_ad_df['ad_spend'].apply(lambda x: f"${x:.2f}")
-                            formatted_ad_df['sales_qty'] = formatted_ad_df['sales_qty'].apply(lambda x: f"{x:.0f}")
-                            formatted_ad_df['sales_dollars'] = formatted_ad_df['sales_dollars'].apply(lambda x: f"${x:.2f}")
-                            formatted_ad_df['profit'] = formatted_ad_df['profit'].apply(lambda x: f"${x:.2f}")
-                            formatted_ad_df['profit_change'] = formatted_ad_df['profit_change'].apply(lambda x: f"${x:.2f}")
-                            formatted_ad_df['roi'] = formatted_ad_df['roi'].apply(lambda x: f"{x:.1f}%")
-                            
-                            st.dataframe(formatted_ad_df, use_container_width=True)
-                            
-                            # Download link for CSV
-                            ad_csv = ad_scenarios_df.to_csv(index=False)
-                            ad_b64 = base64.b64encode(ad_csv.encode()).decode()
-                            ad_href = f'<a href="data:file/csv;base64,{ad_b64}" download="ad_spend_scenarios.csv" class="download-link">Download Ad Spend Scenario Data as CSV</a>'
-                            st.markdown(ad_href, unsafe_allow_html=True)
-
-def run_monte_carlo_simulation_ui():
-    """Display UI for Monte Carlo simulation of quality issue analysis"""
-    st.markdown("<h2 class='sub-header'>Monte Carlo Risk Simulation</h2>", unsafe_allow_html=True)
-    
-    # Instructions
-    st.markdown("""
-    <div class="info-box">
-        Run Monte Carlo simulations to model uncertainty in quality issue fixes. 
-        This allows you to better understand the range of possible outcomes and the probability 
-        of achieving your ROI targets.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Check if there are quality analysis results available
-    if st.session_state.quality_analysis_results:
-        # Use the current analysis results
-        current_scenario = st.session_state.quality_analysis_results
-        
-        # Display scenario info
-        st.markdown(f"""
-        <div class="form-section">
-            <div class="form-section-header">Base Scenario: {current_scenario['sku']}</div>
-            <p>This simulation will use your current analysis as the base scenario.</p>
-            <ul>
-                <li><strong>Product:</strong> {current_scenario['sku']}</li>
-                <li><strong>Return Rate:</strong> {current_scenario['current_metrics']['return_rate_30d']:.2f}%</li>
-                <li><strong>Expected Reduction:</strong> {current_scenario['solution_metrics']['expected_reduction']:.1f}%</li>
-                <li><strong>Solution Confidence:</strong> {current_scenario['solution_metrics']['solution_confidence']:.1f}%</li>
-                <li><strong>Fix Cost Upfront:</strong> ${current_scenario['financial_impact']['fix_cost_upfront']:.2f}</li>
-                <li><strong>Additional Cost Per Unit:</strong> ${current_scenario['financial_impact']['fix_cost_per_unit']:.2f}</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Simulation parameters
-        st.markdown('<div class="form-section-header">Simulation Parameters</div>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            num_simulations = st.slider(
-                "Number of Simulations", 
-                min_value=100, 
-                max_value=10000, 
-                value=1000, 
-                step=100,
-                help="Higher number of simulations gives more accurate results but takes longer to process"
-            )
-        
-        with col2:
-            confidence_level = st.slider(
-                "Confidence Level for Results (%)", 
-                min_value=50, 
-                max_value=99, 
-                value=90, 
-                step=1,
-                help="Confidence level for calculating result ranges"
-            )
-        
-        # Parameter variation settings
-        st.markdown('<div class="form-section-header">Parameter Variation Ranges</div>', unsafe_allow_html=True)
-        st.markdown("""
-        <p>Set the percentage by which each parameter can vary in the simulation. For example, 
-        a 20% variation for Expected Reduction means the actual reduction could be up to 20% higher or lower 
-        than your estimate.</p>
-        """, unsafe_allow_html=True)
-        
-        col3, col4, col5 = st.columns(3)
-        
-        with col3:
-            expected_reduction_var = st.slider(
-                "Expected Reduction Variation (%)", 
-                min_value=0, 
-                max_value=50, 
-                value=20, 
-                step=5,
-                help="How much the expected return rate reduction can vary in the simulation"
-            )
-            
-            fix_cost_upfront_var = st.slider(
-                "Fix Cost Upfront Variation (%)", 
-                min_value=0, 
-                max_value=50, 
-                value=10, 
-                step=5,
-                help="How much the upfront fix cost can vary in the simulation"
-            )
-        
-        with col4:
-            fix_cost_per_unit_var = st.slider(
-                "Cost Per Unit Variation (%)", 
-                min_value=0, 
-                max_value=50, 
-                value=15, 
-                step=5,
-                help="How much the additional cost per unit can vary in the simulation"
-            )
-            
-            sales_30d_var = st.slider(
-                "Sales Volume Variation (%)", 
-                min_value=0, 
-                max_value=30, 
-                value=5, 
-                step=5,
-                help="How much the monthly sales volume can vary in the simulation"
-            )
-        
-        with col5:
-            returns_30d_var = st.slider(
-                "Returns Variation (%)", 
-                min_value=0, 
-                max_value=30, 
-                value=10, 
-                step=5,
-                help="How much the monthly returns can vary in the simulation"
-            )
-            
-            sales_price_var = st.slider(
-                "Sales Price Variation (%)", 
-                min_value=0, 
-                max_value=30, 
-                value=5, 
-                step=5,
-                help="How much the sales price can vary in the simulation"
-            )
-        
-        # Create variation parameters dictionary
-        param_variations = {
-            'expected_reduction': expected_reduction_var,
-            'fix_cost_per_unit': fix_cost_per_unit_var,
-            'fix_cost_upfront': fix_cost_upfront_var,
-            'sales_30d': sales_30d_var,
-            'returns_30d': returns_30d_var,
-            'sales_price': sales_price_var
-        }
-        
-        # Run simulation button
-        if st.button("Run Monte Carlo Simulation"):
-            with st.spinner(f"Running {num_simulations} simulations..."):
-                # Run the simulation
-                simulation_results, message = run_monte_carlo_simulation(
-                    scenario=current_scenario,
-                    num_simulations=num_simulations,
-                    param_variations=param_variations
-                )
-                
-                if simulation_results is not None:
-                    # Store results in session state
-                    st.session_state.monte_carlo_scenario = {
-                        'base_scenario': current_scenario,
-                        'results': simulation_results,
-                        'num_simulations': num_simulations,
-                        'confidence_level': confidence_level,
-                        'param_variations': param_variations
-                    }
-                    
-                    # Display results
-                    st.success(f"Simulation complete: {num_simulations} iterations processed successfully.")
-                    st.rerun()
-                else:
-                    st.error(f"Simulation failed: {message}")
-    
-    # Display simulation results if available
-    if 'monte_carlo_scenario' in st.session_state and st.session_state.monte_carlo_scenario:
-        sim_data = st.session_state.monte_carlo_scenario
-        results_df = sim_data['results']
-        
-        st.markdown("<h2 class='sub-header'>Monte Carlo Simulation Results</h2>", unsafe_allow_html=True)
-        
-        # Calculate key metrics
-        roi_mean = results_df['roi_3yr'].mean()
-        roi_median = results_df['roi_3yr'].median()
-        roi_std = results_df['roi_3yr'].std()
-        payback_mean = results_df['payback_months'].mean()
-        payback_median = results_df['payback_months'].median()
-        
-        # Calculate probability of positive ROI
-        positive_roi_prob = (results_df['roi_3yr'] > 0).mean() * 100
-        
-        # Calculate confidence intervals
-        alpha = (100 - sim_data['confidence_level']) / 100
-        roi_lower = results_df['roi_3yr'].quantile(alpha/2)
-        roi_upper = results_df['roi_3yr'].quantile(1-alpha/2)
-        payback_lower = results_df['payback_months'].quantile(alpha/2)
-        payback_upper = results_df['payback_months'].quantile(1-alpha/2)
-        
-        # Display summary metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.markdown(f"""
-            <div class='metric-card'>
-                <p class='metric-label'>Mean ROI (3-Year)</p>
-                <p class='metric-value' style='color:{SUCCESS_COLOR if roi_mean > 0 else DANGER_COLOR}'>{roi_mean:.1f}%</p>
-                <p style='font-size:0.85rem;'>Median: {roi_median:.1f}%</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            roi_ci_color = SUCCESS_COLOR if roi_lower > 0 else (WARNING_COLOR if roi_upper > 0 else DANGER_COLOR)
-            st.markdown(f"""
-            <div class='metric-card'>
-                <p class='metric-label'>{sim_data['confidence_level']}% Confidence Interval (ROI)</p>
-                <p class='metric-value' style='color:{roi_ci_color}'>{roi_lower:.1f}% to {roi_upper:.1f}%</p>
-                <p style='font-size:0.85rem;'>Standard Deviation: {roi_std:.1f}%</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown(f"""
-            <div class='metric-card'>
-                <p class='metric-label'>Mean Payback Period</p>
-                <p class='metric-value'>{payback_mean:.1f} months</p>
-                <p style='font-size:0.85rem;'>Median: {payback_median:.1f} months</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown(f"""
-            <div class='metric-card'>
-                <p class='metric-label'>Probability of Positive ROI</p>
-                <p class='metric-value' style='color:{SUCCESS_COLOR if positive_roi_prob > 80 else (WARNING_COLOR if positive_roi_prob > 50 else DANGER_COLOR)}'>{positive_roi_prob:.1f}%</p>
-                <p style='font-size:0.85rem;'>Based on {sim_data['num_simulations']} simulations</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Create ROI distribution histogram
-        roi_hist_fig = px.histogram(
-            results_df, 
-            x='roi_3yr',
-            marginal='box',
-            nbins=30,
-            title='Distribution of 3-Year ROI Results',
-            labels={'roi_3yr': 'ROI (%)'},
-            color_discrete_sequence=[PRIMARY_COLOR]
-        )
-        
-        # Add vertical line at 0% ROI
-        roi_hist_fig.add_vline(
-            x=0, 
-            line_dash="dash", 
-            line_color=DANGER_COLOR,
-            annotation_text="Break-even",
-            annotation_position="top right"
-        )
-        
-        # Add vertical line at base scenario ROI
-        roi_hist_fig.add_vline(
-            x=sim_data['base_scenario']['financial_impact']['roi_3yr'], 
-            line_dash="solid", 
-            line_color=TEXT_PRIMARY,
-            annotation_text="Base Scenario",
-            annotation_position="top left"
-        )
-        
-        # Update layout
-        roi_hist_fig.update_layout(
-            xaxis_title="3-Year ROI (%)",
-            yaxis_title="Number of Simulations",
-            showlegend=False,
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        st.plotly_chart(roi_hist_fig, use_container_width=True)
-        
-        # Create payback period distribution
-        filtered_payback = results_df[results_df['payback_months'] < 100]  # Filter out extreme values for better visualization
-        
-        payback_hist_fig = px.histogram(
-            filtered_payback, 
-            x='payback_months',
-            marginal='box',
-            nbins=30,
-            title='Distribution of Payback Period Results',
-            labels={'payback_months': 'Payback Period (months)'},
-            color_discrete_sequence=[SECONDARY_COLOR]
-        )
-        
-        # Add vertical line at 12 months payback
-        payback_hist_fig.add_vline(
-            x=12, 
-            line_dash="dash", 
-            line_color=WARNING_COLOR,
-            annotation_text="1 Year",
-            annotation_position="top right"
-        )
-        
-        # Add vertical line at base scenario payback
-        payback_hist_fig.add_vline(
-            x=sim_data['base_scenario']['financial_impact']['payback_months'], 
-            line_dash="solid", 
-            line_color=TEXT_PRIMARY,
-            annotation_text="Base Scenario",
-            annotation_position="top left"
-        )
-        
-        # Update layout
-        payback_hist_fig.update_layout(
-            xaxis_title="Payback Period (months)",
-            yaxis_title="Number of Simulations",
-            showlegend=False,
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        st.plotly_chart(payback_hist_fig, use_container_width=True)
-        
-        # Create scatterplot of key relationships
-        scatter_fig = px.scatter(
-            results_df,
-            x='expected_reduction',
-            y='roi_3yr',
-            color='payback_months',
-            size='net_benefit',
-            hover_data=['fix_cost_upfront', 'fix_cost_per_unit', 'annual_savings'],
-            labels={
-                'expected_reduction': 'Expected Reduction (%)',
-                'roi_3yr': 'ROI (%)',
-                'payback_months': 'Payback Period (months)',
-                'net_benefit': 'Net Benefit ($)',
-                'fix_cost_upfront': 'Upfront Cost ($)',
-                'fix_cost_per_unit': 'Cost per Unit ($)',
-                'annual_savings': 'Annual Savings ($)'
-            },
-            title='Relationship Between Reduction Rate, ROI, and Payback Period',
-            color_continuous_scale=px.colors.sequential.Viridis_r
-        )
-        
-        # Update layout
-        scatter_fig.update_layout(
-            xaxis_title="Expected Return Rate Reduction (%)",
-            yaxis_title="3-Year ROI (%)",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=500
-        )
-        
-        st.plotly_chart(scatter_fig, use_container_width=True)
-        
-        # Create heatmap of parameter sensitivities
-        st.markdown("<h3>Parameter Sensitivity Analysis</h3>", unsafe_allow_html=True)
-        
-        # Calculate correlations
-        correlation_columns = ['expected_reduction', 'fix_cost_per_unit', 'fix_cost_upfront', 
-                              'sales_30d', 'returns_30d', 'sales_price', 'roi_3yr', 'payback_months']
-        correlation_df = results_df[correlation_columns].corr()
-        
-        # Extract correlations with ROI and payback
-        roi_correlations = correlation_df['roi_3yr'].drop(['roi_3yr', 'payback_months'])
-        payback_correlations = correlation_df['payback_months'].drop(['roi_3yr', 'payback_months'])
-        
-        # Combine into a new dataframe
-        sensitivity_df = pd.DataFrame({
-            'Parameter': roi_correlations.index,
-            'ROI Impact': roi_correlations.values,
-            'Payback Impact': payback_correlations.values
-        })
-        
-        # Sort by absolute ROI impact
-        sensitivity_df = sensitivity_df.reindex(sensitivity_df['ROI Impact'].abs().sort_values(ascending=False).index)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Create bar chart for ROI sensitivity
-            roi_sens_fig = px.bar(
-                sensitivity_df,
-                y='Parameter',
-                x='ROI Impact',
-                orientation='h',
-                title='Parameter Sensitivity Impact on ROI',
-                color='ROI Impact',
-                color_continuous_scale=px.colors.sequential.Blues,
-                labels={'ROI Impact': 'Correlation with ROI', 'Parameter': ''}
-            )
-            
-            # Update layout
-            roi_sens_fig.update_layout(
-                xaxis_title="Correlation Coefficient",
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=350
-            )
-            
-            st.plotly_chart(roi_sens_fig, use_container_width=True)
-        
-        with col2:
-            # Create bar chart for payback sensitivity
-            payback_sens_fig = px.bar(
-                sensitivity_df,
-                y='Parameter',
-                x='Payback Impact',
-                orientation='h',
-                title='Parameter Sensitivity Impact on Payback Period',
-                color='Payback Impact',
-                color_continuous_scale=px.colors.sequential.Blues_r,
-                labels={'Payback Impact': 'Correlation with Payback', 'Parameter': ''}
-            )
-            
-            # Update layout
-            payback_sens_fig.update_layout(
-                xaxis_title="Correlation Coefficient",
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=350
-            )
-            
-            st.plotly_chart(payback_sens_fig, use_container_width=True)
-        
-        # Create heatmap of correlation matrix
-        heatmap_fig = px.imshow(
-            correlation_df,
-            text_auto='.2f',
-            aspect="auto",
-            color_continuous_scale=px.colors.diverging.RdBu_r,
-            title='Parameter Correlation Matrix'
-        )
-        
-        # Update layout
-        heatmap_fig.update_layout(
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=500
-        )
-        
-        with st.expander("View Detailed Correlation Matrix", expanded=False):
-            st.plotly_chart(heatmap_fig, use_container_width=True)
-        
-        # Display data table with summary statistics
-        with st.expander("View Simulation Statistics", expanded=False):
-            # Calculate summary statistics
-            summary_stats = results_df.describe().transpose()
-            
-            # Add confidence intervals
-            summary_stats[f'{sim_data["confidence_level"]}% Lower'] = results_df.quantile(alpha/2)
-            summary_stats[f'{sim_data["confidence_level"]}% Upper'] = results_df.quantile(1-alpha/2)
-            
-            # Round and display
-            st.dataframe(summary_stats.round(2), use_container_width=True)
-            
-            # Download link for CSV
-            csv = results_df.to_csv(index=False)
-            b64 = base64.b64encode(csv.encode()).decode()
-            href = f'<a href="data:file/csv;base64,{b64}" download="monte_carlo_results.csv" class="download-link">Download Full Simulation Results as CSV</a>'
-            st.markdown(href, unsafe_allow_html=True)
-    
-    elif not st.session_state.quality_analysis_results:
-        st.warning("Please run a quality analysis first before using the Monte Carlo Simulation tool.")
-
-def display_analysis_page():
-    """Display the single product analysis page"""
-    # Display header
-    app_header()
-    st.markdown('<div class="main-header">Medical Device Quality ROI Analysis</div>', unsafe_allow_html=True)
-    
-    # Display mode toggle
-    display_mode_toggle()
-    
-    # Navigation buttons
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Batch Analysis Import", key="batch_button", use_container_width=True, help="Upload a CSV or Excel file to analyze multiple products at once"):
-            navigate_to_page("batch_analysis")
-    with col2:
-        if st.button("Formula Guide", key="help_button", use_container_width=True, help="View detailed explanations of formulas used in the analysis"):
-            navigate_to_page("help")
-    
-    # Check if analysis results exist
-    if not st.session_state.analysis_submitted:
-        # New Analysis button
-        if st.button("New Analysis", key="new_analysis"):
-            st.session_state.quality_analysis_results = None
-            st.session_state.analysis_submitted = False
-            st.session_state.chat_history = []
-            
-        with st.form("quality_issue_form"):
-            st.markdown('<div class="form-section-header">Product & Issue Details</div>', unsafe_allow_html=True)
-            
-            # Basic product information
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                # Required inputs
-                sku = st.text_input(
-                    "SKU", 
-                    help="Product SKU (Stock Keeping Unit)"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-                
-                product_type = st.selectbox(
-                    "Product Type", 
-                    ["B2C", "B2B", "Both"],
-                    help="Distribution channel for this product"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-            
-            with col2:
-                sales_30d = st.number_input(
-                    "Units Sold (30 Days)", 
-                    min_value=0.0,
-                    help="Number of units sold in the last 30 days"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-                
-                returns_30d = st.number_input(
-                    "Units Returned (30 Days)", 
-                    min_value=0.0,
-                    help="Number of units returned in the last 30 days"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-            
-            with col3:
-                risk_level = st.select_slider(
-                    "Medical Risk Level",
-                    options=["Low", "Medium", "High"],
-                    value="Medium",
-                    help="Risk level assessment for this medical device issue"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-                
-                regulatory_impact = st.selectbox(
-                    "Regulatory Impact",
-                    ["None", "Possible", "Significant"],
-                    help="Potential regulatory impact of this issue"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-            
-            # Description of issue
-            issue_description = st.text_area(
-                "Description of Quality Issue",
-                height=100,
-                help="Detailed description of the quality problem, including failure modes and customer impact"
-            )
-            st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-            
-            # Financial Information
-            st.markdown('<div class="form-section-header">Financial Information</div>', unsafe_allow_html=True)
+            # Cost metrics
+            st.markdown("#### Cost Efficiency Metrics")
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                current_unit_cost = st.number_input(
-                    "Current Unit Cost", 
-                    min_value=0.0,
-                    help="Current per-unit cost to produce/acquire (landed cost)"
+                display_metric_card(
+                    "Cost Per Acquisition (CPA)",
+                    f"${results['cpa']:.2f}",
+                    subvalue=f"AOV: ${results['average_order_value']:.2f}"
                 )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-                
-                sales_price = st.number_input(
-                    "Current Sales Price", 
-                    min_value=0.0,
-                    help="Current selling price per unit"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
             
             with col2:
-                fix_cost_upfront = st.number_input(
-                    "Fix Cost Upfront", 
-                    min_value=0.0,
-                    help="One-time cost to implement the quality fix (engineering, design changes, tooling, etc.)"
+                display_metric_card(
+                    "Estimated Cost Per Click (CPC)",
+                    f"${results['cpc']:.2f}",
+                    subvalue="Based on 10% CTR"
                 )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-                
-                fix_cost_per_unit = st.number_input(
-                    "Additional Cost Per Unit", 
-                    min_value=0.0,
-                    help="Additional cost per unit after implementing the fix (extra material, labor, etc.)"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
             
             with col3:
-                new_sales_price = st.number_input(
-                    "New Sales Price (if changing)", 
-                    min_value=0.0,
-                    help="New selling price per unit after the fix (if staying the same, leave at 0)"
+                display_metric_card(
+                    "Cost Per Mille (CPM)",
+                    f"${results['cpm']:.2f}",
+                    subvalue=f"Impressions: {results['impressions']:,}"
                 )
-                
-                # Only show in advanced mode
-                if st.session_state.view_mode == "advanced":
-                    fba_fee = st.number_input(
-                        "Fulfillment/Shipping Fee", 
-                        min_value=0.0,
-                        help="Fulfillment fee per unit, if applicable"
-                    )
-                else:
-                    fba_fee = 0.0
             
-            # Solution expectations
-            st.markdown('<div class="form-section-header">Solution Expectations</div>', unsafe_allow_html=True)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                expected_reduction = st.slider(
-                    "Expected Return Rate Reduction (%)", 
-                    min_value=0.0, 
-                    max_value=100.0,
-                    value=50.0,
-                    help="Expected percentage reduction in return rate after implementing the fix"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-            
-            with col2:
-                solution_confidence = st.slider(
-                    "Solution Confidence (%)", 
-                    min_value=0.0, 
-                    max_value=100.0,
-                    value=75.0,
-                    help="Confidence level that the solution will achieve the expected reduction"
-                )
-                st.markdown('<span class="required-field"></span>', unsafe_allow_html=True)
-            
-            # Expandable section for optional metrics (only in advanced mode)
-            if st.session_state.view_mode == "advanced":
-                with st.expander("Additional Metrics (Optional)"):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        asin = st.text_input(
-                            "Alternative Product ID", 
-                            help="Alternative product identification number"
-                        )
-                        
-                        ncx_rate = st.number_input(
-                            "Negative Customer Experience Rate (%)", 
-                            min_value=0.0, 
-                            max_value=100.0,
-                            help="Composite of bad reviews, returns, and customer complaints divided by total sales"
-                        )
-                        
-                        sales_365d = st.number_input(
-                            "Units Sold (365 Days)", 
-                            min_value=0.0,
-                            help="Number of units sold in the last 365 days (for long-term trends)"
-                        )
-                        
-                        returns_365d = st.number_input(
-                            "Units Returned (365 Days)", 
-                            min_value=0.0,
-                            help="Number of units returned in the last 365 days (for long-term trends)"
-                        )
-                    
-                    with col2:
-                        star_rating = st.number_input(
-                            "Current Star Rating", 
-                            min_value=1.0, 
-                            max_value=5.0,
-                            value=4.0,
-                            help="Current average star rating (if applicable)"
-                        )
-                        
-                        total_reviews = st.number_input(
-                            "Total Reviews", 
-                            min_value=0,
-                            help="Total number of reviews (if applicable)"
-                        )
-            else:
-                # Set default values for optional fields
-                asin = None
-                ncx_rate = None
-                sales_365d = None
-                returns_365d = None
-                star_rating = None
-                total_reviews = None
-            
-            # Note about required fields
-            st.markdown('<p><small>* Required fields</small></p>', unsafe_allow_html=True)
-            
-            # Form submission
-            submit_button = st.form_submit_button("Analyze Quality Issue")
-            
-            if submit_button:
-                # Validate required fields
-                if not all([sku, issue_description]):
-                    st.error("Please fill in all required fields marked with *")
-                elif sales_30d <= 0:
-                    st.error("Units Sold (30 Days) must be greater than zero")
-                elif current_unit_cost <= 0:
-                    st.error("Current Unit Cost must be greater than zero")
-                elif sales_price <= 0:
-                    st.error("Current Sales Price must be greater than zero")
-                else:
-                    with st.spinner("Analyzing quality issue..."):
-                        # Set new_sales_price to current sales_price if not specified
-                        if new_sales_price <= 0:
-                            new_sales_price = sales_price
-                        
-                        # Perform analysis
-                        results = analyze_quality_issue(
-                            sku=sku,
-                            product_type=product_type,
-                            sales_30d=sales_30d,
-                            returns_30d=returns_30d,
-                            issue_description=issue_description,
-                            current_unit_cost=current_unit_cost,
-                            fix_cost_upfront=fix_cost_upfront,
-                            fix_cost_per_unit=fix_cost_per_unit,
-                            sales_price=sales_price,
-                            expected_reduction=expected_reduction,
-                            solution_confidence=solution_confidence,
-                            new_sales_price=new_sales_price,
-                            asin=asin if asin else None,
-                            ncx_rate=ncx_rate if ncx_rate > 0 else None,
-                            sales_365d=sales_365d if sales_365d > 0 else None,
-                            returns_365d=returns_365d if returns_365d > 0 else None,
-                            star_rating=star_rating if star_rating > 0 else None,
-                            total_reviews=total_reviews if total_reviews > 0 else None,
-                            fba_fee=fba_fee if fba_fee > 0 else None,
-                            risk_level=risk_level,
-                            regulatory_impact=regulatory_impact
-                        )
-                        
-                        # Store results in session state
-                        st.session_state.quality_analysis_results = results
-                        st.session_state.analysis_submitted = True
-                        
-                        # Initialize chat with AI
-                        st.session_state.chat_history = chat_with_ai(
-                            results, 
-                            issue_description
-                        )
-                        
-                        # Rerun to show results
-                        st.rerun()
-    
-    # Display results if available
-    if st.session_state.analysis_submitted and st.session_state.quality_analysis_results:
-        # Create tabs for different analysis types
-        tabs = st.tabs(["Quality ROI Analysis", "Tariff Calculator", "Marketing ROI", "Monte Carlo Simulation"])
-        
-        with tabs[0]:  # Quality ROI Analysis tab
-            # Add a reset button at the top
-            if st.button("New Analysis", key="reset_top_button"):
-                reset_analysis()
-                
-            # Display analysis results
-            display_quality_issue_results(st.session_state.quality_analysis_results)
-            
-            # Display AI chat interface if enabled and in advanced mode
-            if st.session_state.view_mode == "advanced":
-                with st.expander("Quality Consultant AI Assistant", expanded=True):
-                    # Chat container
-                    st.markdown('<div style="background-color:#F9FAFB; border-radius:8px; padding:1rem; margin-bottom:1rem; border:1px solid #E5E7EB; max-height:400px; overflow-y:auto;">', unsafe_allow_html=True)
-                    
-                    if st.session_state.chat_history:
-                        for message in st.session_state.chat_history:
-                            if message["role"] == "user":
-                                st.markdown(f'<div style="padding:0.75rem; background-color:{TERTIARY_COLOR}; border-radius:8px; margin-bottom:0.75rem; margin-left:auto; max-width:85%; border-bottom-right-radius:0;">{message["content"]}</div>', unsafe_allow_html=True)
-                            else:
-                                st.markdown(f'<div style="padding:0.75rem; background-color:white; border-radius:8px; margin-bottom:0.75rem; margin-right:auto; max-width:85%; border-bottom-left-radius:0; border-left:3px solid {PRIMARY_COLOR};">{message["content"]}</div>', unsafe_allow_html=True)
-                    else:
-                        st.info("AI consultant not available or initialization failed.")
-                        
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Input for new messages
-                    user_input = st.text_area(
-                        "Ask for advice on the quality issue, potential solutions, or regulatory implications:",
-                        placeholder="E.g., What could be causing this issue? What fixes do you recommend? What are the regulatory considerations?",
-                        key="chat_input"
-                    )
-                    
-                    # Send button
-                    if st.button("Send", key="send_button"):
-                        if user_input:
-                            # Add user message to chat history
-                            st.session_state.chat_history.append({
-                                "role": "user",
-                                "content": user_input
-                            })
-                            
-                            with st.spinner("Getting AI analysis..."):
-                                # Build the message history for API call
-                                messages = [
-                                    {"role": "system", "content": f"""
-                                    You are a Quality Management expert specializing in medical devices. You analyze quality issues, provide insights on cost-benefit analyses, and suggest solutions.
-                                    
-                                    Product details:
-                                    - SKU: {st.session_state.quality_analysis_results["sku"]}
-                                    - Type: {st.session_state.quality_analysis_results["product_type"]}
-                                    - Issue: {st.session_state.quality_analysis_results["issue_description"]}
-                                    
-                                    Metrics:
-                                    - Return Rate (30 days): {st.session_state.quality_analysis_results["current_metrics"]["return_rate_30d"]:.2f}%
-                                    - Monthly Return Cost: ${st.session_state.quality_analysis_results["financial_impact"]["monthly_return_cost"]:.2f}
-                                    - Estimated Savings: ${st.session_state.quality_analysis_results["financial_impact"]["estimated_monthly_savings"]:.2f}/month
-                                    - Payback Period: {st.session_state.quality_analysis_results["financial_impact"]["payback_months"]:.1f} months
-                                    - Medical Risk Level: {st.session_state.quality_analysis_results["medical_device_impact"]["risk_level"]}
-                                    - Regulatory Impact: {st.session_state.quality_analysis_results["medical_device_impact"]["regulatory_impact"]}
-                                    
-                                    Recommendation: {st.session_state.quality_analysis_results["recommendation"]}
-                                    
-                                    Keep your responses concise, specific, and tailored to the medical device industry and its regulatory requirements.
-                                    """}
-                                ]
-                                
-                                # Add conversation history
-                                for msg in st.session_state.chat_history:
-                                    messages.append({"role": msg["role"], "content": msg["content"]})
-                                
-                                # Make the API call (excluding the last user message as it's added separately)
-                                ai_response = call_openai_api(messages[:-1])
-                                
-                                # Add AI response to chat history
-                                st.session_state.chat_history.append({
-                                    "role": "assistant",
-                                    "content": ai_response
-                                })
-                                
-                                # Rerun to show updated chat
-                                st.rerun()
-            
-            # Export options
-            with st.expander("Export Analysis"):
+            # Detailed metrics in expandable section
+            with st.expander("Detailed Metrics"):
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Export as CSV
-                    results_dict = {
-                        'Metric': [
-                            'SKU',
-                            'Product Type',
-                            'Return Rate (30d)',
-                            'Monthly Return Cost',
-                            'Annual Return Cost',
-                            'Estimated Monthly Savings',
-                            'Annual Savings',
-                            'Payback Period (months)',
-                            '3-Year ROI',
-                            'Current Sales Price',
-                            'New Sales Price',
-                            'Expected Return Reduction',
-                            'Solution Confidence',
-                            'Fix Cost Upfront',
-                            'Additional Cost Per Unit',
-                            'Current Unit Cost',
-                            'Recommendation',
-                            'Risk Level',
-                            'Regulatory Impact'
+                    st.markdown("#### Campaign Metrics")
+                    metrics_df = pd.DataFrame({
+                        "Metric": [
+                            "Campaign Cost",
+                            "Impressions",
+                            "Conversion Rate",
+                            "Conversions",
+                            "Average Order Value",
+                            "Revenue",
+                            "Profit Margin",
+                            "Profit",
+                            "ROI"
                         ],
-                        'Value': [
-                            st.session_state.quality_analysis_results['sku'],
-                            st.session_state.quality_analysis_results['product_type'],
-                            f"{st.session_state.quality_analysis_results['current_metrics']['return_rate_30d']:.2f}%",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['monthly_return_cost']:.2f}",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['annual_return_cost']:.2f}",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['estimated_monthly_savings']:.2f}",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['annual_savings']:.2f}",
-                            f"{st.session_state.quality_analysis_results['financial_impact']['payback_months']:.1f}",
-                            f"{st.session_state.quality_analysis_results['financial_impact']['roi_3yr']:.1f}%",
-                            f"${st.session_state.quality_analysis_results['current_metrics']['sales_price']:.2f}",
-                            f"${st.session_state.quality_analysis_results['solution_metrics']['new_sales_price']:.2f}",
-                            f"{st.session_state.quality_analysis_results['solution_metrics']['expected_reduction']:.1f}%",
-                            f"{st.session_state.quality_analysis_results['solution_metrics']['solution_confidence']:.1f}%",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['fix_cost_upfront']:.2f}",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['fix_cost_per_unit']:.2f}",
-                            f"${st.session_state.quality_analysis_results['financial_impact']['current_unit_cost']:.2f}",
-                            st.session_state.quality_analysis_results['recommendation'],
-                            st.session_state.quality_analysis_results['medical_device_impact']['risk_level'],
-                            st.session_state.quality_analysis_results['medical_device_impact']['regulatory_impact']
+                        "Value": [
+                            f"${results['campaign_cost']:.2f}",
+                            f"{results['impressions']:,}",
+                            f"{results['conversion_rate']:.2f}%",
+                            f"{results['conversions']:.0f}",
+                            f"${results['average_order_value']:.2f}",
+                            f"${results['campaign_revenue']:.2f}",
+                            f"{results['profit_margin_percentage']:.2f}%",
+                            f"${results['campaign_profit']:.2f}",
+                            f"{results['roi_percentage']:.2f}%"
                         ]
-                    }
-                    
-                    # Convert to DataFrame
-                    results_df = pd.DataFrame(results_dict)
-                    
-                    # Create download link
-                    csv = results_df.to_csv(index=False)
-                    b64 = base64.b64encode(csv.encode()).decode()
-                    filename = f"{st.session_state.quality_analysis_results['sku']}_analysis.csv"
-                    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}" class="download-link">Download Analysis as CSV</a>'
-                    st.markdown(href, unsafe_allow_html=True)
+                    })
+                    st.table(metrics_df)
                 
                 with col2:
-                    # Export as PDF
-                    if st.button("Generate PDF Report"):
-                        with st.spinner("Generating PDF report..."):
-                            pdf_buffer = export_as_pdf(st.session_state.quality_analysis_results)
-                            
-                            # Create download link for PDF
-                            b64 = base64.b64encode(pdf_buffer.getvalue()).decode()
-                            filename = f"{st.session_state.quality_analysis_results['sku']}_analysis.pdf"
-                            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}" class="download-link">Download PDF Report</a>'
-                            st.markdown(href, unsafe_allow_html=True)
-                    
-                    # Add to comparison list
-                    if st.button("Add to Comparison List"):
-                        if 'compare_list' not in st.session_state:
-                            st.session_state.compare_list = []
+                    st.markdown("#### Cost Efficiency")
+                    cost_df = pd.DataFrame({
+                        "Metric": [
+                            "Cost Per Acquisition (CPA)",
+                            "Cost Per Click (CPC est.)",
+                            "Cost Per Mille (CPM)",
+                            "Revenue Per Impression",
+                            "Profit Per Impression",
+                            "Conversion Per Impression"
+                        ],
+                        "Value": [
+                            f"${results['cpa']:.2f}",
+                            f"${results['cpc']:.2f}",
+                            f"${results['cpm']:.2f}",
+                            f"${results['campaign_revenue'] / results['impressions']:.4f}",
+                            f"${results['campaign_profit'] / results['impressions']:.4f}",
+                            f"{results['conversion_rate'] / 100:.4f}"
+                        ]
+                    })
+                    st.table(cost_df)
+                
+                # Breakeven analysis
+                st.markdown("#### Breakeven Analysis")
+                
+                breakeven_conv_rate = (results['campaign_cost'] / (results['impressions'] * results['average_order_value'] * (results['profit_margin_percentage'] / 100))) * 100
+                
+                breakeven_df = pd.DataFrame({
+                    "Metric": [
+                        "Breakeven Conversion Rate",
+                        "Current Conversion Rate",
+                        "Difference",
+                        "Safety Margin"
+                    ],
+                    "Value": [
+                        f"{breakeven_conv_rate:.2f}%",
+                        f"{results['conversion_rate']:.2f}%",
+                        f"{results['conversion_rate'] - breakeven_conv_rate:.2f}%",
+                        f"{((results['conversion_rate'] / breakeven_conv_rate) - 1) * 100:.2f}%"
+                    ]
+                })
+                st.table(breakeven_df)
+
+def run_monte_carlo_simulation_ui():
+    """Display the Monte Carlo simulation form and results."""
+    st.markdown("### Monte Carlo Simulation")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        with st.form("monte_carlo_form"):
+            st.markdown("#### Simulation Parameters")
+            
+            # Inherit values from quality analysis if available
+            default_results = st.session_state.get('quality_analysis_results', None)
+            
+            if default_results:
+                default_unit_cost = default_results['current_metrics']['unit_cost']
+                default_sales_price = default_results['current_metrics']['sales_price']
+                default_monthly_sales = default_results['current_metrics']['sales_30d']
+                default_monthly_returns = default_results['current_metrics']['returns_30d']
+                default_expected_reduction = default_results['projected_metrics']['expected_reduction']
+                default_solution_confidence = default_results['projected_metrics']['solution_confidence']
+            else:
+                default_unit_cost = 25.0
+                default_sales_price = 59.99
+                default_monthly_sales = 1000
+                default_monthly_returns = 50
+                default_expected_reduction = 50
+                default_solution_confidence = 90
+            
+            base_unit_cost = st.number_input("Unit Cost ($)", min_value=0.01, value=default_unit_cost, format="%.2f")
+            sales_price = st.number_input("Sales Price ($)", min_value=0.01, value=default_sales_price, format="%.2f")
+            monthly_sales = st.number_input("Monthly Sales (Units)", min_value=1, value=default_monthly_sales)
+            monthly_returns = st.number_input("Monthly Returns (Units)", min_value=0, value=default_monthly_returns)
+            
+            st.markdown("#### Fix Parameters")
+            fix_cost_upfront = st.number_input("Fix Cost - Upfront ($)", min_value=0.0, value=5000.0, format="%.2f")
+            fix_cost_per_unit = st.number_input("Fix Cost - Per Unit ($)", min_value=0.0, value=1.50, format="%.2f")
+            expected_reduction = st.slider("Expected Returns Reduction (%)", min_value=0, max_value=100, value=default_expected_reduction)
+            solution_confidence = st.slider("Solution Confidence (%)", min_value=0, max_value=100, value=default_solution_confidence)
+            
+            st.markdown("#### Simulation Options")
+            num_simulations = st.slider("Number of Simulations", min_value=100, max_value=10000, value=1000, step=100)
+            time_horizon_months = st.slider("Time Horizon (Months)", min_value=12, max_value=60, value=36, step=12)
+            
+            submitted = st.form_submit_button("Run Simulation")
+            
+            if submitted:
+                try:
+                    with st.spinner(f"Running {num_simulations} simulations..."):
+                        results = run_monte_carlo_simulation(
+                            base_unit_cost=base_unit_cost,
+                            sales_price=sales_price,
+                            monthly_sales=monthly_sales,
+                            monthly_returns=monthly_returns,
+                            fix_cost_upfront=fix_cost_upfront,
+                            fix_cost_per_unit=fix_cost_per_unit,
+                            expected_reduction=expected_reduction,
+                            solution_confidence=solution_confidence,
+                            num_simulations=num_simulations,
+                            time_horizon_months=time_horizon_months
+                        )
                         
-                        # Check if already in list
-                        already_exists = any(item['sku'] == st.session_state.quality_analysis_results['sku'] for item in st.session_state.compare_list)
-                        
-                        if not already_exists:
-                            st.session_state.compare_list.append(st.session_state.quality_analysis_results)
-                            st.success(f"Added {st.session_state.quality_analysis_results['sku']} to comparison list. Total items: {len(st.session_state.compare_list)}")
-                        else:
-                            st.warning(f"{st.session_state.quality_analysis_results['sku']} is already in the comparison list.")
+                        st.session_state.monte_carlo_scenario = results
+                        st.rerun()
+                except Exception as e:
+                    logger.exception("Error in Monte Carlo simulation")
+                    st.error(f"Error running simulation: {str(e)}")
+    
+    with col2:
+        if hasattr(st.session_state, 'monte_carlo_scenario') and st.session_state.monte_carlo_scenario:
+            results = st.session_state.monte_carlo_scenario
+            
+            st.markdown("#### Simulation Results")
+            
+            # Key metrics
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                display_metric_card(
+                    "Average ROI",
+                    f"{results['roi_statistics']['mean']:.2f}%",
+                    subvalue=f"Median: {results['roi_statistics']['median']:.2f}%"
+                )
+            
+            with col2:
+                display_metric_card(
+                    "Avg. Payback Period",
+                    f"{results['payback_statistics']['mean']:.1f} months",
+                    subvalue=f"Median: {results['payback_statistics']['median']:.1f} months"
+                )
+            
+            with col3:
+                display_metric_card(
+                    "Probability of Positive ROI",
+                    f"{results['probabilities']['positive_roi']:.1f}%",
+                    subvalue=f"ROI > 100%: {results['probabilities']['roi_above_100']:.1f}%"
+                )
+            
+            # ROI distribution histogram
+            st.markdown("#### ROI Distribution")
+            
+            roi_bins = results['histogram_data']['roi_histogram']['bins']
+            roi_counts = results['histogram_data']['roi_histogram']['counts']
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                x=[(roi_bins[i] + roi_bins[i+1])/2 for i in range(len(roi_bins)-1)],
+                y=roi_counts,
+                marker_color=PRIMARY_COLOR,
+                name="ROI Distribution"
+            ))
+            
+            # Add mean and median lines
+            fig.add_trace(go.Scatter(
+                x=[results['roi_statistics']['mean'], results['roi_statistics']['mean']],
+                y=[0, max(roi_counts) * 1.1],
+                mode="lines",
+                line=dict(color=SUCCESS_COLOR, width=2, dash="dash"),
+                name="Mean ROI"
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=[results['roi_statistics']['median'], results['roi_statistics']['median']],
+                y=[0, max(roi_counts) * 1.1],
+                mode="lines",
+                line=dict(color=SECONDARY_COLOR, width=2, dash="dash"),
+                name="Median ROI"
+            ))
+            
+            # Add zero line
+            fig.add_trace(go.Scatter(
+                x=[0, 0],
+                y=[0, max(roi_counts) * 1.1],
+                mode="lines",
+                line=dict(color=DANGER_COLOR, width=2),
+                name="Breakeven"
+            ))
+            
+            fig.update_layout(
+                title="ROI Distribution",
+                xaxis_title="ROI (%)",
+                yaxis_title="Frequency",
+                height=300,
+                margin=dict(l=40, r=40, t=50, b=40),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Payback period distribution
+            st.markdown("#### Payback Period Distribution")
+            
+            payback_bins = results['histogram_data']['payback_histogram']['bins']
+            payback_counts = results['histogram_data']['payback_histogram']['counts']
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                x=[(payback_bins[i] + payback_bins[i+1])/2 for i in range(len(payback_bins)-1)],
+                y=payback_counts,
+                marker_color=SECONDARY_COLOR,
+                name="Payback Distribution"
+            ))
+            
+            # Add mean and median lines
+            fig.add_trace(go.Scatter(
+                x=[results['payback_statistics']['mean'], results['payback_statistics']['mean']],
+                y=[0, max(payback_counts) * 1.1],
+                mode="lines",
+                line=dict(color=SUCCESS_COLOR, width=2, dash="dash"),
+                name="Mean Payback"
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=[results['payback_statistics']['median'], results['payback_statistics']['median']],
+                y=[0, max(payback_counts) * 1.1],
+                mode="lines",
+                line=dict(color=PRIMARY_COLOR, width=2, dash="dash"),
+                name="Median Payback"
+            ))
+            
+            # Add 12-month line
+            fig.add_trace(go.Scatter(
+                x=[12, 12],
+                y=[0, max(payback_counts) * 1.1],
+                mode="lines",
+                line=dict(color=WARNING_COLOR, width=2),
+                name="12 Months"
+            ))
+            
+            fig.update_layout(
+                title="Payback Period Distribution",
+                xaxis_title="Payback Period (Months)",
+                yaxis_title="Frequency",
+                height=300,
+                margin=dict(l=40, r=40, t=50, b=40),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Detailed metrics in expandable section
+            with st.expander("Detailed Statistics"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### ROI Statistics")
+                    roi_df = pd.DataFrame({
+                        "Statistic": [
+                            "Mean",
+                            "Median",
+                            "Standard Deviation",
+                            "5th Percentile",
+                            "25th Percentile",
+                            "75th Percentile",
+                            "95th Percentile"
+                        ],
+                        "Value": [
+                            f"{results['roi_statistics']['mean']:.2f}%",
+                            f"{results['roi_statistics']['median']:.2f}%",
+                            f"{results['roi_statistics']['std']:.2f}%",
+                            f"{results['roi_statistics']['percentile_5']:.2f}%",
+                            f"{results['roi_statistics']['percentile_25']:.2f}%",
+                            f"{results['roi_statistics']['percentile_75']:.2f}%",
+                            f"{results['roi_statistics']['percentile_95']:.2f}%"
+                        ]
+                    })
+                    st.table(roi_df)
+                
+                with col2:
+                    st.markdown("#### Payback Statistics")
+                    payback_df = pd.DataFrame({
+                        "Statistic": [
+                            "Mean",
+                            "Median",
+                            "Standard Deviation",
+                            "5th Percentile",
+                            "25th Percentile",
+                            "75th Percentile",
+                            "95th Percentile"
+                        ],
+                        "Value": [
+                            f"{results['payback_statistics']['mean']:.2f} months",
+                            f"{results['payback_statistics']['median']:.2f} months",
+                            f"{results['payback_statistics']['std']:.2f} months",
+                            f"{results['payback_statistics']['percentile_5']:.2f} months",
+                            f"{results['payback_statistics']['percentile_25']:.2f} months",
+                            f"{results['payback_statistics']['percentile_75']:.2f} months",
+                            f"{results['payback_statistics']['percentile_95']:.2f} months"
+                        ]
+                    })
+                    st.table(payback_df)
+                
+                st.markdown("#### Probability Analysis")
+                prob_df = pd.DataFrame({
+                    "Probability": [
+                        "Positive ROI",
+                        "ROI > 50%",
+                        "ROI > 100%",
+                        "Payback < 12 months"
+                    ],
+                    "Value": [
+                        f"{results['probabilities']['positive_roi']:.2f}%",
+                        f"{results['probabilities']['roi_above_50']:.2f}%",
+                        f"{results['probabilities']['roi_above_100']:.2f}%",
+                        f"{results['probabilities']['payback_under_12']:.2f}%"
+                    ]
+                })
+                st.table(prob_df)
+                
+                st.markdown("#### Simulation Parameters")
+                params_df = pd.DataFrame({
+                    "Parameter": [
+                        "Base Unit Cost",
+                        "Sales Price",
+                        "Monthly Sales",
+                        "Monthly Returns",
+                        "Fix Cost (Upfront)",
+                        "Fix Cost (Per Unit)",
+                        "Expected Reduction",
+                        "Solution Confidence",
+                        "Number of Simulations",
+                        "Time Horizon"
+                    ],
+                    "Value": [
+                        f"${results['simulation_parameters']['base_unit_cost']:.2f}",
+                        f"${results['simulation_parameters']['sales_price']:.2f}",
+                        f"{results['simulation_parameters']['monthly_sales']:.0f} units",
+                        f"{results['simulation_parameters']['monthly_returns']:.0f} units",
+                        f"${results['simulation_parameters']['fix_cost_upfront']:.2f}",
+                        f"${results['simulation_parameters']['fix_cost_per_unit']:.2f}",
+                        f"{results['simulation_parameters']['expected_reduction']:.2f}%",
+                        f"{results['simulation_parameters']['solution_confidence']:.2f}%",
+                        f"{results['simulation_parameters']['num_simulations']:.0f}",
+                        f"{results['simulation_parameters']['time_horizon_months']:.0f} months"
+                    ]
+                })
+                st.table(params_df)
+
+def display_analysis_page():
+    """Display the main analysis page with tabs."""
+    st.markdown("## Product Profitability Analysis Dashboard")
+    
+    # Create tabs
+    tabs = st.tabs(["Quality ROI Analysis", "Tariff Calculator", "Marketing ROI", "Monte Carlo Simulation"])
+    
+    with tabs[0]:
+        # Quality ROI Analysis tab
+        display_quality_analysis_form()
         
-        with tabs[1]:  # Tariff Calculator tab
-            display_landed_cost_calculator()
+        if st.session_state.analysis_submitted and st.session_state.quality_analysis_results:
+            st.markdown("---")
+            st.markdown("## Analysis Results")
+            display_quality_issue_results(st.session_state.quality_analysis_results, expanded=False)
+            
+            # Add AI assistant
+            st.markdown("---")
+            display_chat_assistant(st.session_state.quality_analysis_results)
+    
+    with tabs[1]:
+        # Tariff Calculator tab
+        display_landed_cost_calculator()
+    
+    with tabs[2]:
+        # Marketing ROI tab
+        calculate_ad_roi_ui()
+    
+    with tabs[3]:
+        # Monte Carlo Simulation tab
+        run_monte_carlo_simulation_ui()
+
+def display_reports_page():
+    """Display the historical reports page."""
+    st.markdown("## Historical Reports")
+    
+    st.info("This feature will allow you to view and compare previous analyses. Currently in development.")
+    
+    # Placeholder for historical reports functionality
+    st.markdown("### Recent Analyses")
+    
+    if hasattr(st.session_state, 'batch_analysis_results') and st.session_state.batch_analysis_results:
+        # Display saved analyses
+        for sku, result in st.session_state.batch_analysis_results.items():
+            with st.expander(f"Analysis for {sku} ({result['analysis_date']})"):
+                display_quality_issue_results(result, expanded=False)
+    else:
+        st.warning("No historical analyses found. Complete an analysis to save it here.")
+
+def display_settings_page():
+    """Display the settings page."""
+    st.markdown("## Application Settings")
+    
+    st.info("This page allows you to configure application settings. Currently in development.")
+    
+    with st.form("settings_form"):
+        st.markdown("### Display Settings")
+        theme = st.selectbox(
+            "Application Theme",
+            options=["Default", "Dark Mode", "High Contrast"],
+            index=0
+        )
         
-        with tabs[2]:  # Marketing ROI tab
-            calculate_ad_roi_ui()
+        decimal_places = st.slider("Decimal Places for Calculations", min_value=0, max_value=4, value=2)
         
-        with tabs[3]:  # Monte Carlo Simulation tab
-            run_monte_carlo_simulation_ui()
+        st.markdown("### Default Values")
+        default_margin = st.slider("Default Profit Margin (%)", min_value=0, max_value=100, value=40)
+        default_growth = st.slider("Default Monthly Growth Rate (%)", min_value=0, max_value=20, value=5)
+        
+        st.markdown("### API Configuration")
+        api_key = st.text_input("OpenAI API Key", type="password", value="•" * 10)
+        
+        submitted = st.form_submit_button("Save Settings")
+        
+        if submitted:
+            st.success("Settings saved successfully!")
+
+# --- MAIN APPLICATION ---
+def main():
+    """Main application entry point."""
+    # Display header and sidebar
+    display_header()
+    display_sidebar()
+    
+    # Display the appropriate page based on session state
+    if st.session_state.current_page == "analysis":
+        display_analysis_page()
+    elif st.session_state.current_page == "reports":
+        display_reports_page()
+    elif st.session_state.current_page == "settings":
+        display_settings_page()
+
+if __name__ == "__main__":
+    main()
