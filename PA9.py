@@ -45,6 +45,12 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'standalone_chat_history' not in st.session_state:
     st.session_state.standalone_chat_history = []
+if 'marketing_chat_history' not in st.session_state:
+    st.session_state.marketing_chat_history = []
+if 'tariff_chat_history' not in st.session_state:
+    st.session_state.tariff_chat_history = []
+if 'monte_carlo_chat_history' not in st.session_state:
+    st.session_state.monte_carlo_chat_history = []
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "analysis"
 if 'view_mode' not in st.session_state:
@@ -59,6 +65,8 @@ if 'compare_list' not in st.session_state:
     st.session_state.compare_list = []
 if 'api_key_status' not in st.session_state:
     st.session_state.api_key_status = None
+if 'ad_roi_results' not in st.session_state:
+    st.session_state.ad_roi_results = None
 
 # --- CSS INJECTION ---
 st.markdown(f"""
@@ -344,10 +352,10 @@ def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
     """Call the OpenAI API with the given messages."""
     api_key = st.secrets.get("openai_api_key", None)
     
-    # If API key is missing, generate a simulated response
+    # If API key is missing, return an error message
     if not api_key:
-        logger.warning("OpenAI API key not found in secrets, using simulated response")
-        return generate_simulated_response(messages)
+        logger.warning("OpenAI API key not found in secrets")
+        return "Error: AI assistant is not available. Please contact alexander.popoff@vivehealth.com for support."
     
     # If API key is available, make the actual API call
     try:
@@ -364,7 +372,7 @@ def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
             return response.json()["choices"][0]["message"]["content"]
         else:
             logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
-            return f"Error: The AI assistant encountered a problem (HTTP {response.status_code}). Please try again later or contact support if the issue persists."
+            return f"Error: The AI assistant encountered a problem (HTTP {response.status_code}). Please try again later or contact alexander.popoff@vivehealth.com if the issue persists."
     except requests.exceptions.Timeout:
         logger.error("OpenAI API timeout")
         return "Error: The AI assistant timed out. Please try again later when the service is less busy."
@@ -373,102 +381,130 @@ def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
         return "Error: Could not connect to the AI service. Please check your internet connection and try again."
     except Exception as e:
         logger.exception("Error calling OpenAI API")
-        return f"Error: The AI assistant encountered an unexpected problem. Please try again later or contact support if the issue persists."
+        return f"Error: The AI assistant encountered an unexpected problem. Please try again later or contact alexander.popoff@vivehealth.com if the issue persists."
 
-def generate_simulated_response(messages):
-    """Generate a simulated response for demonstration when API key is missing."""
-    # Simulate API thinking time
-    time.sleep(2)
-    
-    # Extract relevant info from the system prompt
-    sku = "Unknown"
-    return_rate = "Unknown"
-    recommendation = "Unknown"
-    
-    for msg in messages:
-        if msg["role"] == "system":
-            content = msg["content"]
-            
-            # Extract sku if present
-            sku_match = re.search(r"SKU: ([^\n]+)", content)
-            if sku_match:
-                sku = sku_match.group(1)
-                
-            # Extract return rate if present
-            return_rate_match = re.search(r"Return Rate \(30d\): ([0-9.]+)%", content)
-            if return_rate_match:
-                return_rate = return_rate_match.group(1)
-                
-            # Extract recommendation if present
-            rec_match = re.search(r"Recommendation: ([^\n]+)", content)
-            if rec_match:
-                recommendation = rec_match.group(1)
-    
-    # Generate simulated response based on latest user message
-    user_message = "Unknown query"
-    for msg in reversed(messages):
-        if msg["role"] == "user":
-            user_message = msg["content"]
-            break
-            
-    if "next steps" in user_message.lower():
-        return f"""Based on my analysis of SKU {sku} with a return rate of {return_rate}%, I recommend the following next steps:
-
-1. **Form a quality investigation team** with representatives from Engineering, Manufacturing, and Customer Service
-2. **Conduct root cause analysis** using the 5-Why method to determine the underlying causes
-3. **Develop a corrective action plan** with clear milestones and ownership
-4. **Implement temporary containment actions** to mitigate immediate customer impact
-5. **Track key metrics weekly** to monitor improvement progress
-
-The recommendation to "{recommendation}" is based on both financial impact and risk assessment. I suggest prioritizing this issue according to the recommendation category."""
+def get_system_prompt(results: Dict[str, Any] = None, module_type: str = "quality") -> str:
+    """Generate the system prompt for the AI assistant based on analysis results and module type."""
+    if module_type == "quality" and results:
+        return f"""
+        You are a Quality Management expert for medical devices.
         
-    elif "regulatory" in user_message.lower():
-        return f"""For SKU {sku}, here are the key regulatory considerations to keep in mind:
-
-1. **Document all quality investigations** according to 21 CFR 820.100 requirements
-2. **Evaluate if a CAPA is required** based on the severity and recurrence of the issue
-3. **Assess if the issue impacts product specifications** that were part of your FDA submission
-4. **Determine if the issue requires reporting** under MDR regulations (21 CFR 803)
-5. **Verify if design controls need to be updated** to prevent similar issues
-
-Based on the recommendation of "{recommendation}", I would suggest reviewing your Risk Management File to update the risk assessment as needed."""
+        Product details:
+        - SKU: {results['sku']}
+        - Product Type: {results['product_type']}
+        - Issue Description: {results['issue_description']}
+        - Return Rate (30d): {results['current_metrics']['return_rate_30d']:.2f}%
+        - Current Unit Cost: ${results['current_metrics']['unit_cost']:.2f}
+        - Sales Price: ${results['current_metrics']['sales_price']:.2f}
         
-    elif "improve" in user_message.lower():
-        return f"""To improve the effectiveness of the proposed solution for SKU {sku}, I recommend:
-
-1. **Conduct small-scale testing** before full implementation to validate the expected {return_rate}% reduction
-2. **Gather voice of customer data** to ensure the solution addresses actual user needs
-3. **Implement a phased approach** with checkpoints to measure effectiveness
-4. **Develop clear success criteria** with quantifiable metrics
-5. **Consider alternative solutions** as backup plans in case primary solution doesn't achieve expected results
-
-This approach will help increase confidence in the solution and improve the projected ROI of the fix."""
+        Financial Impact:
+        - Annual Loss Due to Returns: ${results['financial_impact']['annual_loss']:.2f}
+        - ROI (3yr): {results['financial_impact']['roi_3yr']:.2f}%
+        - Payback Period: {results['financial_impact']['payback_period']:.2f} months
         
-    elif "standalone" in user_message.lower() or not sku or sku == "Unknown":
-        return """As your Quality Management expert, I can help with:
-
-1. **Quality issues analysis** - Understanding root causes and recommending solutions
-2. **Regulatory guidance** - Navigating FDA regulations and compliance requirements
-3. **Risk assessment** - Evaluating potential impacts to patients, business, and brand
-4. **Cost-benefit analysis** - Calculating ROI for quality improvements
-5. **Documentation review** - Ensuring quality records meet requirements
-
-How can I assist you today? Feel free to ask about specific medical device quality challenges you're facing."""
-    
+        Recommendation: {results['recommendation']}
+        
+        Your task is to provide expert advice on:
+        1. Next steps based on the analysis
+        2. Additional data that might be needed
+        3. Regulatory considerations for medical devices
+        4. Best practices for implementing the recommended solution
+        
+        Be concise but thorough in your responses. Reference FDA regulations and medical device 
+        industry standards when relevant. Remember to consider both patient safety and business 
+        impact in your recommendations.
+        """
+    elif module_type == "marketing" and results:
+        return f"""
+        You are a Marketing ROI and PPC Optimization expert for medical devices.
+        
+        Campaign metrics:
+        - Ad Spend: ${results['ad_spend']:.2f}
+        - Impressions: {results['impressions']}
+        - Clicks: {results['clicks']}
+        - Conversions: {results['conversions']}
+        - Average Order Value: ${results['avg_order_value']:.2f}
+        - Contribution Margin: {results['contribution_margin_percent']:.2f}%
+        
+        Performance metrics:
+        - ROI: {results['roi']:.2f}%
+        - ROAS: {results['roas']:.2f}x
+        - CTR (Click-Through Rate): {results['ctr']:.2f}%
+        - Conversion Rate: {results['conversion_rate']:.2f}%
+        - CPC (Cost per Click): ${results['cpc']:.2f}
+        - CPA (Cost per Acquisition): ${results['cpa']:.2f}
+        - CPM (Cost per 1000 Impressions): ${results['cpm']:.2f}
+        
+        Your task is to provide expert advice on:
+        1. Campaign performance assessment and benchmarking for medical device marketing
+        2. Optimization opportunities to improve ROI and ROAS
+        3. Budget allocation recommendations
+        4. Audience targeting and messaging strategies
+        5. Regulatory compliance considerations for medical device marketing
+        
+        Be concise but thorough in your responses. Reference industry benchmarks for medical devices
+        when relevant. Consider both marketing efficiency and regulatory compliance requirements in
+        your recommendations.
+        """
+    elif module_type == "tariff" and results:
+        return f"""
+        You are a Supply Chain and Tariff Impact expert for medical devices.
+        
+        Product details:
+        - Sales Price: ${results['sales_price']:.2f}
+        - Original COGS: ${results['original_cogs']:.2f}
+        - Tariff Rate: {results['tariff_rate']:.2f}%
+        - Tariff Amount: ${results['tariff_amount']:.2f} per unit
+        
+        Financial Impact:
+        - Original Margin: ${results['original_margin']:.2f} ({results['original_margin_percentage']:.2f}%)
+        - New Margin: ${results['new_margin']:.2f} ({results['new_margin_percentage']:.2f}%)
+        - Margin Impact: {results['margin_impact']:.2f} percentage points
+        - Breakeven Price: ${results['breakeven_price']:.2f}
+        - Price Increase Needed: ${results['price_increase_needed']:.2f} ({results['price_increase_percentage']:.2f}%)
+        
+        Your task is to provide expert advice on:
+        1. Tariff mitigation strategies for medical device manufacturers
+        2. Pricing strategy recommendations considering market dynamics
+        3. Alternative sourcing options that consider regulatory compliance
+        4. Supply chain adjustments to optimize landed costs
+        5. Long-term strategies to manage tariff risks
+        
+        Be concise but thorough in your responses. Remember to consider both cost optimization
+        and regulatory compliance requirements for medical devices in your recommendations.
+        """
+    elif module_type == "monte_carlo" and results:
+        return f"""
+        You are a Risk Analysis and Decision-Making expert for medical device quality initiatives.
+        
+        Monte Carlo simulation results:
+        - Probability of Positive ROI: {results['probability_metrics']['prob_positive_roi']:.2f}%
+        - Probability of Payback < 1 Year: {results['probability_metrics']['prob_payback_1yr']:.2f}%
+        
+        ROI Statistics:
+        - Mean ROI: {results['roi_stats']['mean']:.2f}%
+        - Median ROI: {results['roi_stats']['median']:.2f}%
+        - ROI Range: {results['roi_stats']['min']:.2f}% to {results['roi_stats']['max']:.2f}%
+        - 10th Percentile ROI: {results['roi_stats']['percentiles']['p10']:.2f}%
+        - 90th Percentile ROI: {results['roi_stats']['percentiles']['p90']:.2f}%
+        
+        Payback Statistics:
+        - Mean Payback: {results['payback_stats']['mean']:.2f} months
+        - Median Payback: {results['payback_stats']['median']:.2f} months
+        - Payback Range: {results['payback_stats']['min']:.2f} to {results['payback_stats']['max']:.2f} months
+        
+        Your task is to provide expert advice on:
+        1. Interpretation of simulation results and risk assessment
+        2. Decision recommendations based on probability distributions
+        3. Risk mitigation strategies for quality improvement projects
+        4. Implementation approaches that consider uncertainty
+        5. Key metrics to track during implementation
+        
+        Be concise but thorough in your responses. Remember to consider both statistical confidence
+        and practical implementation considerations for medical device quality initiatives.
+        """
     else:
-        return f"""Based on the quality analysis for SKU {sku}, with a return rate of {return_rate}%, I recommend focusing on these key areas:
-
-1. **Impact Assessment**: Evaluate the full impact on patients, customers, and business operations
-2. **Risk Mitigation**: Develop strategies to address the {recommendation} recommendation
-3. **Implementation Planning**: Create a detailed project plan with resources, timeline, and budget
-4. **Success Metrics**: Define how you'll measure the effectiveness of your solution
-5. **Continuous Monitoring**: Establish a process to track this metric after implementing the fix
-
-Would you like me to elaborate on any of these areas or provide specific guidance for your situation?"""
-
-def get_system_prompt(results: Dict[str, Any] = None) -> str:
-    """Generate the system prompt for the AI assistant based on analysis results."""
-    if not results:
+        # Default prompt for standalone assistant or unknown module type
         return """
         You are a Quality Management expert for medical devices. 
         Provide guidance on quality issues, cost analysis, and regulatory compliance.
@@ -481,39 +517,13 @@ def get_system_prompt(results: Dict[str, Any] = None) -> str:
         - Design controls and validation
         - Manufacturing process improvements
         - Cost-benefit analysis for quality initiatives
+        - Marketing ROI and PPC optimization for medical devices
+        - Supply chain and tariff impact analysis
+        - Risk analysis and decision-making using statistical methods
         
         When providing guidance, be specific to the medical device industry and reference
         relevant regulations or standards when appropriate.
         """
-    
-    return f"""
-    You are a Quality Management expert for medical devices.
-    
-    Product details:
-    - SKU: {results['sku']}
-    - Product Type: {results['product_type']}
-    - Issue Description: {results['issue_description']}
-    - Return Rate (30d): {results['current_metrics']['return_rate_30d']:.2f}%
-    - Current Unit Cost: ${results['current_metrics']['unit_cost']:.2f}
-    - Sales Price: ${results['current_metrics']['sales_price']:.2f}
-    
-    Financial Impact:
-    - Annual Loss Due to Returns: ${results['financial_impact']['annual_loss']:.2f}
-    - ROI (3yr): {results['financial_impact']['roi_3yr']:.2f}%
-    - Payback Period: {results['financial_impact']['payback_period']:.2f} months
-    
-    Recommendation: {results['recommendation']}
-    
-    Your task is to provide expert advice on:
-    1. Next steps based on the analysis
-    2. Additional data that might be needed
-    3. Regulatory considerations for medical devices
-    4. Best practices for implementing the recommended solution
-    
-    Be concise but thorough in your responses. Reference FDA regulations and medical device 
-    industry standards when relevant. Remember to consider both patient safety and business 
-    impact in your recommendations.
-    """
 
 # --- CORE ANALYSIS FUNCTIONS ---
 def analyze_quality_issue(
@@ -1110,6 +1120,140 @@ def export_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
     
     return pd.DataFrame(data)
 
+def export_marketing_roi_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
+    """Convert marketing ROI results to a DataFrame for CSV export."""
+    if not results:
+        return pd.DataFrame()
+    
+    data = {
+        "Metric": [
+            "Ad Spend",
+            "Impressions",
+            "Clicks",
+            "Conversions",
+            "Average Order Value",
+            "Contribution Margin",
+            "CTR (Click-Through Rate)",
+            "Conversion Rate",
+            "CPM (Cost per 1000 Impressions)",
+            "CPC (Cost per Click)",
+            "CPA (Cost per Acquisition)",
+            "Revenue",
+            "Profit",
+            "ROI",
+            "ROAS (Return on Ad Spend)"
+        ],
+        "Value": [
+            f"${results['ad_spend']:.2f}",
+            f"{results['impressions']}",
+            f"{results['clicks']}",
+            f"{results['conversions']}",
+            f"${results['avg_order_value']:.2f}",
+            f"{results['contribution_margin_percent']:.2f}%",
+            f"{results['ctr']:.2f}%",
+            f"{results['conversion_rate']:.2f}%",
+            f"${results['cpm']:.2f}",
+            f"${results['cpc']:.2f}",
+            f"${results['cpa']:.2f}",
+            f"${results['revenue']:.2f}",
+            f"${results['profit']:.2f}",
+            f"{results['roi']:.2f}%",
+            f"{results['roas']:.2f}x"
+        ]
+    }
+    
+    return pd.DataFrame(data)
+
+def export_tariff_analysis_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
+    """Convert tariff analysis results to a DataFrame for CSV export."""
+    if not results:
+        return pd.DataFrame()
+    
+    data = {
+        "Metric": [
+            "Sales Price",
+            "Original COGS",
+            "Tariff Rate",
+            "Tariff Amount",
+            "Landed Cost",
+            "Original Margin",
+            "Original Margin Percentage",
+            "New Margin",
+            "New Margin Percentage",
+            "Margin Impact (Percentage Points)",
+            "Margin Impact (Dollars)",
+            "Breakeven Price",
+            "Price Increase Needed",
+            "Price Increase Percentage"
+        ],
+        "Value": [
+            f"${results['sales_price']:.2f}",
+            f"${results['original_cogs']:.2f}",
+            f"{results['tariff_rate']:.2f}%",
+            f"${results['tariff_amount']:.2f}",
+            f"${results['landed_cost']:.2f}",
+            f"${results['original_margin']:.2f}",
+            f"{results['original_margin_percentage']:.2f}%",
+            f"${results['new_margin']:.2f}",
+            f"{results['new_margin_percentage']:.2f}%",
+            f"{results['margin_impact']:.2f}",
+            f"${results['margin_impact_dollars']:.2f}",
+            f"${results['breakeven_price']:.2f}",
+            f"${results['price_increase_needed']:.2f}",
+            f"{results['price_increase_percentage']:.2f}%"
+        ]
+    }
+    
+    return pd.DataFrame(data)
+
+def export_monte_carlo_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
+    """Convert Monte Carlo simulation results to a DataFrame for CSV export."""
+    if not results:
+        return pd.DataFrame()
+    
+    data = {
+        "Metric": [
+            "Iterations",
+            "Probability of Positive ROI",
+            "Probability of Payback < 1 Year",
+            "Mean ROI",
+            "Median ROI",
+            "ROI Standard Deviation",
+            "ROI Range (Min)",
+            "ROI Range (Max)",
+            "10th Percentile ROI",
+            "90th Percentile ROI",
+            "Mean Payback Period",
+            "Median Payback Period",
+            "Payback Period Standard Deviation",
+            "Payback Range (Min)",
+            "Payback Range (Max)",
+            "10th Percentile Payback",
+            "90th Percentile Payback"
+        ],
+        "Value": [
+            f"{results['iterations']}",
+            f"{results['probability_metrics']['prob_positive_roi']:.2f}%",
+            f"{results['probability_metrics']['prob_payback_1yr']:.2f}%",
+            f"{results['roi_stats']['mean']:.2f}%",
+            f"{results['roi_stats']['median']:.2f}%",
+            f"{results['roi_stats']['std_dev']:.2f}%",
+            f"{results['roi_stats']['min']:.2f}%",
+            f"{results['roi_stats']['max']:.2f}%",
+            f"{results['roi_stats']['percentiles']['p10']:.2f}%",
+            f"{results['roi_stats']['percentiles']['p90']:.2f}%",
+            f"{results['payback_stats']['mean']:.2f} months",
+            f"{results['payback_stats']['median']:.2f} months",
+            f"{results['payback_stats']['std_dev']:.2f} months",
+            f"{results['payback_stats']['min']:.2f} months",
+            f"{results['payback_stats']['max']:.2f} months",
+            f"{results['payback_stats']['percentiles']['p10']:.2f} months",
+            f"{results['payback_stats']['percentiles']['p90']:.2f} months"
+        ]
+    }
+    
+    return pd.DataFrame(data)
+
 def export_as_pdf(results: Dict[str, Any]) -> BytesIO:
     """Generate a PDF report of the analysis results."""
     if not results:
@@ -1236,6 +1380,101 @@ def export_as_pdf(results: Dict[str, Any]) -> BytesIO:
         return buffer
     except Exception as e:
         logger.exception("Error generating PDF report")
+        plt.close('all')  # Close any open figures
+        raise
+
+def export_marketing_roi_as_pdf(results: Dict[str, Any]) -> BytesIO:
+    """Generate a PDF report of the marketing ROI analysis."""
+    if not results:
+        return BytesIO()
+    
+    buffer = BytesIO()
+    
+    try:
+        with PdfPages(buffer) as pdf:
+            # Set up the figure for the first page
+            plt.figure(figsize=(8.5, 11))
+            plt.suptitle("Marketing Campaign ROI Analysis", fontsize=16)
+            plt.text(0.1, 0.9, f"Analysis Date: {datetime.now().strftime('%Y-%m-%d')}", fontsize=12)
+            
+            # Key metrics
+            plt.text(0.1, 0.8, "Key Performance Metrics:", fontsize=14, weight='bold')
+            plt.text(0.1, 0.75, f"Ad Spend: ${results['ad_spend']:.2f}", fontsize=12)
+            plt.text(0.1, 0.7, f"Revenue: ${results['revenue']:.2f}", fontsize=12)
+            plt.text(0.1, 0.65, f"ROI: {results['roi']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.6, f"ROAS: {results['roas']:.2f}x", fontsize=12)
+            
+            # Funnel metrics
+            plt.text(0.5, 0.8, "Funnel Metrics:", fontsize=14, weight='bold')
+            plt.text(0.5, 0.75, f"Impressions: {results['impressions']}", fontsize=12)
+            plt.text(0.5, 0.7, f"Clicks: {results['clicks']}", fontsize=12)
+            plt.text(0.5, 0.65, f"Conversions: {results['conversions']}", fontsize=12)
+            plt.text(0.5, 0.6, f"Conversion Rate: {results['conversion_rate']:.2f}%", fontsize=12)
+            
+            # Add funnel chart
+            ax1 = plt.axes([0.1, 0.25, 0.35, 0.25])
+            metrics = ['Impressions', 'Clicks', 'Conversions']
+            values = [results['impressions'], results['clicks'], results['conversions']]
+            ax1.bar(metrics, values, color=['#90E0EF', '#48CAE4', '#0096C7'])
+            ax1.set_yscale('log')  # Log scale for better visualization
+            ax1.set_title('Marketing Funnel (Log Scale)')
+            
+            # Add ROI chart
+            ax2 = plt.axes([0.55, 0.25, 0.35, 0.25])
+            financial = ['Ad Spend', 'Revenue', 'Profit']
+            fin_values = [results['ad_spend'], results['revenue'], results['profit']]
+            ax2.bar(financial, fin_values, color=['#E76F51', '#48CAE4', '#40916C'])
+            for i, v in enumerate(fin_values):
+                ax2.text(i, v + 5, f"${v:.0f}", ha='center')
+            ax2.set_title('Financial Performance')
+            
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            pdf.savefig()
+            plt.close()
+            
+            # Second page with detailed metrics
+            plt.figure(figsize=(8.5, 11))
+            plt.suptitle("Detailed Marketing Metrics", fontsize=16)
+            
+            # Performance metrics
+            plt.text(0.1, 0.9, "Performance Metrics:", fontsize=14, weight='bold')
+            plt.text(0.1, 0.85, f"Click-Through Rate (CTR): {results['ctr']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.8, f"Conversion Rate: {results['conversion_rate']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.75, f"Average Order Value: ${results['avg_order_value']:.2f}", fontsize=12)
+            plt.text(0.1, 0.7, f"Contribution Margin: {results['contribution_margin_percent']:.2f}%", fontsize=12)
+            
+            # Cost metrics
+            plt.text(0.5, 0.9, "Cost Metrics:", fontsize=14, weight='bold')
+            plt.text(0.5, 0.85, f"CPM (Cost per 1000 Impressions): ${results['cpm']:.2f}", fontsize=12)
+            plt.text(0.5, 0.8, f"CPC (Cost per Click): ${results['cpc']:.2f}", fontsize=12)
+            plt.text(0.5, 0.75, f"CPA (Cost per Acquisition): ${results['cpa']:.2f}", fontsize=12)
+            
+            # Add cost metric comparison chart
+            ax1 = plt.axes([0.1, 0.4, 0.8, 0.2])
+            cost_metrics = ['CPM', 'CPC', 'CPA']
+            cost_values = [results['cpm'], results['cpc'], results['cpa']]
+            ax1.bar(cost_metrics, cost_values, color=['#90E0EF', '#48CAE4', '#0096C7'])
+            for i, v in enumerate(cost_values):
+                ax1.text(i, v + 0.2, f"${v:.2f}", ha='center')
+            ax1.set_title('Cost Metrics Comparison')
+            
+            # Add ROI and ROAS chart
+            ax2 = plt.axes([0.1, 0.1, 0.8, 0.2])
+            roi_roas = ['ROI (%)', 'ROAS (x)']
+            roi_roas_values = [results['roi'], results['roas'] * 100]  # Scale ROAS for better visualization
+            ax2.bar(roi_roas, roi_roas_values, color=['#E9C46A', '#40916C'])
+            ax2.text(0, roi_roas_values[0] + 5, f"{roi_roas_values[0]:.1f}%", ha='center')
+            ax2.text(1, roi_roas_values[1] + 5, f"{results['roas']:.2f}x", ha='center')
+            ax2.set_title('ROI and ROAS')
+            
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            pdf.savefig()
+            plt.close()
+            
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        logger.exception("Error generating marketing ROI PDF report")
         plt.close('all')  # Close any open figures
         raise
 
@@ -1429,7 +1668,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
             # Calculate values needed for display
             annual_returns = results['current_metrics']['annual_returns']
             annual_sales = results['current_metrics']['annual_sales']
-            loss_per_return = financial_impact['annual_loss'] / annual_returns if annual_returns > 0 else 0
+            loss_per_return = results['financial_impact']['annual_loss'] / annual_returns if annual_returns > 0 else 0
             
             col1, col2 = st.columns(2)
             
@@ -1439,16 +1678,16 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 - **Annual Returns:** {annual_returns:.0f} units
                 - **Return Rate:** {results['current_metrics']['return_rate_30d']:.2f}%
                 - **Loss Per Return:** {format_currency(loss_per_return)}
-                - **Annual Loss:** {format_currency(financial_impact['annual_loss'])}
+                - **Annual Loss:** {format_currency(results['financial_impact']['annual_loss'])}
                 """)
             
             with col2:
                 st.markdown("#### After Improvement")
                 st.markdown(f"""
-                - **Returns Prevented:** {financial_impact['returns_prevented']:.0f} units
-                - **Gross Savings:** {format_currency(financial_impact['savings'])}
-                - **Adjusted Savings:** {format_currency(financial_impact['adjusted_savings'])} (with {results['solution_metrics']['solution_confidence']}% confidence)
-                - **Implementation Cost:** {format_currency(financial_impact['implementation_cost'])} (includes {format_currency(results['solution_metrics']['fix_cost_upfront'])} upfront)
+                - **Returns Prevented:** {results['financial_impact']['returns_prevented']:.0f} units
+                - **Gross Savings:** {format_currency(results['financial_impact']['savings'])}
+                - **Adjusted Savings:** {format_currency(results['financial_impact']['adjusted_savings'])} (with {results['solution_metrics']['solution_confidence']}% confidence)
+                - **Implementation Cost:** {format_currency(results['financial_impact']['implementation_cost'])} (includes {format_currency(results['solution_metrics']['fix_cost_upfront'])} upfront)
                 """)
             
             # Waterfall chart with hover tooltips
@@ -1459,15 +1698,15 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 x=["Current Loss", "Prevented Returns", "Implementation Cost", "Ongoing Costs", "Net Impact"],
                 textposition="outside",
                 text=[
-                    f"${financial_impact['annual_loss']:,.0f}",
-                    f"+${financial_impact['adjusted_savings']:,.0f}",
+                    f"${results['financial_impact']['annual_loss']:,.0f}",
+                    f"+${results['financial_impact']['adjusted_savings']:,.0f}",
                     f"-${results['solution_metrics']['fix_cost_upfront']:,.0f}",
                     f"-${(annual_sales * results['solution_metrics']['fix_cost_per_unit']):,.0f}",
-                    f"${(financial_impact['adjusted_savings'] - financial_impact['implementation_cost']):,.0f}"
+                    f"${(results['financial_impact']['adjusted_savings'] - results['financial_impact']['implementation_cost']):,.0f}"
                 ],
                 y=[
-                    -financial_impact['annual_loss'],
-                    financial_impact['adjusted_savings'],
+                    -results['financial_impact']['annual_loss'],
+                    results['financial_impact']['adjusted_savings'],
                     -results['solution_metrics']['fix_cost_upfront'],
                     -(annual_sales * results['solution_metrics']['fix_cost_per_unit']),
                     0
@@ -1478,11 +1717,11 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 totals={"marker": {"color": SECONDARY_COLOR}},
                 hoverinfo="text",
                 hovertext=[
-                    f"Current annual loss due to returns: ${financial_impact['annual_loss']:,.0f}",
-                    f"Savings from prevented returns: +${financial_impact['adjusted_savings']:,.0f}",
+                    f"Current annual loss due to returns: ${results['financial_impact']['annual_loss']:,.0f}",
+                    f"Savings from prevented returns: +${results['financial_impact']['adjusted_savings']:,.0f}",
                     f"One-time implementation cost: -${results['solution_metrics']['fix_cost_upfront']:,.0f}",
                     f"Annual ongoing costs: -${(annual_sales * results['solution_metrics']['fix_cost_per_unit']):,.0f}",
-                    f"Net annual impact: ${(financial_impact['adjusted_savings'] - financial_impact['implementation_cost']):,.0f}"
+                    f"Net annual impact: ${(results['financial_impact']['adjusted_savings'] - results['financial_impact']['implementation_cost']):,.0f}"
                 ]
             ))
             
@@ -1770,6 +2009,638 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
             except Exception as e:
                 st.error(f"Error generating PDF: {e}")
 
+def display_marketing_roi_results(results: Dict[str, Any], expanded: bool = True):
+    """Display the results of a marketing ROI analysis."""
+    if not results:
+        return
+    
+    st.markdown("### 📊 Campaign Analysis Results")
+    
+    # Summary metrics in columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        roi_color = generate_color_scale(
+            results['roi'], 100, 0
+        )
+        with st.container():
+            st.markdown(f"""
+            <div class="metric-card" data-tooltip="Return on Investment">
+                <div class="metric-label">ROI</div>
+                <div class="metric-value" style="color: {roi_color};">{results['roi']:.2f}%</div>
+                <div class="metric-subvalue">Return on Investment</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        roas_color = generate_color_scale(
+            results['roas'], 4, 1
+        )
+        st.markdown(f"""
+        <div class="metric-card" data-tooltip="Return on Ad Spend">
+            <div class="metric-label">ROAS</div>
+            <div class="metric-value" style="color: {roas_color};">{results['roas']:.2f}x</div>
+            <div class="metric-subvalue">Return on Ad Spend</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        conv_color = generate_color_scale(
+            results['conversion_rate'], 3, 0.5
+        )
+        st.markdown(f"""
+        <div class="metric-card" data-tooltip="Percentage of clicks that convert to sales">
+            <div class="metric-label">Conversion Rate</div>
+            <div class="metric-value" style="color: {conv_color};">{results['conversion_rate']:.2f}%</div>
+            <div class="metric-subvalue">Clicks to sales</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        cpa_color = generate_color_scale(
+            50 - min(results['cpa'], 50), 40, 10
+        )
+        st.markdown(f"""
+        <div class="metric-card" data-tooltip="Cost Per Acquisition (sales)">
+            <div class="metric-label">CPA</div>
+            <div class="metric-value" style="color: {cpa_color};">${results['cpa']:.2f}</div>
+            <div class="metric-subvalue">Cost per conversion</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Campaign performance banner
+    performance_level = ""
+    performance_color = ""
+    if results['roi'] >= 100:
+        performance_level = "Excellent Performance"
+        performance_color = SUCCESS_COLOR
+    elif results['roi'] >= 50:
+        performance_level = "Good Performance"
+        performance_color = "#88D498"  # Lighter green
+    elif results['roi'] >= 0:
+        performance_level = "Acceptable Performance"
+        performance_color = WARNING_COLOR
+    else:
+        performance_level = "Needs Improvement"
+        performance_color = DANGER_COLOR
+    
+    st.markdown(f"""
+    <div style="background-color: {performance_color}; padding: 1rem; border-radius: 4px; margin: 1rem 0; 
+                color: white; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <span style="font-size: 1.1rem; font-weight: 600;">Campaign Assessment:</span> 
+            <span style="font-size: 1.1rem;">{performance_level}</span>
+        </div>
+        <div>
+            <span style="padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background-color: rgba(255,255,255,0.2);">
+                ${results['revenue']:.2f} Revenue | ${results['profit']:.2f} Profit
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Detailed results in expandable section
+    with st.expander("View Detailed Analysis", expanded=expanded):
+        tabs = st.tabs(["Campaign Performance", "Funnel Analysis", "Cost Metrics", "ROI Breakdown"])
+        
+        with tabs[0]:
+            # Campaign Performance tab
+            st.subheader("Campaign Performance")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Key Metrics")
+                st.markdown(f"""
+                - **Total Ad Spend:** ${results['ad_spend']:.2f}
+                - **Total Revenue:** ${results['revenue']:.2f}
+                - **Total Profit:** ${results['profit']:.2f}
+                - **Return on Investment (ROI):** {results['roi']:.2f}%
+                - **Return on Ad Spend (ROAS):** {results['roas']:.2f}x
+                """)
+            
+            with col2:
+                st.markdown("#### Volume Metrics")
+                st.markdown(f"""
+                - **Impressions:** {results['impressions']:,}
+                - **Clicks:** {results['clicks']:,}
+                - **Conversions:** {results['conversions']:,}
+                - **Average Order Value:** ${results['avg_order_value']:.2f}
+                - **Contribution Margin:** {results['contribution_margin_percent']:.2f}%
+                """)
+            
+            # Financial performance chart
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name="Ad Spend",
+                x=["Cost"],
+                y=[results['ad_spend']],
+                marker_color=DANGER_COLOR,
+                text=f"${results['ad_spend']:.2f}",
+                textposition="auto"
+            ))
+            
+            fig.add_trace(go.Bar(
+                name="Revenue",
+                x=["Revenue"],
+                y=[results['revenue']],
+                marker_color=SECONDARY_COLOR,
+                text=f"${results['revenue']:.2f}",
+                textposition="auto"
+            ))
+            
+            fig.add_trace(go.Bar(
+                name="Profit",
+                x=["Profit"],
+                y=[results['profit']],
+                marker_color=SUCCESS_COLOR,
+                text=f"${results['profit']:.2f}",
+                textposition="auto"
+            ))
+            
+            fig.update_layout(
+                title="Financial Performance",
+                yaxis_title="Amount ($)",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # ROI and ROAS gauge chart
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number+delta",
+                    value=results['roi'],
+                    title={"text": "ROI (%)"},
+                    delta={'reference': 50, 'increasing': {'color': SUCCESS_COLOR}, 'decreasing': {'color': DANGER_COLOR}},
+                    gauge={
+                        "axis": {"range": [-50, 150], "tickwidth": 1},
+                        "bar": {"color": PRIMARY_COLOR},
+                        "bgcolor": "white",
+                        "borderwidth": 2,
+                        "bordercolor": "gray",
+                        "steps": [
+                            {"range": [-50, 0], "color": DANGER_COLOR},
+                            {"range": [0, 50], "color": WARNING_COLOR},
+                            {"range": [50, 100], "color": "#88D498"},
+                            {"range": [100, 150], "color": SUCCESS_COLOR}
+                        ],
+                        "threshold": {
+                            "line": {"color": "black", "width": 4},
+                            "thickness": 0.75,
+                            "value": 50
+                        }
+                    }
+                ))
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number+delta",
+                    value=results['roas'],
+                    title={"text": "ROAS (x)"},
+                    delta={'reference': 3, 'increasing': {'color': SUCCESS_COLOR}, 'decreasing': {'color': DANGER_COLOR}},
+                    gauge={
+                        "axis": {"range": [0, 6], "tickwidth": 1},
+                        "bar": {"color": PRIMARY_COLOR},
+                        "bgcolor": "white",
+                        "borderwidth": 2,
+                        "bordercolor": "gray",
+                        "steps": [
+                            {"range": [0, 1], "color": DANGER_COLOR},
+                            {"range": [1, 3], "color": WARNING_COLOR},
+                            {"range": [3, 4], "color": "#88D498"},
+                            {"range": [4, 6], "color": SUCCESS_COLOR}
+                        ],
+                        "threshold": {
+                            "line": {"color": "black", "width": 4},
+                            "thickness": 0.75,
+                            "value": 3
+                        }
+                    }
+                ))
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+                
+        with tabs[1]:
+            # Funnel Analysis tab
+            st.subheader("Funnel Analysis")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Funnel Metrics")
+                st.markdown(f"""
+                - **Click-Through Rate (CTR):** {results['ctr']:.2f}%
+                - **Conversion Rate:** {results['conversion_rate']:.2f}%
+                - **Funnel Efficiency:** {(results['conversion_rate'] * results['ctr'] / 100):.4f}%
+                """)
+                
+                # Add industry benchmarks
+                st.markdown("#### Industry Benchmarks")
+                st.markdown("""
+                *Medical Device Industry Averages:*
+                - CTR: 1.0-3.0%
+                - Conversion Rate: 1.5-2.5%
+                - ROAS: 2.5-4.0x
+                """)
+            
+            with col2:
+                # Funnel visualization with Plotly
+                stages = ['Impressions', 'Clicks', 'Conversions']
+                values = [results['impressions'], results['clicks'], results['conversions']]
+                
+                colors = [TERTIARY_COLOR, SECONDARY_COLOR, PRIMARY_COLOR]
+                
+                fig = go.Figure()
+                
+                fig.add_trace(go.Funnel(
+                    name="Funnel",
+                    y=stages,
+                    x=values,
+                    textposition="inside",
+                    textinfo="value+percent initial",
+                    opacity=0.8,
+                    marker={"color": colors, "line": {"width": 1, "color": "white"}}
+                ))
+                
+                fig.update_layout(
+                    title="Marketing Funnel",
+                    height=300
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Funnel drop-off analysis
+            st.markdown("#### Funnel Drop-off Analysis")
+            
+            # Calculate drop-offs
+            impression_to_click_dropoff = 100 - results['ctr']
+            click_to_conversion_dropoff = 100 - results['conversion_rate']
+            
+            # Create drop-off visualization
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name="Drop-off Rate",
+                x=["Impression to Click", "Click to Conversion"],
+                y=[impression_to_click_dropoff, click_to_conversion_dropoff],
+                text=[f"{impression_to_click_dropoff:.2f}%", f"{click_to_conversion_dropoff:.2f}%"],
+                textposition="auto",
+                marker_color=[SECONDARY_COLOR, PRIMARY_COLOR],
+                opacity=0.7
+            ))
+            
+            fig.update_layout(
+                title="Funnel Drop-off Analysis",
+                yaxis_title="Drop-off Rate (%)",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Recommendations based on funnel analysis
+            st.markdown("#### Funnel Optimization Insights")
+            
+            if impression_to_click_dropoff > 98:  # Very high impression to click drop-off
+                st.warning("⚠️ Very high impression to click drop-off indicates potential issues with ad creative, targeting, or relevance.")
+            elif impression_to_click_dropoff > 95:  # High impression to click drop-off (common)
+                st.info("ℹ️ The impression to click drop-off is typical for digital advertising but could be improved with better targeting and ad creative.")
+            else:  # Good impression to click rate
+                st.success("✅ The impression to click conversion is performing well, indicating effective ad creative and targeting.")
+                
+            if click_to_conversion_dropoff > 98:  # Very high click to conversion drop-off
+                st.error("❌ Very high click to conversion drop-off indicates significant landing page or offer issues.")
+            elif click_to_conversion_dropoff > 95:  # High click to conversion drop-off
+                st.warning("⚠️ The click to conversion drop-off suggests opportunities to improve landing page experience or offer clarity.")
+            else:  # Good click to conversion rate
+                st.success("✅ The click to conversion rate is performing well, indicating effective landing pages and offers.")
+        
+        with tabs[2]:
+            # Cost Metrics tab
+            st.subheader("Cost Metrics")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Cost Metrics")
+                st.markdown(f"""
+                - **CPM (Cost per 1000 Impressions):** ${results['cpm']:.2f}
+                - **CPC (Cost per Click):** ${results['cpc']:.2f}
+                - **CPA (Cost per Acquisition):** ${results['cpa']:.2f}
+                """)
+                
+                st.markdown("#### Value Metrics")
+                st.markdown(f"""
+                - **Revenue per Click:** ${safe_divide(results['revenue'], results['clicks'], 0):.2f}
+                - **Profit per Click:** ${safe_divide(results['profit'], results['clicks'], 0):.2f}
+                - **Revenue per Impression:** ${safe_divide(results['revenue'] * 1000, results['impressions'], 0):.2f} per 1000
+                """)
+            
+            with col2:
+                # Cost metrics comparison
+                fig = go.Figure()
+                
+                # Add a trace for CPA
+                fig.add_trace(go.Indicator(
+                    mode="number+gauge",
+                    value=results['cpa'],
+                    title={"text": "CPA (Cost per Acquisition)"},
+                    domain={'x': [0, 1], 'y': [0.6, 1]},
+                    gauge={
+                        'axis': {'range': [None, 50]},
+                        'bar': {'color': PRIMARY_COLOR},
+                        'steps': [
+                            {'range': [0, 10], 'color': SUCCESS_COLOR},
+                            {'range': [10, 25], 'color': WARNING_COLOR},
+                            {'range': [25, 50], 'color': DANGER_COLOR}
+                        ]
+                    },
+                    number={'prefix': "$"}
+                ))
+                
+                # Add a trace for CPC
+                fig.add_trace(go.Indicator(
+                    mode="number+gauge",
+                    value=results['cpc'],
+                    title={"text": "CPC (Cost per Click)"},
+                    domain={'x': [0, 1], 'y': [0.3, 0.5]},
+                    gauge={
+                        'axis': {'range': [None, 2]},
+                        'bar': {'color': SECONDARY_COLOR},
+                        'steps': [
+                            {'range': [0, 0.5], 'color': SUCCESS_COLOR},
+                            {'range': [0.5, 1], 'color': WARNING_COLOR},
+                            {'range': [1, 2], 'color': DANGER_COLOR}
+                        ]
+                    },
+                    number={'prefix': "$"}
+                ))
+                
+                # Add a trace for CPM
+                fig.add_trace(go.Indicator(
+                    mode="number+gauge",
+                    value=results['cpm'],
+                    title={"text": "CPM (Cost per 1000 Impressions)"},
+                    domain={'x': [0, 1], 'y': [0, 0.2]},
+                    gauge={
+                        'axis': {'range': [None, 50]},
+                        'bar': {'color': TERTIARY_COLOR},
+                        'steps': [
+                            {'range': [0, 15], 'color': SUCCESS_COLOR},
+                            {'range': [15, 30], 'color': WARNING_COLOR},
+                            {'range': [30, 50], 'color': DANGER_COLOR}
+                        ]
+                    },
+                    number={'prefix': "$"}
+                ))
+                
+                fig.update_layout(
+                    height=500
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Cost comparison bar chart
+            fig = go.Figure()
+            
+            cost_metrics = ['CPM', 'CPC', 'CPA']
+            values = [results['cpm'], results['cpc'], results['cpa']]
+            
+            fig.add_trace(go.Bar(
+                x=cost_metrics,
+                y=values,
+                text=[f"${v:.2f}" for v in values],
+                textposition="auto",
+                marker_color=[TERTIARY_COLOR, SECONDARY_COLOR, PRIMARY_COLOR]
+            ))
+            
+            fig.update_layout(
+                title="Cost Metrics Comparison",
+                yaxis_title="Cost ($)",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Benchmark comparison if available
+            st.markdown("#### Industry Benchmark Comparison")
+            
+            # Create benchmark data - placeholder values for medical device industry
+            benchmarks = {
+                'CPM': 25.0,  # Average CPM for medical device industry
+                'CPC': 0.75,  # Average CPC for medical device industry
+                'CPA': 25.0   # Average CPA for medical device industry
+            }
+            
+            # Calculate performance relative to benchmarks (negative is better)
+            cpm_vs_benchmark = ((results['cpm'] - benchmarks['CPM']) / benchmarks['CPM']) * 100
+            cpc_vs_benchmark = ((results['cpc'] - benchmarks['CPC']) / benchmarks['CPC']) * 100
+            cpa_vs_benchmark = ((results['cpa'] - benchmarks['CPA']) / benchmarks['CPA']) * 100
+            
+            # Create comparison chart
+            fig = go.Figure()
+            
+            metrics = ['CPM vs Benchmark', 'CPC vs Benchmark', 'CPA vs Benchmark']
+            values = [cpm_vs_benchmark, cpc_vs_benchmark, cpa_vs_benchmark]
+            colors = [
+                SUCCESS_COLOR if v <= 0 else DANGER_COLOR for v in values
+            ]
+            
+            fig.add_trace(go.Bar(
+                x=metrics,
+                y=values,
+                text=[f"{v:.1f}%" for v in values],
+                textposition="auto",
+                marker_color=colors
+            ))
+            
+            # Add a horizontal line at 0%
+            fig.add_shape(
+                type="line",
+                x0=-0.5,
+                y0=0,
+                x1=2.5,
+                y1=0,
+                line=dict(
+                    color="black",
+                    width=2,
+                    dash="dash",
+                )
+            )
+            
+            fig.update_layout(
+                title="Performance vs Industry Benchmarks",
+                yaxis_title="% Difference from Benchmark",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tabs[3]:
+            # ROI Breakdown tab
+            st.subheader("ROI Breakdown")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### ROI Components")
+                st.markdown(f"""
+                - **Total Ad Spend:** ${results['ad_spend']:.2f}
+                - **Total Revenue:** ${results['revenue']:.2f}
+                - **Contribution Margin:** {results['contribution_margin_percent']:.2f}%
+                - **Profit (Revenue × Margin):** ${results['profit']:.2f}
+                - **ROI (Profit - Spend) / Spend:** {results['roi']:.2f}%
+                """)
+                
+                st.markdown("#### Breakeven Analysis")
+                
+                # Calculate metrics
+                breakeven_conversions = safe_divide(results['ad_spend'], (results['avg_order_value'] * (results['contribution_margin_percent'] / 100)), 0)
+                breakeven_conversion_rate = safe_divide(breakeven_conversions * 100, results['clicks'], 0)
+                
+                st.markdown(f"""
+                - **Current Conversions:** {results['conversions']}
+                - **Breakeven Conversions Needed:** {breakeven_conversions:.2f}
+                - **Conversions Above Breakeven:** {results['conversions'] - breakeven_conversions:.2f}
+                - **Current Conversion Rate:** {results['conversion_rate']:.2f}%
+                - **Breakeven Conversion Rate:** {breakeven_conversion_rate:.2f}%
+                """)
+            
+            with col2:
+                # ROI waterfall chart
+                fig = go.Figure(go.Waterfall(
+                    name="ROI Components",
+                    orientation="v",
+                    measure=["absolute", "relative", "total"],
+                    x=["Ad Spend", "Profit", "Net (ROI)"],
+                    textposition="outside",
+                    text=[
+                        f"-${results['ad_spend']:.2f}",
+                        f"+${results['profit']:.2f}",
+                        f"${(results['profit'] - results['ad_spend']):.2f}"
+                    ],
+                    y=[
+                        -results['ad_spend'],
+                        results['profit'],
+                        0
+                    ],
+                    connector={"line": {"color": "rgb(63, 63, 63)"}},
+                    decreasing={"marker": {"color": DANGER_COLOR}},
+                    increasing={"marker": {"color": SUCCESS_COLOR}},
+                    totals={"marker": {"color": PRIMARY_COLOR}}
+                ))
+                
+                fig.update_layout(
+                    title="ROI Components",
+                    height=300
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # ROI sensitivity analysis
+            st.markdown("#### ROI Sensitivity Analysis")
+            
+            # Create data for sensitivity analysis
+            conversion_rates = np.linspace(0, results['conversion_rate'] * 2, 20)
+            roi_values = []
+            
+            for conv_rate in conversion_rates:
+                # Calculate projected conversions
+                projected_conversions = (conv_rate / 100) * results['clicks']
+                # Calculate projected revenue
+                projected_revenue = projected_conversions * results['avg_order_value']
+                # Calculate projected profit
+                projected_profit = projected_revenue * (results['contribution_margin_percent'] / 100)
+                # Calculate projected ROI
+                projected_roi = safe_divide(projected_profit - results['ad_spend'], results['ad_spend'], -100) * 100
+                roi_values.append(projected_roi)
+            
+            # Create sensitivity chart
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=conversion_rates,
+                y=roi_values,
+                mode='lines+markers',
+                name='ROI',
+                line=dict(color=PRIMARY_COLOR, width=3),
+                marker=dict(size=8)
+            ))
+            
+            # Add a vertical line at current conversion rate
+            fig.add_shape(
+                type="line",
+                x0=results['conversion_rate'],
+                y0=min(roi_values),
+                x1=results['conversion_rate'],
+                y1=max(roi_values),
+                line=dict(
+                    color="red",
+                    width=2,
+                    dash="dash",
+                )
+            )
+            
+            # Add a horizontal line at 0% ROI (breakeven)
+            fig.add_shape(
+                type="line",
+                x0=min(conversion_rates),
+                y0=0,
+                x1=max(conversion_rates),
+                y1=0,
+                line=dict(
+                    color="gray",
+                    width=2,
+                    dash="dash",
+                )
+            )
+            
+            # Add annotation for current position
+            fig.add_annotation(
+                x=results['conversion_rate'],
+                y=results['roi'],
+                text=f"Current: {results['conversion_rate']:.2f}%, ROI: {results['roi']:.2f}%",
+                showarrow=True,
+                arrowhead=1
+            )
+            
+            fig.update_layout(
+                title="ROI Sensitivity to Conversion Rate",
+                xaxis_title="Conversion Rate (%)",
+                yaxis_title="ROI (%)",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Export options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if results:
+            df = export_marketing_roi_as_csv(results)
+            csv_download = generate_download_link(
+                df, 
+                f"marketing_roi_analysis_{datetime.now().strftime('%Y%m%d')}.csv",f"marketing_roi_analysis_{datetime.now().strftime('%Y%m%d')}.csv", 
+                "📥 Export as CSV"
+            )
+            st.markdown(csv_download, unsafe_allow_html=True)
+    
+    with col2:
+        if results:
+            try:
+                pdf_buffer = export_marketing_roi_as_pdf(results)
+                pdf_data = base64.b64encode(pdf_buffer.read()).decode('utf-8')
+                pdf_download = f'<a href="data:application/pdf;base64,{pdf_data}" download="marketing_roi_analysis_{datetime.now().strftime("%Y%m%d")}.pdf" class="export-button">📄 Export as PDF</a>'
+                st.markdown(pdf_download, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error generating PDF: {e}")
+
 def display_quality_analysis_form():
     """Display the form for quality issue analysis."""
     with st.form(key="quality_analysis_form"):
@@ -2030,32 +2901,69 @@ def display_quality_analysis_form():
         
         return None
 
-def display_ai_assistant(results: Dict[str, Any] = None):
+def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "quality"):
     """Display the AI assistant chat interface."""
-    system_prompt = get_system_prompt(results)
     
-    st.markdown("""
+    # Get the appropriate system prompt and chat history based on module type
+    system_prompt = get_system_prompt(results, module_type)
+    
+    # Determine which chat history to use based on module type
+    if module_type == "quality" and results:
+        chat_history_key = "chat_history"
+    elif module_type == "marketing":
+        chat_history_key = "marketing_chat_history"
+    elif module_type == "tariff":
+        chat_history_key = "tariff_chat_history"
+    elif module_type == "monte_carlo":
+        chat_history_key = "monte_carlo_chat_history"
+    else:
+        chat_history_key = "standalone_chat_history"
+    
+    # Set the title based on module type
+    if module_type == "quality":
+        title = "Quality Management AI Assistant"
+    elif module_type == "marketing":
+        title = "Marketing ROI AI Assistant"
+    elif module_type == "tariff":
+        title = "Tariff Impact AI Assistant"
+    elif module_type == "monte_carlo":
+        title = "Risk Analysis AI Assistant"
+    else:
+        title = "AI Assistant"
+    
+    st.markdown(f"""
     <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1rem;">
-        <i class="fas fa-robot"></i> Quality AI Assistant
+        <i class="fas fa-robot"></i> {title}
     </h3>
     """, unsafe_allow_html=True)
     
-    # Add a brief explanation of the assistant's capabilities
-    st.markdown("""
+    # Add a brief explanation of the assistant's capabilities based on module type
+    if module_type == "quality":
+        explanation = "Ask questions about quality issues, regulatory considerations, and implementation strategies."
+    elif module_type == "marketing":
+        explanation = "Ask questions about marketing campaign optimization, ROI improvement, and compliance for medical device marketing."
+    elif module_type == "tariff":
+        explanation = "Ask questions about tariff mitigation strategies, supply chain optimization, and pricing strategies."
+    elif module_type == "monte_carlo":
+        explanation = "Ask questions about risk analysis, probability interpretation, and implementation strategies."
+    else:
+        explanation = "Ask questions about quality management, regulatory compliance, and cost analysis."
+    
+    st.markdown(f"""
     <div style="background-color: #f8f9fa; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; border-left: 3px solid #0096C7;">
-        <strong>AI features:</strong> Ask questions about quality issues, regulatory considerations, and implementation strategies.
+        <strong>AI features:</strong> {explanation}
     </div>
     """, unsafe_allow_html=True)
     
-    # Which chat history to use
-    chat_history = st.session_state.chat_history if results else st.session_state.standalone_chat_history
+    # Get the appropriate chat history
+    chat_history = getattr(st.session_state, chat_history_key)
     
     # Display chat history in a scrollable container
     st.markdown('<div class="chat-container">', unsafe_allow_html=True)
     
     # If no chat history yet, add a welcome message
     if not chat_history:
-        if results:
+        if module_type == "quality" and results:
             st.markdown(f"""
             <div class="assistant-bubble">
                 <strong>AI Assistant:</strong> I've analyzed the quality data for {results['sku']}. The return rate is {results['current_metrics']['return_rate_30d']:.2f}% with an estimated annual loss of {format_currency(results['financial_impact']['annual_loss'])}. 
@@ -2065,10 +2973,40 @@ def display_ai_assistant(results: Dict[str, Any] = None):
                 How can I help you with this quality issue today?
             </div>
             """, unsafe_allow_html=True)
+        elif module_type == "marketing" and results:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> I've analyzed your marketing campaign performance. Your ROI is {results['roi']:.2f}% with a ROAS of {results['roas']:.2f}x. 
+                <br><br>
+                Your conversion rate is {results['conversion_rate']:.2f}% and your CPA is ${results['cpa']:.2f}.
+                <br><br>
+                How can I help you optimize this marketing campaign today?
+            </div>
+            """, unsafe_allow_html=True)
+        elif module_type == "tariff" and results:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> I've analyzed the tariff impact on your product. The {results['tariff_rate']:.2f}% tariff reduces your margin from {results['original_margin_percentage']:.2f}% to {results['new_margin_percentage']:.2f}%.
+                <br><br>
+                To maintain your original margin, you would need to increase prices by {results['price_increase_percentage']:.2f}%.
+                <br><br>
+                How can I help with your tariff mitigation strategy today?
+            </div>
+            """, unsafe_allow_html=True)
+        elif module_type == "monte_carlo" and results:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> I've analyzed your Monte Carlo simulation results. There's a {results['probability_metrics']['prob_positive_roi']:.2f}% probability of achieving positive ROI.
+                <br><br>
+                The median ROI is {results['roi_stats']['median']:.2f}% and the median payback period is {results['payback_stats']['median']:.2f} months.
+                <br><br>
+                How can I help interpret these risk analysis results for you today?
+            </div>
+            """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="assistant-bubble">
-                <strong>AI Assistant:</strong> Hello! I'm your Quality Management Assistant for medical devices.
+                <strong>AI Assistant:</strong> Hello! I'm your {title} for medical devices.
                 <br><br>
                 I can help with:
                 <ul>
@@ -2079,7 +3017,7 @@ def display_ai_assistant(results: Dict[str, Any] = None):
                     <li>Implementation strategies for quality solutions</li>
                 </ul>
                 
-                How can I assist you today with your medical device quality management needs?
+                How can I assist you today with your medical device needs?
             </div>
             """, unsafe_allow_html=True)
     else:
@@ -2094,75 +3032,102 @@ def display_ai_assistant(results: Dict[str, Any] = None):
     
     # Input area with suggested prompts
     user_input = st.text_input(
-        "Ask about quality management:",
-        key=f"chat_input_{'results' if results else 'standalone'}", 
+        f"Ask the {title}:",
+        key=f"chat_input_{module_type}", 
         placeholder="Type your question here or use the suggested questions below"
     )
     
     # Suggested prompt buttons in columns for better spacing
     col1, col2, col3 = st.columns(3)
     
-    # Different suggested prompts based on context
-    if results:
+    # Different suggested prompts based on module type
+    if module_type == "quality" and results:
         with col1:
-            if st.button("What are the next steps?", key="prompt1", use_container_width=True):
+            if st.button("What are the next steps?", key=f"prompt1_{module_type}", use_container_width=True):
                 user_input = "What are the next steps I should take based on this analysis?"
         
         with col2:
-            if st.button("Regulatory considerations?", key="prompt2", use_container_width=True):
+            if st.button("Regulatory considerations?", key=f"prompt2_{module_type}", use_container_width=True):
                 user_input = "What regulatory considerations should I keep in mind for this quality issue?"
         
         with col3:
-            if st.button("How to improve solution?", key="prompt3", use_container_width=True):
+            if st.button("How to improve solution?", key=f"prompt3_{module_type}", use_container_width=True):
                 user_input = "How can I improve the effectiveness of the proposed solution?"
+    elif module_type == "marketing" and results:
+        with col1:
+            if st.button("How to improve ROI?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What strategies can I implement to improve the ROI of this marketing campaign?"
+        
+        with col2:
+            if st.button("Industry benchmarks?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "How does this campaign compare to industry benchmarks for medical devices?"
+        
+        with col3:
+            if st.button("Budget allocation?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "How should I allocate my marketing budget for optimal results?"
+    elif module_type == "tariff" and results:
+        with col1:
+            if st.button("Alternative sourcing?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What alternative sourcing options should I consider to mitigate tariff impact?"
+        
+        with col2:
+            if st.button("Pricing strategy?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "What pricing strategy would you recommend given the tariff impact?"
+        
+        with col3:
+            if st.button("Supply chain changes?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "What supply chain adjustments could help optimize landed costs?"
+    elif module_type == "monte_carlo" and results:
+        with col1:
+            if st.button("Risk assessment?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What does this risk assessment tell me about proceeding with this project?"
+        
+        with col2:
+            if st.button("Implementation strategy?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "What implementation approach would you recommend given the uncertainty?"
+        
+        with col3:
+            if st.button("Key metrics to track?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "What key metrics should we track during implementation to manage risk?"
     else:
         with col1:
-            if st.button("CAPA best practices", key="prompt1_standalone", use_container_width=True):
+            if st.button("CAPA best practices", key=f"prompt1_{module_type}", use_container_width=True):
                 user_input = "What are the best practices for implementing an effective CAPA process for medical devices?"
         
         with col2:
-            if st.button("FDA inspection readiness", key="prompt2_standalone", use_container_width=True):
+            if st.button("FDA inspection readiness", key=f"prompt2_{module_type}", use_container_width=True):
                 user_input = "How should we prepare for an FDA inspection of our quality management system?"
         
         with col3:
-            if st.button("Risk management tips", key="prompt3_standalone", use_container_width=True):
+            if st.button("Risk management tips", key=f"prompt3_{module_type}", use_container_width=True):
                 user_input = "What are some practical tips for risk management in medical device design and development?"
     
     # Add a submit button
-    if st.button("Send", key=f"send_msg_btn_{'results' if results else 'standalone'}", use_container_width=True):
+    if st.button("Send", key=f"send_msg_btn_{module_type}", use_container_width=True):
         if user_input:
-            # Determine which chat history to use
-            if results:
-                chat_key = "chat_history"
-            else:
-                chat_key = "standalone_chat_history"
-                
             # Add user message to chat history
-            getattr(st.session_state, chat_key).append({"role": "user", "content": user_input})
+            getattr(st.session_state, chat_history_key).append({"role": "user", "content": user_input})
             
             # Prepare messages for API call
             messages = [{"role": "system", "content": system_prompt}] + [
-                {"role": m["role"], "content": m["content"]} for m in getattr(st.session_state, chat_key)
+                {"role": m["role"], "content": m["content"]} for m in getattr(st.session_state, chat_history_key)
             ]
             
             # Show spinner while waiting for API response
-            with st.spinner("AI consultant is thinking..."):
+            with st.spinner(f"{title} is thinking..."):
                 ai_resp = call_openai_api(messages)
             
             # Add AI response to chat history
-            getattr(st.session_state, chat_key).append({"role": "assistant", "content": ai_resp})
+            getattr(st.session_state, chat_history_key).append({"role": "assistant", "content": ai_resp})
             st.rerun()
     
     # Add a clear conversation button
-    if (results and st.session_state.chat_history) or (not results and st.session_state.standalone_chat_history):
+    if getattr(st.session_state, chat_history_key):
         if st.button(
             "Clear Conversation", 
-            key=f"clear_chat_btn_{'results' if results else 'standalone'}"
+            key=f"clear_chat_btn_{module_type}"
         ):
-            if results:
-                st.session_state.chat_history = []
-            else:
-                st.session_state.standalone_chat_history = []
+            setattr(st.session_state, chat_history_key, [])
             st.rerun()
     
     # Display API connection status
@@ -2177,7 +3142,7 @@ def display_ai_assistant(results: Dict[str, Any] = None):
         st.markdown("""
         <div style="text-align: center; margin-top: 0.5rem; font-size: 0.8rem; color: #6c757d;">
             <i class="fas fa-circle" style="color: #E76F51;"></i> AI assistant not connected - API key missing
-            <p>Using simulated responses for demonstration.</p>
+            <p>Please contact alexander.popoff@vivehealth.com for support.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2448,6 +3413,10 @@ def display_landed_cost_calculator():
             )
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Add AI assistant for tariff analysis
+            st.markdown("### 🤖 Tariff Impact AI Assistant")
+            display_ai_assistant(results, "tariff")
 
 def calculate_ad_roi_ui():
     """Display the advertising ROI calculator UI."""
@@ -2645,6 +3614,31 @@ def calculate_ad_roi_ui():
             )
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Export options
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                df = export_marketing_roi_as_csv(results)
+                csv_download = generate_download_link(
+                    df, 
+                    f"marketing_roi_analysis_{datetime.now().strftime('%Y%m%d')}.csv", 
+                    "📥 Export as CSV"
+                )
+                st.markdown(csv_download, unsafe_allow_html=True)
+            
+            with col_b:
+                try:
+                    pdf_buffer = export_marketing_roi_as_pdf(results)
+                    pdf_data = base64.b64encode(pdf_buffer.read()).decode('utf-8')
+                    pdf_download = f'<a href="data:application/pdf;base64,{pdf_data}" download="marketing_roi_analysis_{datetime.now().strftime("%Y%m%d")}.pdf" class="export-button">📄 Export as PDF</a>'
+                    st.markdown(pdf_download, unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Error generating PDF: {e}")
+            
+            # Add AI assistant for marketing ROI
+            st.markdown("### 🤖 Marketing ROI AI Assistant")
+            display_ai_assistant(results, "marketing")
 
 def run_monte_carlo_simulation_ui():
     """Display the Monte Carlo simulation UI."""
@@ -2791,7 +3785,7 @@ def run_monte_carlo_simulation_ui():
                             price_std_dev=price_std_dev,
                             sales_std_dev=sales_std_dev,
                             return_std_dev=return_std_dev,
-                            reduction_std_reduction_std_dev=reduction_std_dev
+                            reduction_std_dev=reduction_std_dev
                         )
                         
                         st.session_state.monte_carlo_scenario = results
@@ -2949,6 +3943,22 @@ def run_monte_carlo_simulation_ui():
             
             The simulation accounts for variability in costs, pricing, sales volumes, return rates, and expected reduction effectiveness.
             """)
+            
+            # Export options
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                df = export_monte_carlo_as_csv(results)
+                csv_download = generate_download_link(
+                    df, 
+                    f"monte_carlo_analysis_{datetime.now().strftime('%Y%m%d')}.csv", 
+                    "📥 Export as CSV"
+                )
+                st.markdown(csv_download, unsafe_allow_html=True)
+            
+            # Add AI assistant for Monte Carlo analysis
+            st.markdown("### 🤖 Risk Analysis AI Assistant")
+            display_ai_assistant(results, "monte_carlo")
 
 def display_analysis_page():
     """Display the main analysis page with tabs."""
@@ -3122,7 +4132,7 @@ def main():
                 Product Profitability Analysis Tool v1.1.0 | © 2025 Medical Device Quality Management
             </div>
             <div style="color: #6c757d; font-size: 0.8rem; margin-top: 0.5rem;">
-                For support contact: <a href="mailto:quality@meddevice.com">quality@meddevice.com</a>
+                For support contact: <a href="mailto:alexander.popoff@vivehealth.com">alexander.popoff@vivehealth.com</a>
             </div>
         </div>
         """, unsafe_allow_html=True)
