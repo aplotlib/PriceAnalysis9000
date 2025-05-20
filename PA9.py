@@ -2595,7 +2595,7 @@ st.markdown(f"""
                 </div>
                 """, unsafe_allow_html=True)
             
-            with col12:
+        with col12:
                 # Display minimum profitable MSRP
                 st.markdown(f"""
                 <div class='result-box'>
