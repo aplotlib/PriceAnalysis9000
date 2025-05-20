@@ -16,12 +16,12 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import warnings
 import traceback
-import re
+import re  # Add this missing import for regex
 from typing import Dict, List, Tuple, Optional, Union, Any
 from io import BytesIO
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Medical Device Quality Analysis", page_icon="🔍", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Product Profitability Analysis", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 # --- THEME COLORS ---
 PRIMARY_COLOR   = "#0096C7"
 SECONDARY_COLOR = "#48CAE4"
@@ -45,6 +45,10 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'standalone_chat_history' not in st.session_state:
     st.session_state.standalone_chat_history = []
+if 'marketing_chat_history' not in st.session_state:
+    st.session_state.marketing_chat_history = []
+if 'tariff_chat_history' not in st.session_state:
+    st.session_state.tariff_chat_history = []
 if 'monte_carlo_chat_history' not in st.session_state:
     st.session_state.monte_carlo_chat_history = []
 if 'current_page' not in st.session_state:
@@ -53,20 +57,16 @@ if 'view_mode' not in st.session_state:
     st.session_state.view_mode = "basic"
 if 'batch_analysis_results' not in st.session_state:
     st.session_state.batch_analysis_results = {}
+if 'tariff_calculations' not in st.session_state:
+    st.session_state.tariff_calculations = None
 if 'monte_carlo_scenario' not in st.session_state:
     st.session_state.monte_carlo_scenario = None
 if 'compare_list' not in st.session_state:
     st.session_state.compare_list = []
 if 'api_key_status' not in st.session_state:
     st.session_state.api_key_status = None
-if 'selected_device_type' not in st.session_state:
-    st.session_state.selected_device_type = "Generic"
-if 'root_cause_analysis' not in st.session_state:
-    st.session_state.root_cause_analysis = {}
-if 'process_control_data' not in st.session_state:
-    st.session_state.process_control_data = {}
-if 'pareto_data' not in st.session_state:
-    st.session_state.pareto_data = {}
+if 'ad_roi_results' not in st.session_state:
+    st.session_state.ad_roi_results = None
 
 # --- CSS INJECTION ---
 st.markdown(f"""
@@ -250,7 +250,7 @@ try:
         sentry_sdk.init(
             dsn=st.secrets.get("sentry_dsn"),
             traces_sample_rate=0.2,
-            release="medical-device-quality-analysis@1.0.0"
+            release="product-profitability-analysis@1.0.0"
         )
         logger.info("Sentry integration initialized")
     else:
@@ -259,144 +259,6 @@ except ImportError:
     logger.warning("Sentry SDK not installed")
 except Exception as e:
     logger.exception("Error initializing Sentry")
-
-# --- DEVICE TYPE INFORMATION ---
-DEVICE_TYPES = {
-    "Mobility Aids": {
-        "description": "Devices that assist with movement and mobility",
-        "examples": ["Canes", "Walkers", "Wheelchairs", "Knee Scooters", "Crutches", "Rollators"],
-        "common_issues": ["Unstable frames", "Locking mechanism failures", "Cushion compression", "Wheel alignment issues", "Brake failures"],
-        "manufacturing_processes": ["Aluminum extrusion", "Steel tube bending", "Injection molded plastics", "Foam molding", "Welding"],
-        "inspection_methods": ["Load testing", "Stability testing", "Dimensional inspection", "Functional testing"]
-    },
-    "Cushions & Support": {
-        "description": "Devices that provide comfort, positioning, and pressure relief",
-        "examples": ["Seat cushions", "Back supports", "Wedge cushions", "Positioning aids", "Pressure relief cushions"],
-        "common_issues": ["Foam compression", "Cover tears", "Stitching failures", "Pressure distribution issues", "Gel leakage"],
-        "manufacturing_processes": ["Foam molding", "Gel encapsulation", "Fabric cutting and sewing", "Heat sealing", "Die cutting"],
-        "inspection_methods": ["Pressure mapping", "Compression testing", "Fabric tensile testing", "Seam inspection", "Leak testing"]
-    },
-    "Monitoring Devices": {
-        "description": "Devices that measure physiological parameters",
-        "examples": ["Blood pressure monitors", "Glucose meters", "Pulse oximeters", "Temperature monitors", "Heart rate monitors"],
-        "common_issues": ["Calibration drift", "Sensor failures", "Battery issues", "Display failures", "Software bugs", "Connectivity problems"],
-        "manufacturing_processes": ["PCB assembly", "Plastic molding", "Sensor integration", "Software programming", "Battery installation"],
-        "inspection_methods": ["Functional testing", "Calibration verification", "Software validation", "Battery life testing", "Connectivity testing"]
-    },
-    "Orthopedic Supports": {
-        "description": "Devices that provide support, stability, and protection for musculoskeletal conditions",
-        "examples": ["Knee braces", "Ankle braces", "Wrist supports", "Back braces", "Neck collars", "Shoulder supports"],
-        "common_issues": ["Strap failures", "Hinge malfunctions", "Padding compression", "Material wear", "Sizing inconsistencies"],
-        "manufacturing_processes": ["Fabric cutting", "Plastic injection molding", "Metal forming", "Foam molding", "Stitching and assembly"],
-        "inspection_methods": ["Tension testing", "Range of motion testing", "Durability testing", "Strap pull testing", "Material stress testing"]
-    },
-    "Ostomy & Continence": {
-        "description": "Devices related to ostomy care and continence management",
-        "examples": ["Ostomy bags", "Skin barriers", "Catheters", "Incontinence pads", "Collection systems"],
-        "common_issues": ["Leakage", "Adhesive failures", "Material degradation", "Valve malfunctions", "Odor control issues"],
-        "manufacturing_processes": ["Film extrusion", "Injection molding", "Adhesive application", "Ultrasonic welding", "Sterilization"],
-        "inspection_methods": ["Leak testing", "Adhesive strength testing", "Biocompatibility testing", "Sterilization validation", "Shelf-life testing"]
-    },
-    "Medical Software": {
-        "description": "Software applications for medical purposes",
-        "examples": ["Health monitoring apps", "Telemedicine platforms", "Patient management systems", "Medical calculators", "Connected device apps"],
-        "common_issues": ["Crashes", "Data synchronization problems", "Security vulnerabilities", "UI/UX issues", "Feature malfunctions"],
-        "manufacturing_processes": ["Software development", "Code versioning", "Unit testing", "Integration testing", "Cloud deployment"],
-        "inspection_methods": ["Code reviews", "Automated testing", "User acceptance testing", "Performance testing", "Security testing"]
-    },
-    "Respiratory Aids": {
-        "description": "Devices that assist with breathing and respiratory function",
-        "examples": ["Nebulizers", "Oxygen concentrators", "CPAP machines", "Inhalers", "Suction devices"],
-        "common_issues": ["Motor failures", "Tubing leaks", "Filter clogging", "Pressure control issues", "Battery degradation"],
-        "manufacturing_processes": ["Motor assembly", "Plastic molding", "Silicone molding", "Electronics assembly", "Sterilization"],
-        "inspection_methods": ["Flow rate testing", "Particle size testing", "Pressure testing", "Noise level testing", "Battery life testing"]
-    },
-    "Home Care Equipment": {
-        "description": "Medical equipment designed for home use",
-        "examples": ["Hospital beds", "Patient lifts", "Shower chairs", "Toilet risers", "Transfer boards"],
-        "common_issues": ["Motor failures", "Control system issues", "Structural weaknesses", "Weight capacity failures", "Surface degradation"],
-        "manufacturing_processes": ["Metal fabrication", "Welding", "Wood working", "Upholstery", "Electronics assembly", "Plastic molding"],
-        "inspection_methods": ["Load testing", "Cycle testing", "Water resistance testing", "Electrical safety testing", "Stability testing"]
-    },
-    "Therapeutic Devices": {
-        "description": "Devices used for therapy and rehabilitation",
-        "examples": ["TENS units", "Heating pads", "Massage devices", "Light therapy", "Ultrasound therapy"],
-        "common_issues": ["Controller failures", "Heating element issues", "Timer malfunctions", "Battery problems", "Electrode degradation"],
-        "manufacturing_processes": ["Electronics assembly", "Textile integration", "Heat sealing", "Plastic molding", "Battery installation"],
-        "inspection_methods": ["Electrical safety testing", "Temperature control testing", "Timer accuracy testing", "Battery life testing", "Output verification"]
-    },
-    "Generic": {
-        "description": "General medical devices not falling into specific categories",
-        "examples": ["Various medical devices", "Multi-category products", "New product types"],
-        "common_issues": ["Material failures", "Design flaws", "Manufacturing defects", "User interface problems", "Functional issues"],
-        "manufacturing_processes": ["Injection molding", "Metal fabrication", "PCB assembly", "3D printing", "CNC machining", "Die casting"],
-        "inspection_methods": ["Visual inspection", "Functional testing", "Dimensional inspection", "Performance testing", "Safety testing"]
-    }
-}
-
-# --- MANUFACTURING PROCESS TYPES ---
-MANUFACTURING_PROCESSES = [
-    "Injection molding",
-    "Metal fabrication",
-    "PCB assembly",
-    "Fabric cutting & sewing",
-    "Foam molding",
-    "Plastic extrusion",
-    "Metal machining",
-    "Die casting",
-    "3D printing",
-    "Welding & assembly",
-    "Software development",
-    "Electronics assembly",
-    "Silicone molding",
-    "Ultrasonic welding",
-    "Blow molding",
-    "CNC machining",
-    "Sterilization process",
-    "Adhesive application",
-    "Chemical processing",
-    "Other/Multiple"
-]
-
-# --- ROOT CAUSE CATEGORIES ---
-ROOT_CAUSE_CATEGORIES = [
-    "Design flaw",
-    "Material failure",
-    "Manufacturing defect",
-    "Assembly error",
-    "Component failure",
-    "Software bug",
-    "User error/misuse",
-    "Environmental factors",
-    "Packaging issue",
-    "Shipping damage",
-    "Calibration drift",
-    "Contamination",
-    "Improper maintenance",
-    "Normal wear and tear",
-    "Quality control failure",
-    "Unknown/Not determined"
-]
-
-# --- QUALITY CONTROL METHODS ---
-QUALITY_CONTROL_METHODS = [
-    "100% inspection",
-    "AQL sampling (0.65)",
-    "AQL sampling (1.0)",
-    "AQL sampling (2.5)",
-    "AQL sampling (4.0)",
-    "Statistical process control",
-    "Automated vision system",
-    "Manual inspection",
-    "Functional testing",
-    "Batch testing",
-    "Destructive testing",
-    "Non-destructive testing",
-    "First article inspection",
-    "In-process checks",
-    "Final QC verification",
-    "Other/Custom method"
-]
 
 # --- UTILITY FUNCTIONS ---
 def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
@@ -447,33 +309,6 @@ def get_recommendation_badge(recommendation: str) -> str:
         return f'<span class="badge badge-warning">{recommendation}</span>'
     else:
         return f'<span class="badge badge-success">{recommendation}</span>'
-
-def generate_pareto_data(failure_modes: Dict[str, int]) -> Dict[str, Any]:
-    """Generate Pareto analysis data from failure modes."""
-    # Sort failure modes by frequency in descending order
-    sorted_modes = sorted(failure_modes.items(), key=lambda x: x[1], reverse=True)
-    
-    modes = [item[0] for item in sorted_modes]
-    counts = [item[1] for item in sorted_modes]
-    total = sum(counts)
-    
-    # Calculate cumulative percentages
-    cumulative = []
-    cumulative_percent = []
-    cumulative_sum = 0
-    
-    for count in counts:
-        cumulative_sum += count
-        cumulative.append(cumulative_sum)
-        cumulative_percent.append((cumulative_sum / total) * 100)
-    
-    return {
-        "modes": modes,
-        "counts": counts,
-        "total": total,
-        "cumulative": cumulative,
-        "cumulative_percent": cumulative_percent
-    }
 
 # --- AI ASSISTANT FUNCTIONS ---
 def check_openai_api_key():
@@ -550,46 +385,17 @@ def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
 
 def get_system_prompt(results: Dict[str, Any] = None, module_type: str = "quality") -> str:
     """Generate the system prompt for the AI assistant based on analysis results and module type."""
-    device_type = st.session_state.get('selected_device_type', 'Generic')
-    device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-    
     if module_type == "quality" and results:
-        manufacturing_process = results.get('manufacturing_process', 'Not specified')
-        
-        # Check if root cause analysis exists
-        root_cause_info = ""
-        if 'root_cause' in results:
-            root_cause_info = f"""
-            Root Cause Analysis:
-            - Primary Root Cause: {results['root_cause']}
-            - Specific Failure Mode: {results.get('failure_mode', 'Not specified')}
-            """
-        
-        # Check if quality control method exists
-        qc_info = ""
-        if 'quality_control_method' in results:
-            qc_info = f"- Quality Control Method: {results['quality_control_method']}"
-        
         return f"""
-        You are a Medical Device Quality and Manufacturing Expert specializing in troubleshooting quality issues across a wide range of medical devices including durable medical equipment, mobility aids, orthopedic supports, monitoring devices, and more.
+        You are a Quality Management expert for medical devices.
         
         Product details:
         - SKU: {results['sku']}
-        - Device Type: {device_type}
-        - Manufacturing Process: {manufacturing_process}
+        - Product Type: {results['product_type']}
         - Issue Description: {results['issue_description']}
         - Return Rate (30d): {results['current_metrics']['return_rate_30d']:.2f}%
         - Current Unit Cost: ${results['current_metrics']['unit_cost']:.2f}
         - Sales Price: ${results['current_metrics']['sales_price']:.2f}
-        {qc_info}
-        
-        {root_cause_info}
-        
-        Common Issues for {device_type}:
-        - {', '.join(device_info['common_issues'])}
-        
-        Manufacturing Processes for {device_type}:
-        - {', '.join(device_info['manufacturing_processes'])}
         
         Financial Impact:
         - Annual Loss Due to Returns: ${results['financial_impact']['annual_loss']:.2f}
@@ -599,20 +405,77 @@ def get_system_prompt(results: Dict[str, Any] = None, module_type: str = "qualit
         Recommendation: {results['recommendation']}
         
         Your task is to provide expert advice on:
-        1. Likely specific causes of the issue based on the device type and manufacturing process
-        2. Practical troubleshooting steps and corrective actions
-        3. Manufacturing process improvements to prevent recurrence
-        4. Quality control recommendations appropriate for this device type
-        5. Best practices for implementing solutions in medical device manufacturing
+        1. Next steps based on the analysis
+        2. Additional data that might be needed
+        3. Regulatory considerations for medical devices
+        4. Best practices for implementing the recommended solution
         
-        Be practical and specific in your responses. Focus on concrete troubleshooting steps, manufacturing process controls, and practical quality control methods. Only mention regulations when directly relevant to the quality issue being discussed.
+        Be concise but thorough in your responses. Reference FDA regulations and medical device 
+        industry standards when relevant. Remember to consider both patient safety and business 
+        impact in your recommendations.
+        """
+    elif module_type == "marketing" and results:
+        return f"""
+        You are a Marketing ROI and PPC Optimization expert for medical devices.
+        
+        Campaign metrics:
+        - Ad Spend: ${results['ad_spend']:.2f}
+        - Impressions: {results['impressions']}
+        - Clicks: {results['clicks']}
+        - Conversions: {results['conversions']}
+        - Average Order Value: ${results['avg_order_value']:.2f}
+        - Contribution Margin: {results['contribution_margin_percent']:.2f}%
+        
+        Performance metrics:
+        - ROI: {results['roi']:.2f}%
+        - ROAS: {results['roas']:.2f}x
+        - CTR (Click-Through Rate): {results['ctr']:.2f}%
+        - Conversion Rate: {results['conversion_rate']:.2f}%
+        - CPC (Cost per Click): ${results['cpc']:.2f}
+        - CPA (Cost per Acquisition): ${results['cpa']:.2f}
+        - CPM (Cost per 1000 Impressions): ${results['cpm']:.2f}
+        
+        Your task is to provide expert advice on:
+        1. Campaign performance assessment and benchmarking for medical device marketing
+        2. Optimization opportunities to improve ROI and ROAS
+        3. Budget allocation recommendations
+        4. Audience targeting and messaging strategies
+        5. Regulatory compliance considerations for medical device marketing
+        
+        Be concise but thorough in your responses. Reference industry benchmarks for medical devices
+        when relevant. Consider both marketing efficiency and regulatory compliance requirements in
+        your recommendations.
+        """
+    elif module_type == "tariff" and results:
+        return f"""
+        You are a Supply Chain and Tariff Impact expert for medical devices.
+        
+        Product details:
+        - Sales Price: ${results['sales_price']:.2f}
+        - Original COGS: ${results['original_cogs']:.2f}
+        - Tariff Rate: {results['tariff_rate']:.2f}%
+        - Tariff Amount: ${results['tariff_amount']:.2f} per unit
+        
+        Financial Impact:
+        - Original Margin: ${results['original_margin']:.2f} ({results['original_margin_percentage']:.2f}%)
+        - New Margin: ${results['new_margin']:.2f} ({results['new_margin_percentage']:.2f}%)
+        - Margin Impact: {results['margin_impact']:.2f} percentage points
+        - Breakeven Price: ${results['breakeven_price']:.2f}
+        - Price Increase Needed: ${results['price_increase_needed']:.2f} ({results['price_increase_percentage']:.2f}%)
+        
+        Your task is to provide expert advice on:
+        1. Tariff mitigation strategies for medical device manufacturers
+        2. Pricing strategy recommendations considering market dynamics
+        3. Alternative sourcing options that consider regulatory compliance
+        4. Supply chain adjustments to optimize landed costs
+        5. Long-term strategies to manage tariff risks
+        
+        Be concise but thorough in your responses. Remember to consider both cost optimization
+        and regulatory compliance requirements for medical devices in your recommendations.
         """
     elif module_type == "monte_carlo" and results:
-        device_type = st.session_state.get('selected_device_type', 'Generic')
-        device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-        
         return f"""
-        You are a Risk Analysis and Manufacturing Process Expert for medical devices, specializing in {device_type}.
+        You are a Risk Analysis and Decision-Making expert for medical device quality initiatives.
         
         Monte Carlo simulation results:
         - Probability of Positive ROI: {results['probability_metrics']['prob_positive_roi']:.2f}%
@@ -622,81 +485,59 @@ def get_system_prompt(results: Dict[str, Any] = None, module_type: str = "qualit
         - Mean ROI: {results['roi_stats']['mean']:.2f}%
         - Median ROI: {results['roi_stats']['median']:.2f}%
         - ROI Range: {results['roi_stats']['min']:.2f}% to {results['roi_stats']['max']:.2f}%
+        - 10th Percentile ROI: {results['roi_stats']['percentiles']['p10']:.2f}%
+        - 90th Percentile ROI: {results['roi_stats']['percentiles']['p90']:.2f}%
         
         Payback Statistics:
         - Mean Payback: {results['payback_stats']['mean']:.2f} months
         - Median Payback: {results['payback_stats']['median']:.2f} months
         - Payback Range: {results['payback_stats']['min']:.2f} to {results['payback_stats']['max']:.2f} months
         
-        Device Type Information:
-        - Device Type: {device_type}
-        - Common Issues: {', '.join(device_info['common_issues'])}
-        - Manufacturing Processes: {', '.join(device_info['manufacturing_processes'])}
-        
         Your task is to provide expert advice on:
-        1. Interpretation of simulation results for this specific type of medical device
-        2. Manufacturing process risk assessment and control strategies
-        3. Practical implementation approaches considering manufacturing variables
-        4. Recommended quality control methods based on the device type and risk profile
+        1. Interpretation of simulation results and risk assessment
+        2. Decision recommendations based on probability distributions
+        3. Risk mitigation strategies for quality improvement projects
+        4. Implementation approaches that consider uncertainty
         5. Key metrics to track during implementation
         
-        Be practical and specific in your responses with a focus on manufacturing processes, quality control methods, and physical troubleshooting techniques appropriate for {device_type} devices.
+        Be concise but thorough in your responses. Remember to consider both statistical confidence
+        and practical implementation considerations for medical device quality initiatives.
         """
     else:
-        # Default prompt for standalone assistant
-        device_type = st.session_state.get('selected_device_type', 'Generic')
-        device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-        
-        return f"""
-        You are a Medical Device Quality and Manufacturing Expert specializing in {device_type} devices.
+        # Default prompt for standalone assistant or unknown module type
+        return """
+        You are a Quality Management expert for medical devices. 
+        Provide guidance on quality issues, cost analysis, and regulatory compliance.
         
         Your expertise includes:
-        - Manufacturing processes: {', '.join(device_info['manufacturing_processes'])}
-        - Common quality issues: {', '.join(device_info['common_issues'])}
-        - Inspection methods: {', '.join(device_info['inspection_methods'])}
-        - Examples of devices: {', '.join(device_info['examples'])}
-        - Process validation and control techniques
-        - Root cause analysis methods
-        - Corrective and preventive actions (CAPA)
-        - AQL sampling and inspection techniques
-        - Manufacturing defect troubleshooting
-        - Component failure analysis
-        - Material selection and properties
-        - Quality control methods and tools
+        - Quality Management Systems (QMS) requirements per ISO 13485 and 21 CFR 820
+        - Risk management per ISO 14971
+        - Corrective and Preventive Action (CAPA) processes
+        - FDA regulations including Medical Device Reporting (MDR)
+        - Design controls and validation
+        - Manufacturing process improvements
+        - Cost-benefit analysis for quality initiatives
+        - Marketing ROI and PPC optimization for medical devices
+        - Supply chain and tariff impact analysis
+        - Risk analysis and decision-making using statistical methods
         
-        Additional areas of expertise:
-        - Plastic injection molding troubleshooting
-        - Metal fabrication quality issues
-        - Electronic component and PCB failure analysis
-        - Software validation for medical devices
-        - 3D printing quality control
-        - Textile and fabric product quality
-        - Assembly process optimization
-        - Statistical process control (SPC)
-        - Measurement system analysis (MSA)
-        - Design of experiments (DOE)
-        
-        When providing guidance, be specific to {device_type} and practical manufacturing issues that could cause quality problems. Focus on troubleshooting steps, material issues, process control methods, and practical quality control techniques rather than regulatory requirements.
+        When providing guidance, be specific to the medical device industry and reference
+        relevant regulations or standards when appropriate.
         """
 
 # --- CORE ANALYSIS FUNCTIONS ---
 def analyze_quality_issue(
     sku: str,
     product_type: str,
-    device_type: str,
-    manufacturing_process: str,
     sales_30d: float,
     returns_30d: float,
     issue_description: str,
-    root_cause: str = None,
-    failure_mode: str = None,
-    quality_control_method: str = None,
-    current_unit_cost: float = 0,
-    fix_cost_upfront: float = 0,
-    fix_cost_per_unit: float = 0,
-    sales_price: float = 0,
-    expected_reduction: float = 0,
-    solution_confidence: float = 0,
+    current_unit_cost: float,
+    fix_cost_upfront: float,
+    fix_cost_per_unit: float,
+    sales_price: float,
+    expected_reduction: float,
+    solution_confidence: float,
     annualized_growth: float = 0.0,
     regulatory_risk: int = 1,
     brand_risk: int = 1,
@@ -708,14 +549,9 @@ def analyze_quality_issue(
     Args:
         sku: Product SKU identifier
         product_type: Type of medical device (B2C, B2B, etc.)
-        device_type: Specific device category (cushion, brace, etc.)
-        manufacturing_process: Primary manufacturing process
         sales_30d: Number of units sold in the last 30 days
         returns_30d: Number of units returned in the last 30 days
         issue_description: Description of the quality issue
-        root_cause: Primary root cause category
-        failure_mode: Specific failure mode
-        quality_control_method: Current quality control method
         current_unit_cost: Current manufacturing cost per unit
         fix_cost_upfront: One-time cost to implement the fix
         fix_cost_per_unit: Additional cost per unit after implementing the fix
@@ -730,7 +566,7 @@ def analyze_quality_issue(
     Returns:
         Dictionary containing analysis results
     """
-    logger.info(f"Starting analysis for SKU={sku}, device_type={device_type}")
+    logger.info(f"Starting analysis for SKU={sku}, sales_30d={sales_30d}")
     
     try:
         # Input validation
@@ -798,7 +634,7 @@ def analyze_quality_issue(
         
         # Generate recommendation
         if medical_risk >= 4 or regulatory_risk >= 4:
-            recommendation = "Fix Immediately - Safety/Compliance Risk"
+            recommendation = "Fix Immediately - Compliance Risk"
         elif roi_3yr >= 200 and payback_period <= 6:
             recommendation = "High Priority - Strong ROI"
         elif roi_3yr >= 100 or risk_factor >= 3:
@@ -808,17 +644,10 @@ def analyze_quality_issue(
         else:
             recommendation = "Monitor - Negative ROI"
         
-        # Device-specific adjustment based on device type
-        device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-        if medical_risk >= 3 and device_type in ["Monitoring Devices", "Respiratory Aids"]:
-            recommendation = "Fix Immediately - Patient Risk"
-        
         # Compile results
         results = {
             "sku": sku,
             "product_type": product_type,
-            "device_type": device_type,
-            "manufacturing_process": manufacturing_process,
             "issue_description": issue_description,
             "analysis_date": datetime.now().strftime("%Y-%m-%d"),
             "current_metrics": {
@@ -832,7 +661,7 @@ def analyze_quality_issue(
                 "margin_per_unit": margin_per_unit,
                 "margin_percentage": margin_percentage,
                 "loss_per_return": loss_per_return,
-                "annual_return_rate": return_rate_30d
+                "annual_return_rate": return_rate_30d  # Added for compatibility with other functions
             },
             "solution_metrics": {
                 "fix_cost_upfront": fix_cost_upfront,
@@ -860,29 +689,211 @@ def analyze_quality_issue(
                 "risk_factor": risk_factor,
                 "priority_score": priority_score
             },
-            "recommendation": recommendation,
-            "device_info": {
-                "common_issues": device_info['common_issues'],
-                "manufacturing_processes": device_info['manufacturing_processes'],
-                "inspection_methods": device_info['inspection_methods']
-            }
+            "recommendation": recommendation
         }
-        
-        # Add root cause and failure mode if provided
-        if root_cause:
-            results["root_cause"] = root_cause
-        
-        if failure_mode:
-            results["failure_mode"] = failure_mode
-            
-        if quality_control_method:
-            results["quality_control_method"] = quality_control_method
         
         logger.debug(f"Computed ROI: {roi_3yr:.2f}%")
         return results
     
     except Exception as e:
         logger.exception("Error in analyze_quality_issue")
+        raise
+
+def calculate_landed_cost(
+    sales_price: float,
+    cogs: float,
+    tariff_rate: float,
+    shipping_cost: float = 0.0,
+    storage_cost: float = 0.0,
+    customs_fee: float = 0.0,
+    broker_fee: float = 0.0,
+    other_costs: float = 0.0,
+    units_per_shipment: int = 1
+) -> Dict[str, Any]:
+    """
+    Calculate landed cost and impact on margins with tariffs.
+    
+    Args:
+        sales_price: Sales price per unit
+        cogs: Cost of goods sold per unit (manufacturing cost)
+        tariff_rate: Tariff percentage (0-100)
+        shipping_cost: Cost of shipping entire shipment
+        storage_cost: Cost of storage per unit
+        customs_fee: Customs processing fee per shipment
+        broker_fee: Customs broker fee per shipment
+        other_costs: Other costs per unit
+        units_per_shipment: Number of units per shipment
+    
+    Returns:
+        Dictionary containing landed cost analysis
+    """
+    try:
+        # Calculate per-unit costs
+        per_unit_shipping = safe_divide(shipping_cost, units_per_shipment, 0)
+        per_unit_customs = safe_divide(customs_fee, units_per_shipment, 0)
+        per_unit_broker = safe_divide(broker_fee, units_per_shipment, 0)
+        
+        # Calculate tariff amount
+        tariff_amount = (cogs * tariff_rate) / 100
+        
+        # Calculate total landed cost
+        landed_cost = (
+            cogs + 
+            tariff_amount + 
+            per_unit_shipping + 
+            storage_cost + 
+            per_unit_customs + 
+            per_unit_broker + 
+            other_costs
+        )
+        
+        # Calculate margins
+        original_margin = sales_price - cogs
+        original_margin_percentage = safe_divide(original_margin, sales_price, 0) * 100
+        
+        new_margin = sales_price - landed_cost
+        new_margin_percentage = safe_divide(new_margin, sales_price, 0) * 100
+        
+        margin_impact = original_margin_percentage - new_margin_percentage
+        margin_impact_dollars = original_margin - new_margin
+        
+        # Breakeven analysis
+        breakeven_price = landed_cost / (1 - (original_margin_percentage / 100))
+        price_increase_needed = breakeven_price - sales_price
+        price_increase_percentage = safe_divide(price_increase_needed, sales_price, 0) * 100
+        
+        return {
+            "original_cogs": cogs,
+            "tariff_rate": tariff_rate,
+            "tariff_amount": tariff_amount,
+            "shipping_cost": shipping_cost,
+            "per_unit_shipping": per_unit_shipping,
+            "storage_cost": storage_cost,
+            "customs_fee": customs_fee,
+            "per_unit_customs": per_unit_customs,
+            "broker_fee": broker_fee,
+            "per_unit_broker": per_unit_broker,
+            "other_costs": other_costs,
+            "landed_cost": landed_cost,
+            "sales_price": sales_price,
+            "original_margin": original_margin,
+            "original_margin_percentage": original_margin_percentage,
+            "new_margin": new_margin,
+            "new_margin_percentage": new_margin_percentage,
+            "margin_impact": margin_impact,
+            "margin_impact_dollars": margin_impact_dollars,
+            "breakeven_price": breakeven_price,
+            "price_increase_needed": price_increase_needed,
+            "price_increase_percentage": price_increase_percentage
+        }
+    except Exception as e:
+        logger.exception("Error in calculate_landed_cost")
+        raise
+
+def generate_tariff_scenarios(
+    sales_price: float,
+    cogs: float,
+    base_tariff: float,
+    shipping_cost: float = 0.0,
+    storage_cost: float = 0.0,
+    customs_fee: float = 0.0,
+    broker_fee: float = 0.0,
+    other_costs: float = 0.0,
+    units_per_shipment: int = 1
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Generate multiple tariff scenarios for analysis.
+    
+    Args:
+        sales_price: Sales price per unit
+        cogs: Cost of goods sold per unit
+        base_tariff: Current tariff percentage
+        Other parameters: Same as calculate_landed_cost
+    
+    Returns:
+        Dictionary of scenarios with landed cost calculations
+    """
+    tariff_rates = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    scenarios = {}
+    
+    for rate in tariff_rates:
+        scenario_name = f"{rate}% Tariff"
+        scenarios[scenario_name] = calculate_landed_cost(
+            sales_price=sales_price,
+            cogs=cogs,
+            tariff_rate=rate,
+            shipping_cost=shipping_cost,
+            storage_cost=storage_cost,
+            customs_fee=customs_fee,
+            broker_fee=broker_fee,
+            other_costs=other_costs,
+            units_per_shipment=units_per_shipment
+        )
+    
+    return scenarios
+
+def calculate_ad_roi(
+    ad_spend: float,
+    impressions: float,
+    clicks: float,
+    conversions: float,
+    avg_order_value: float,
+    contribution_margin_percent: float
+) -> Dict[str, Any]:
+    """
+    Calculate ROI and key metrics for advertising campaigns.
+    
+    Args:
+        ad_spend: Total advertising spend
+        impressions: Number of ad impressions
+        clicks: Number of clicks on ads
+        conversions: Number of conversions (sales)
+        avg_order_value: Average order value
+        contribution_margin_percent: Contribution margin percentage (0-100)
+    
+    Returns:
+        Dictionary containing ad performance metrics
+    """
+    try:
+        # Calculate basic metrics
+        ctr = safe_divide(clicks, impressions, 0) * 100  # Click-through rate
+        conversion_rate = safe_divide(conversions, clicks, 0) * 100  # Conversion rate
+        
+        # Calculate cost metrics
+        cpm = safe_divide(ad_spend * 1000, impressions, 0)  # Cost per thousand impressions
+        cpc = safe_divide(ad_spend, clicks, 0)  # Cost per click
+        cpa = safe_divide(ad_spend, conversions, 0)  # Cost per acquisition
+        
+        # Calculate revenue and profit
+        revenue = conversions * avg_order_value
+        contribution_margin = contribution_margin_percent / 100
+        profit = revenue * contribution_margin
+        
+        # Calculate ROI
+        roi = safe_divide(profit - ad_spend, ad_spend, -100) * 100
+        
+        # Calculate ROAS (Return on Ad Spend)
+        roas = safe_divide(revenue, ad_spend, 0)
+        
+        return {
+            "ad_spend": ad_spend,
+            "impressions": impressions,
+            "clicks": clicks,
+            "conversions": conversions,
+            "avg_order_value": avg_order_value,
+            "contribution_margin_percent": contribution_margin_percent,
+            "ctr": ctr,
+            "conversion_rate": conversion_rate,
+            "cpm": cpm,
+            "cpc": cpc,
+            "cpa": cpa,
+            "revenue": revenue,
+            "profit": profit,
+            "roi": roi,
+            "roas": roas
+        }
+    except Exception as e:
+        logger.exception("Error in calculate_ad_roi")
         raise
 
 def run_monte_carlo_simulation(
@@ -1078,8 +1089,6 @@ def export_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
         "Metric": [
             "SKU",
             "Product Type",
-            "Device Type",
-            "Manufacturing Process",
             "Analysis Date",
             "Return Rate (30d)",
             "Annual Return Rate",
@@ -1095,8 +1104,6 @@ def export_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
         "Value": [
             results["sku"],
             results["product_type"],
-            results["device_type"],
-            results["manufacturing_process"],
             results["analysis_date"],
             f"{results['current_metrics']['return_rate_30d']:.2f}%",
             f"{results['current_metrics']['annual_return_rate']:.2f}%",
@@ -1111,20 +1118,91 @@ def export_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
         ]
     }
     
-    # Add root cause if available
-    if "root_cause" in results:
-        data["Metric"].append("Root Cause")
-        data["Value"].append(results["root_cause"])
+    return pd.DataFrame(data)
+
+def export_marketing_roi_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
+    """Convert marketing ROI results to a DataFrame for CSV export."""
+    if not results:
+        return pd.DataFrame()
     
-    # Add failure mode if available
-    if "failure_mode" in results:
-        data["Metric"].append("Failure Mode")
-        data["Value"].append(results["failure_mode"])
+    data = {
+        "Metric": [
+            "Ad Spend",
+            "Impressions",
+            "Clicks",
+            "Conversions",
+            "Average Order Value",
+            "Contribution Margin",
+            "CTR (Click-Through Rate)",
+            "Conversion Rate",
+            "CPM (Cost per 1000 Impressions)",
+            "CPC (Cost per Click)",
+            "CPA (Cost per Acquisition)",
+            "Revenue",
+            "Profit",
+            "ROI",
+            "ROAS (Return on Ad Spend)"
+        ],
+        "Value": [
+            f"${results['ad_spend']:.2f}",
+            f"{results['impressions']}",
+            f"{results['clicks']}",
+            f"{results['conversions']}",
+            f"${results['avg_order_value']:.2f}",
+            f"{results['contribution_margin_percent']:.2f}%",
+            f"{results['ctr']:.2f}%",
+            f"{results['conversion_rate']:.2f}%",
+            f"${results['cpm']:.2f}",
+            f"${results['cpc']:.2f}",
+            f"${results['cpa']:.2f}",
+            f"${results['revenue']:.2f}",
+            f"${results['profit']:.2f}",
+            f"{results['roi']:.2f}%",
+            f"{results['roas']:.2f}x"
+        ]
+    }
     
-    # Add quality control method if available
-    if "quality_control_method" in results:
-        data["Metric"].append("Quality Control Method")
-        data["Value"].append(results["quality_control_method"])
+    return pd.DataFrame(data)
+
+def export_tariff_analysis_as_csv(results: Dict[str, Any]) -> pd.DataFrame:
+    """Convert tariff analysis results to a DataFrame for CSV export."""
+    if not results:
+        return pd.DataFrame()
+    
+    data = {
+        "Metric": [
+            "Sales Price",
+            "Original COGS",
+            "Tariff Rate",
+            "Tariff Amount",
+            "Landed Cost",
+            "Original Margin",
+            "Original Margin Percentage",
+            "New Margin",
+            "New Margin Percentage",
+            "Margin Impact (Percentage Points)",
+            "Margin Impact (Dollars)",
+            "Breakeven Price",
+            "Price Increase Needed",
+            "Price Increase Percentage"
+        ],
+        "Value": [
+            f"${results['sales_price']:.2f}",
+            f"${results['original_cogs']:.2f}",
+            f"{results['tariff_rate']:.2f}%",
+            f"${results['tariff_amount']:.2f}",
+            f"${results['landed_cost']:.2f}",
+            f"${results['original_margin']:.2f}",
+            f"{results['original_margin_percentage']:.2f}%",
+            f"${results['new_margin']:.2f}",
+            f"{results['new_margin_percentage']:.2f}%",
+            f"{results['margin_impact']:.2f}",
+            f"${results['margin_impact_dollars']:.2f}",
+            f"${results['breakeven_price']:.2f}",
+            f"${results['price_increase_needed']:.2f}",
+            f"{results['price_increase_percentage']:.2f}%"
+        ]
+    }
     
     return pd.DataFrame(data)
 
@@ -1188,59 +1266,34 @@ def export_as_pdf(results: Dict[str, Any]) -> BytesIO:
             # Set up the figure for the first page
             plt.figure(figsize=(8.5, 11))
             plt.suptitle(f"Quality Issue Analysis: {results['sku']}", fontsize=16)
-            plt.text(0.1, 0.95, f"Product: {results['product_type']}", fontsize=12)
-            plt.text(0.1, 0.92, f"Device Type: {results['device_type']}", fontsize=12)
-            plt.text(0.1, 0.89, f"Manufacturing Process: {results['manufacturing_process']}", fontsize=12)
-            plt.text(0.1, 0.86, f"Analysis Date: {results['analysis_date']}", fontsize=12)
-            plt.text(0.1, 0.83, f"Issue Description: {results['issue_description']}", fontsize=12)
+            plt.text(0.1, 0.9, f"Product: {results['product_type']}", fontsize=12)
+            plt.text(0.1, 0.85, f"Analysis Date: {results['analysis_date']}", fontsize=12)
+            plt.text(0.1, 0.8, f"Issue: {results['issue_description']}", fontsize=12)
             
-            # Add root cause if available
-            y_pos = 0.80
-            if "root_cause" in results:
-                plt.text(0.1, y_pos, f"Root Cause: {results['root_cause']}", fontsize=12)
-                y_pos -= 0.03
-            
-            if "failure_mode" in results:
-                plt.text(0.1, y_pos, f"Failure Mode: {results['failure_mode']}", fontsize=12)
-                y_pos -= 0.03
-            
-            if "quality_control_method" in results:
-                plt.text(0.1, y_pos, f"Quality Control Method: {results['quality_control_method']}", fontsize=12)
-                y_pos -= 0.03
-            
-            # Key metrics (start from adjusted y position)
-            plt.text(0.1, y_pos - 0.03, "Key Metrics:", fontsize=14, weight='bold')
-            plt.text(0.1, y_pos - 0.07, f"Return Rate (30d): {results['current_metrics']['return_rate_30d']:.2f}%", fontsize=12)
-            plt.text(0.1, y_pos - 0.11, f"Annual Loss: ${results['financial_impact']['annual_loss']:.2f}", fontsize=12)
-            plt.text(0.1, y_pos - 0.15, f"ROI (3 Year): {results['financial_impact']['roi_3yr']:.2f}%", fontsize=12)
-            plt.text(0.1, y_pos - 0.19, f"Payback Period: {results['financial_impact']['payback_period']:.2f} months", fontsize=12)
-            plt.text(0.1, y_pos - 0.23, f"Recommendation: {results['recommendation']}", fontsize=12, weight='bold')
+            # Key metrics
+            plt.text(0.1, 0.7, "Key Metrics:", fontsize=14, weight='bold')
+            plt.text(0.1, 0.65, f"Return Rate (30d): {results['current_metrics']['return_rate_30d']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.6, f"Annual Loss: ${results['financial_impact']['annual_loss']:.2f}", fontsize=12)
+            plt.text(0.1, 0.55, f"ROI (3 Year): {results['financial_impact']['roi_3yr']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.5, f"Payback Period: {results['financial_impact']['payback_period']:.2f} months", fontsize=12)
+            plt.text(0.1, 0.45, f"Recommendation: {results['recommendation']}", fontsize=12, weight='bold')
             
             # Add charts
-            ax1 = plt.axes([0.1, 0.35, 0.35, 0.25])
+            ax1 = plt.axes([0.1, 0.1, 0.35, 0.25])
             ax1.bar(['Current', 'After Fix'], 
                    [results['current_metrics']['return_rate_30d'], 
                     results['current_metrics']['return_rate_30d'] * (1 - results['solution_metrics']['expected_reduction']/100)])
             ax1.set_title('Return Rate')
             ax1.set_ylabel('Percentage')
             
-            ax2 = plt.axes([0.55, 0.35, 0.35, 0.25])
+            ax2 = plt.axes([0.55, 0.1, 0.35, 0.25])
             ax2.bar(['Current', 'After Fix'], 
                    [results['current_metrics']['margin_percentage'], 
                     results['solution_metrics']['new_margin_percentage']])
             ax2.set_title('Margin Percentage')
             ax2.set_ylabel('Percentage')
             
-            # Device-specific information
-            plt.text(0.1, 0.30, f"Common Issues for {results['device_type']}:", fontsize=12, weight='bold')
-            for i, issue in enumerate(results['device_info']['common_issues'][:3]):  # Show up to 3 issues
-                plt.text(0.1, 0.27 - (i * 0.03), f"• {issue}", fontsize=10)
-            
-            plt.text(0.5, 0.30, "Recommended Inspection Methods:", fontsize=12, weight='bold')
-            for i, method in enumerate(results['device_info']['inspection_methods'][:3]):  # Show up to 3 methods
-                plt.text(0.5, 0.27 - (i * 0.03), f"• {method}", fontsize=10)
-            
-            plt.tight_layout(rect=[0, 0, 1, 0.97])
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
             pdf.savefig()
             plt.close()
             
@@ -1330,15 +1383,110 @@ def export_as_pdf(results: Dict[str, Any]) -> BytesIO:
         plt.close('all')  # Close any open figures
         raise
 
+def export_marketing_roi_as_pdf(results: Dict[str, Any]) -> BytesIO:
+    """Generate a PDF report of the marketing ROI analysis."""
+    if not results:
+        return BytesIO()
+    
+    buffer = BytesIO()
+    
+    try:
+        with PdfPages(buffer) as pdf:
+            # Set up the figure for the first page
+            plt.figure(figsize=(8.5, 11))
+            plt.suptitle("Marketing Campaign ROI Analysis", fontsize=16)
+            plt.text(0.1, 0.9, f"Analysis Date: {datetime.now().strftime('%Y-%m-%d')}", fontsize=12)
+            
+            # Key metrics
+            plt.text(0.1, 0.8, "Key Performance Metrics:", fontsize=14, weight='bold')
+            plt.text(0.1, 0.75, f"Ad Spend: ${results['ad_spend']:.2f}", fontsize=12)
+            plt.text(0.1, 0.7, f"Revenue: ${results['revenue']:.2f}", fontsize=12)
+            plt.text(0.1, 0.65, f"ROI: {results['roi']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.6, f"ROAS: {results['roas']:.2f}x", fontsize=12)
+            
+            # Funnel metrics
+            plt.text(0.5, 0.8, "Funnel Metrics:", fontsize=14, weight='bold')
+            plt.text(0.5, 0.75, f"Impressions: {results['impressions']}", fontsize=12)
+            plt.text(0.5, 0.7, f"Clicks: {results['clicks']}", fontsize=12)
+            plt.text(0.5, 0.65, f"Conversions: {results['conversions']}", fontsize=12)
+            plt.text(0.5, 0.6, f"Conversion Rate: {results['conversion_rate']:.2f}%", fontsize=12)
+            
+            # Add funnel chart
+            ax1 = plt.axes([0.1, 0.25, 0.35, 0.25])
+            metrics = ['Impressions', 'Clicks', 'Conversions']
+            values = [results['impressions'], results['clicks'], results['conversions']]
+            ax1.bar(metrics, values, color=['#90E0EF', '#48CAE4', '#0096C7'])
+            ax1.set_yscale('log')  # Log scale for better visualization
+            ax1.set_title('Marketing Funnel (Log Scale)')
+            
+            # Add ROI chart
+            ax2 = plt.axes([0.55, 0.25, 0.35, 0.25])
+            financial = ['Ad Spend', 'Revenue', 'Profit']
+            fin_values = [results['ad_spend'], results['revenue'], results['profit']]
+            ax2.bar(financial, fin_values, color=['#E76F51', '#48CAE4', '#40916C'])
+            for i, v in enumerate(fin_values):
+                ax2.text(i, v + 5, f"${v:.0f}", ha='center')
+            ax2.set_title('Financial Performance')
+            
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            pdf.savefig()
+            plt.close()
+            
+            # Second page with detailed metrics
+            plt.figure(figsize=(8.5, 11))
+            plt.suptitle("Detailed Marketing Metrics", fontsize=16)
+            
+            # Performance metrics
+            plt.text(0.1, 0.9, "Performance Metrics:", fontsize=14, weight='bold')
+            plt.text(0.1, 0.85, f"Click-Through Rate (CTR): {results['ctr']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.8, f"Conversion Rate: {results['conversion_rate']:.2f}%", fontsize=12)
+            plt.text(0.1, 0.75, f"Average Order Value: ${results['avg_order_value']:.2f}", fontsize=12)
+            plt.text(0.1, 0.7, f"Contribution Margin: {results['contribution_margin_percent']:.2f}%", fontsize=12)
+            
+            # Cost metrics
+            plt.text(0.5, 0.9, "Cost Metrics:", fontsize=14, weight='bold')
+            plt.text(0.5, 0.85, f"CPM (Cost per 1000 Impressions): ${results['cpm']:.2f}", fontsize=12)
+            plt.text(0.5, 0.8, f"CPC (Cost per Click): ${results['cpc']:.2f}", fontsize=12)
+            plt.text(0.5, 0.75, f"CPA (Cost per Acquisition): ${results['cpa']:.2f}", fontsize=12)
+            
+            # Add cost metric comparison chart
+            ax1 = plt.axes([0.1, 0.4, 0.8, 0.2])
+            cost_metrics = ['CPM', 'CPC', 'CPA']
+            cost_values = [results['cpm'], results['cpc'], results['cpa']]
+            ax1.bar(cost_metrics, cost_values, color=['#90E0EF', '#48CAE4', '#0096C7'])
+            for i, v in enumerate(cost_values):
+                ax1.text(i, v + 0.2, f"${v:.2f}", ha='center')
+            ax1.set_title('Cost Metrics Comparison')
+            
+            # Add ROI and ROAS chart
+            ax2 = plt.axes([0.1, 0.1, 0.8, 0.2])
+            roi_roas = ['ROI (%)', 'ROAS (x)']
+            roi_roas_values = [results['roi'], results['roas'] * 100]  # Scale ROAS for better visualization
+            ax2.bar(roi_roas, roi_roas_values, color=['#E9C46A', '#40916C'])
+            ax2.text(0, roi_roas_values[0] + 5, f"{roi_roas_values[0]:.1f}%", ha='center')
+            ax2.text(1, roi_roas_values[1] + 5, f"{results['roas']:.2f}x", ha='center')
+            ax2.set_title('ROI and ROAS')
+            
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            pdf.savefig()
+            plt.close()
+            
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        logger.exception("Error generating marketing ROI PDF report")
+        plt.close('all')  # Close any open figures
+        raise
+
 # --- UI COMPONENTS ---
 def display_header():
     """Display the application header."""
     col1, col2 = st.columns([6, 1])
     with col1:
-        st.title("🔍 Medical Device Quality Analysis")
+        st.title("🔍 Product Profitability Analysis")
         st.markdown("""
         <div style="margin-bottom: 1rem;">
-            Analyze quality issues, calculate ROI for improvement projects, and troubleshoot manufacturing problems for medical devices.
+            Analyze product quality issues, calculate ROI for improvement projects, and simulate financial scenarios.
         </div>
         """, unsafe_allow_html=True)
     
@@ -1348,34 +1496,33 @@ def display_header():
             ### How to use this tool
             
             1. **Quality ROI Analysis**: Enter product details and quality issue information to calculate ROI of potential fixes
-            2. **Process Control Analysis**: Identify manufacturing process issues and control measures
-            3. **Root Cause Analysis**: Analyze potential causes of quality problems using Pareto charts
+            2. **Tariff Calculator**: Determine the impact of tariffs and import costs on product margins
+            3. **Marketing ROI**: Analyze advertising campaign performance metrics
             4. **Monte Carlo Simulation**: Understand risks and probabilities with statistical modeling
-            5. **Quality AI Assistant**: Get expert advice from our AI assistant for medical device manufacturing
+            5. **Quality AI Assistant**: Get expert advice from our AI assistant for medical device quality management
             
             Each tab provides specialized analysis tools with interactive visualizations and export options.
             
             #### Tips
-            - Select the specific device type to get tailored analysis
-            - Analyze manufacturing process controls to identify improvement areas
-            - Use the AI assistant to get troubleshooting recommendations
+            - Hover over charts and metrics for additional information
+            - Use the AI assistant to get expert recommendations
             - Export results as CSV or PDF for reporting
             
             For additional help, contact the Quality Management team.
             """)
     
     # Add app navigation and user info in a status bar
-    st.markdown(f"""
+    st.markdown("""
     <div style="background-color: #f8f9fa; padding: 0.5rem; border-radius: 4px; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
         <div>
             <span style="color: #6c757d; margin-right: 1rem;">User: Quality Manager</span>
             <span style="color: #6c757d;">Department: Product Development</span>
         </div>
         <div>
-            <span style="color: #6c757d;">Last updated: {datetime.now().strftime("%Y-%m-%d")}</span>
+            <span style="color: #6c757d;">Last updated: {}</span>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """.format(datetime.now().strftime("%Y-%m-%d")), unsafe_allow_html=True)
 
 def display_navigation():
     """Display the navigation menu."""
@@ -1390,29 +1537,6 @@ def display_navigation():
                           help="Chat with the Quality Management AI Assistant"):
         st.session_state.current_page = "assistant"
         st.rerun()
-    
-    # Device type selector
-    st.sidebar.markdown("## Device Type")
-    device_type = st.sidebar.selectbox(
-        "Select Device Type",
-        options=list(DEVICE_TYPES.keys()),
-        index=list(DEVICE_TYPES.keys()).index(st.session_state.get('selected_device_type', 'Generic')),
-        help="Select specific device type for tailored analysis"
-    )
-    
-    if device_type != st.session_state.get('selected_device_type', 'Generic'):
-        st.session_state.selected_device_type = device_type
-        st.rerun()
-    
-    # Display device type info
-    if device_type in DEVICE_TYPES:
-        device_info = DEVICE_TYPES[device_type]
-        with st.sidebar.expander(f"{device_type} Information", expanded=False):
-            st.markdown(f"**{device_info['description']}**")
-            st.markdown("**Examples:**")
-            st.markdown("\n".join([f"- {example}" for example in device_info['examples']]))
-            st.markdown("**Common Issues:**")
-            st.markdown("\n".join([f"- {issue}" for issue in device_info['common_issues']]))
     
     # Add OpenAI API status indicator
     if st.session_state.api_key_status is None:
@@ -1447,42 +1571,22 @@ def display_navigation():
     
     # Add helpful resources
     st.sidebar.markdown("## Resources")
-    with st.sidebar.expander("Manufacturing Process Controls", expanded=False):
+    with st.sidebar.expander("Quality Analysis Guidelines", expanded=False):
         st.markdown("""
-        - Statistical Process Control (SPC) charts
-        - Process Capability Analysis (Cp, Cpk)
-        - Gauge R&R studies
-        - Process Failure Mode Effects Analysis (PFMEA)
-        - Design of Experiments (DOE)
+        - Focus on high-risk issues first
+        - Consider both financial and patient impact
+        - Document all quality investigations
+        - Follow 21 CFR 820.100 for CAPAs
+        - Use root cause analysis techniques
         """)
     
-    with st.sidebar.expander("Quality Control Methods", expanded=False):
+    with st.sidebar.expander("Regulatory References", expanded=False):
         st.markdown("""
-        - **AQL Sampling**: 0.65 (Medical), 1.0 (Critical), 2.5 (Major), 4.0 (Minor)
-        - **Inspection Methods**: Visual, dimensional, functional, performance
-        - **Testing Types**: Destructive, non-destructive, accelerated life
-        - **Process Validation**: IQ, OQ, PQ methodologies
-        - **Root Cause Analysis**: 5-Why, Fishbone, Pareto analysis
-        """)
-    
-    with st.sidebar.expander("Defect Troubleshooting Guide", expanded=False):
-        st.markdown("""
-        **Injection Molding Issues:**
-        - **Sink marks**: Increase hold pressure, cooling time
-        - **Flash**: Decrease injection pressure, increase clamping force
-        - **Short shots**: Increase injection pressure, material temperature
-        - **Warping**: Balance cooling, reduce melt temperature
-        
-        **Metal Fabrication Issues:**
-        - **Weld porosity**: Clean materials, proper gas shielding
-        - **Dimensional variance**: Fixture improvements, tool wear check
-        - **Surface finish issues**: Adjust feed rate, tool selection
-        - **Cracking**: Stress relief, material selection review
-        
-        **Textile/Soft Goods Issues:**
-        - **Seam failures**: Thread tension, needle size, stitch density
-        - **Fabric tears**: Material handling, cutting technique review
-        - **Uneven stitching**: Machine timing, operator training
+        - **FDA QSR**: 21 CFR 820
+        - **Medical Device Reporting**: 21 CFR 803
+        - **Quality Management System**: ISO 13485:2016
+        - **Risk Management**: ISO 14971:2019
+        - **Post-Market Surveillance**: 21 CFR 822
         """)
 
 def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True):
@@ -1539,19 +1643,6 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
         </div>
         """, unsafe_allow_html=True)
     
-    # Add device type and manufacturing process info
-    st.markdown(f"""
-    <div style="background-color: {TERTIARY_COLOR}; padding: 0.5rem; border-radius: 4px; margin-bottom: 1rem; 
-              display: flex; flex-wrap: wrap; gap: 1rem;">
-        <div><strong>Device Type:</strong> {results['device_type']}</div>
-        <div><strong>Manufacturing Process:</strong> {results['manufacturing_process']}</div>
-        
-        {"<div><strong>Root Cause:</strong> " + results.get('root_cause', '') + "</div>" if 'root_cause' in results else ""}
-        {"<div><strong>Failure Mode:</strong> " + results.get('failure_mode', '') + "</div>" if 'failure_mode' in results else ""}
-        {"<div><strong>QC Method:</strong> " + results.get('quality_control_method', '') + "</div>" if 'quality_control_method' in results else ""}
-    </div>
-    """, unsafe_allow_html=True)
-    
     # Recommendation banner
     st.markdown(f"""
     <div style="background-color: {PRIMARY_COLOR}; padding: 1rem; border-radius: 4px; margin: 1rem 0; 
@@ -1568,7 +1659,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
     
     # Detailed results in expandable section
     with st.expander("View Detailed Analysis", expanded=expanded):
-        tabs = st.tabs(["Financial Impact", "Manufacturing Analysis", "Root Cause", "Risk Assessment"])
+        tabs = st.tabs(["Financial Impact", "Visualizations", "Solution Details", "Risk Assessment"])
         
         with tabs[0]:
             # Financial Impact tab
@@ -1648,446 +1739,156 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
             st.plotly_chart(fig, use_container_width=True)
         
         with tabs[1]:
-            # Manufacturing Analysis tab
-            st.subheader("Manufacturing Process Analysis")
-            
-            # Device type specific information
-            device_info = results['device_info']
+            # Visualizations tab
+            st.subheader("Visualizations")
             
             col1, col2 = st.columns(2)
             
             with col1:
-                st.markdown("#### Common Issues for this Device Type")
-                for issue in device_info['common_issues']:
-                    st.markdown(f"- {issue}")
+                # Return rate reduction
+                current_return_rate = results['current_metrics']['return_rate_30d']
+                improved_return_rate = current_return_rate * (1 - results['solution_metrics']['expected_reduction'] / 100)
                 
-                st.markdown("#### Manufacturing Processes")
-                for process in device_info['manufacturing_processes']:
-                    st.markdown(f"- {process}")
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=["Current", "After Fix"],
+                    y=[current_return_rate, improved_return_rate],
+                    text=[f"{current_return_rate:.2f}%", f"{improved_return_rate:.2f}%"],
+                    textposition='auto',
+                    marker_color=[DANGER_COLOR, SUCCESS_COLOR],
+                    hoverinfo="text",
+                    hovertext=[
+                        f"Current return rate: {current_return_rate:.2f}%<br>Based on {results['current_metrics']['returns_30d']} returns in 30 days",
+                        f"Projected return rate: {improved_return_rate:.2f}%<br>Expected reduction: {results['solution_metrics']['expected_reduction']}%<br>Confidence: {results['solution_metrics']['solution_confidence']}%"
+                    ]
+                ))
+                fig.update_layout(
+                    title="Return Rate Reduction",
+                    yaxis_title="Return Rate (%)",
+                    height=350,
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        font_size=12,
+                        font_family="Arial"
+                    )
+                )
+                st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                st.markdown("#### Recommended Inspection Methods")
-                for method in device_info['inspection_methods']:
-                    st.markdown(f"- {method}")
-                
-                st.markdown("#### Process Control Recommendations")
-                # This would be based on the specific device type and manufacturing process
-                if results['manufacturing_process'] == "Injection molding":
-                    st.markdown("""
-                    - Monitor and control mold temperature
-                    - Verify material drying and processing parameters
-                    - Implement cavity pressure sensors
-                    - Regular preventive maintenance of molds
-                    - Control material lot-to-lot variation
-                    """)
-                elif results['manufacturing_process'] == "PCB assembly":
-                    st.markdown("""
-                    - Automated optical inspection (AOI)
-                    - X-ray inspection for BGAs and hidden joints
-                    - Monitor reflow profiles
-                    - Regular cleaning of stencils
-                    - Component placement verification
-                    """)
-                elif results['manufacturing_process'] in ["Fabric cutting & sewing", "Foam molding"]:
-                    st.markdown("""
-                    - Regular calibration of cutting equipment
-                    - Tension control for sewing operations
-                    - Material property verification
-                    - Environmental controls (temperature, humidity)
-                    - Operator training and certification
-                    """)
-                elif results['manufacturing_process'] in ["Metal fabrication", "Metal machining", "Welding & assembly"]:
-                    st.markdown("""
-                    - Material certification verification
-                    - Tool wear monitoring
-                    - Regular calibration of measurement equipment
-                    - Weld quality inspection
-                    - Fixture validation
-                    """)
-                else:
-                    st.markdown("""
-                    - Statistical Process Control (SPC)
-                    - First Article Inspection (FAI)
-                    - Regular process audits
-                    - Preventive maintenance program
-                    - Operator training and certification
-                    """)
+                # ROI comparison
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=["1-Year ROI", "3-Year ROI"],
+                    y=[results['financial_impact']['roi_1yr'], results['financial_impact']['roi_3yr']],
+                    text=[f"{results['financial_impact']['roi_1yr']:.2f}%", f"{results['financial_impact']['roi_3yr']:.2f}%"],
+                    textposition='auto',
+                    marker_color=[SECONDARY_COLOR, PRIMARY_COLOR],
+                    hoverinfo="text",
+                    hovertext=[
+                        f"1-Year ROI: {results['financial_impact']['roi_1yr']:.2f}%<br>Implementation cost: ${results['financial_impact']['implementation_cost']:,.2f}<br>First year savings: ${results['financial_impact']['adjusted_savings']:,.2f}",
+                        f"3-Year ROI: {results['financial_impact']['roi_3yr']:.2f}%<br>Includes annual growth of {st.session_state.get('annualized_growth', 0):.1f}%<br>Cumulative 3-year benefit: ${st.session_state.get('cumulative_savings', 0):,.2f}"
+                    ]
+                ))
+                fig.update_layout(
+                    title="Return on Investment",
+                    yaxis_title="ROI (%)",
+                    height=350,
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        font_size=12,
+                        font_family="Arial"
+                    )
+                )
+                st.plotly_chart(fig, use_container_width=True)
             
-            # Process capability chart (simulated for demonstration)
-            st.markdown("#### Process Capability Analysis")
-            
-            # Create simulated process capability data
-            np.random.seed(42)  # For reproducibility
-            spec_lower = 95
-            spec_upper = 105
-            process_mean = 100
-            process_std = 1.5
-            
-            # Generate sample data
-            sample_size = 100
-            measurements = np.random.normal(process_mean, process_std, sample_size)
-            
-            # Calculate process capability indices
-            cp = (spec_upper - spec_lower) / (6 * process_std)
-            cpk = min(
-                (process_mean - spec_lower) / (3 * process_std),
-                (spec_upper - process_mean) / (3 * process_std)
-            )
-            
-            # Create histogram with specifications
-            fig = go.Figure()
-            
-            # Add histogram
-            fig.add_trace(go.Histogram(
-                x=measurements,
-                opacity=0.75,
-                marker_color=SECONDARY_COLOR,
-                name="Process Distribution"
+            # Payback period gauge
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=results['financial_impact']['payback_period'],
+                title={"text": "Payback Period (Months)"},
+                delta={'reference': 12, 'decreasing': {'color': SUCCESS_COLOR}, 'increasing': {'color': DANGER_COLOR}},
+                gauge={
+                    "axis": {"range": [None, 36], "tickwidth": 1, "tickcolor": "darkblue"},
+                    "bar": {"color": PRIMARY_COLOR},
+                    "bgcolor": "white",
+                    "borderwidth": 2,
+                    "bordercolor": "gray",
+                    "steps": [
+                        {"range": [0, 6], "color": SUCCESS_COLOR},
+                        {"range": [6, 12], "color": "#88D498"},
+                        {"range": [12, 24], "color": WARNING_COLOR},
+                        {"range": [24, 36], "color": DANGER_COLOR}
+                    ],
+                    "threshold": {
+                        "line": {"color": "red", "width": 4},
+                        "thickness": 0.75,
+                        "value": 12
+                    }
+                }
             ))
-            
-            # Add specification lines
-            fig.add_shape(
-                type="line",
-                x0=spec_lower, y0=0,
-                x1=spec_lower, y1=18,
-                line=dict(color="red", width=2, dash="dash"),
-                name="Lower Spec"
-            )
-            
-            fig.add_shape(
-                type="line",
-                x0=spec_upper, y0=0,
-                x1=spec_upper, y1=18,
-                line=dict(color="red", width=2, dash="dash"),
-                name="Upper Spec"
-            )
-            
-            # Add mean line
-            fig.add_shape(
-                type="line",
-                x0=np.mean(measurements), y0=0,
-                x1=np.mean(measurements), y1=18,
-                line=dict(color="green", width=2),
-                name="Process Mean"
-            )
-            
-            # Add annotations for Cp and Cpk
-            fig.add_annotation(
-                x=spec_lower + 2,
-                y=15,
-                text=f"Cp: {cp:.2f}<br>Cpk: {cpk:.2f}",
-                showarrow=False,
-                font=dict(size=14, color="black"),
-                bgcolor="white",
-                bordercolor="black",
-                borderwidth=1
-            )
-            
             fig.update_layout(
-                title=f"Process Capability for {results['manufacturing_process']}",
-                xaxis_title="Measurement Value",
-                yaxis_title="Frequency",
-                height=400,
-                shapes=[
-                    # Add normal distribution curve
+                height=300,
+                margin=dict(l=30, r=30, t=50, b=30),
+                annotations=[
                     dict(
-                        type="path",
-                        path=f"M {spec_lower} 0 C {spec_lower} 0, {(spec_lower + spec_upper) / 2} 20, {spec_upper} 0 Z",
-                        fillcolor="rgba(0, 150, 199, 0.2)",
-                        line=dict(color="rgba(0, 150, 199, 0.5)"),
-                        layer="below"
+                        x=0.5,
+                        y=-0.15,
+                        text=f"Break-even in {results['financial_impact']['payback_period']:.1f} months<br>Monthly net benefit: ${st.session_state.get('monthly_net_benefit', 0):,.2f}",
+                        showarrow=False,
+                        align="center"
                     )
                 ]
             )
-            
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Process improvement recommendations
-            st.markdown("#### Process Improvement Recommendations")
-            
-            if cpk < 1.0:
-                st.warning("⚠️ Process is not capable (Cpk < 1.0). Process improvement is required.")
-                st.markdown("""
-                **Recommendations:**
-                1. Identify and reduce sources of variation
-                2. Center process on target
-                3. Implement Statistical Process Control
-                4. Consider process redesign if capability cannot be improved
-                """)
-            elif cpk < 1.33:
-                st.info("ℹ️ Process is marginally capable (1.0 < Cpk < 1.33). Improvement is recommended.")
-                st.markdown("""
-                **Recommendations:**
-                1. Continue monitoring the process
-                2. Implement targeted improvements to reduce variation
-                3. Review process controls and operator training
-                4. Consider preventive maintenance to maintain stability
-                """)
-            else:
-                st.success("✅ Process is capable (Cpk > 1.33). Maintain current controls.")
-                st.markdown("""
-                **Recommendations:**
-                1. Maintain current process controls
-                2. Continue regular monitoring
-                3. Document process parameters for future reference
-                4. Train new operators to maintain consistency
-                """)
         
         with tabs[2]:
-            # Root Cause Analysis tab
-            st.subheader("Root Cause Analysis")
+            # Solution Details tab
+            st.subheader("Solution Details")
             
-            # Root cause information if available
-            if 'root_cause' in results:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### Primary Root Cause")
-                    st.info(f"**{results['root_cause']}**")
-                    
-                    # Provide specific recommendations based on root cause
-                    st.markdown("#### Recommended Actions")
-                    
-                    if results['root_cause'] == "Design flaw":
-                        st.markdown("""
-                        1. Conduct design review with cross-functional team
-                        2. Perform FMEA on the affected components
-                        3. Update design specifications
-                        4. Verify design changes with testing
-                        5. Update documentation and notify stakeholders
-                        """)
-                    elif results['root_cause'] == "Material failure":
-                        st.markdown("""
-                        1. Review material specifications
-                        2. Test alternative materials
-                        3. Audit material suppliers
-                        4. Implement incoming material testing
-                        5. Update material requirements
-                        """)
-                    elif results['root_cause'] == "Manufacturing defect":
-                        st.markdown("""
-                        1. Analyze manufacturing process parameters
-                        2. Review process control methods
-                        3. Improve operator training
-                        4. Implement additional in-process checks
-                        5. Update manufacturing procedures
-                        """)
-                    elif results['root_cause'] == "Assembly error":
-                        st.markdown("""
-                        1. Review assembly processes and fixtures
-                        2. Improve work instructions with visual aids
-                        3. Implement error-proofing (poka-yoke)
-                        4. Enhance operator training
-                        5. Add verification steps at critical points
-                        """)
-                    elif results['root_cause'] == "Component failure":
-                        st.markdown("""
-                        1. Evaluate component specifications
-                        2. Audit component suppliers
-                        3. Implement incoming inspection
-                        4. Consider alternative components
-                        5. Review environmental conditions
-                        """)
-                    elif results['root_cause'] == "Software bug":
-                        st.markdown("""
-                        1. Review code with structured walkthrough
-                        2. Implement additional unit tests
-                        3. Conduct system-level testing
-                        4. Review error handling
-                        5. Improve version control and testing
-                        """)
-                    else:
-                        st.markdown("""
-                        1. Gather additional data on failure mode
-                        2. Form cross-functional investigation team
-                        3. Implement containment actions
-                        4. Develop and verify corrective actions
-                        5. Monitor effectiveness after implementation
-                        """)
-                
-                with col2:
-                    # Specific failure mode if available
-                    if 'failure_mode' in results:
-                        st.markdown("#### Specific Failure Mode")
-                        st.info(f"**{results['failure_mode']}**")
-                    
-                    # Quality control method if available
-                    if 'quality_control_method' in results:
-                        st.markdown("#### Current Quality Control Method")
-                        st.info(f"**{results['quality_control_method']}**")
-                        
-                        st.markdown("#### QC Method Effectiveness")
-                        
-                        # Evaluate QC method based on return rate
-                        if results['current_metrics']['return_rate_30d'] > 5.0:
-                            st.error("❌ Current quality control method is not effective")
-                        elif results['current_metrics']['return_rate_30d'] > 2.0:
-                            st.warning("⚠️ Current quality control method is partially effective")
-                        else:
-                            st.success("✅ Current quality control method is effective, but improvement is still possible")
-                        
-                        # Recommend QC improvements
-                        st.markdown("#### QC Improvement Recommendations")
-                        
-                        if results['quality_control_method'].startswith("AQL"):
-                            st.markdown("""
-                            - Consider tightening AQL level
-                            - Implement additional inspection points
-                            - Review inspector training and tools
-                            - Add functional testing
-                            - Implement mistake-proofing
-                            """)
-                        elif "inspection" in results['quality_control_method'].lower():
-                            st.markdown("""
-                            - Increase inspection frequency
-                            - Add automated inspection where possible
-                            - Improve inspection criteria and checklists
-                            - Enhance inspector training
-                            - Implement process controls upstream
-                            """)
-                        elif "testing" in results['quality_control_method'].lower():
-                            st.markdown("""
-                            - Review test protocols and coverage
-                            - Improve test equipment calibration
-                            - Consider environmental stress testing
-                            - Add accelerated life testing
-                            - Implement statistical sampling plan
-                            """)
-                        else:
-                            st.markdown("""
-                            - Implement Statistical Process Control
-                            - Add in-process quality checks
-                            - Consider automated inspection/testing
-                            - Enhance operator training
-                            - Improve documentation and traceability
-                            """)
+            col1, col2 = st.columns(2)
             
-            # Create Pareto chart with simulated data if no root cause data
-            st.markdown("#### Pareto Analysis of Failure Modes")
+            with col1:
+                st.markdown("#### Cost Structure")
+                st.markdown(f"""
+                - **Current Unit Cost:** {format_currency(results['current_metrics']['unit_cost'])}
+                - **Fix Cost (Upfront):** {format_currency(results['solution_metrics']['fix_cost_upfront'])}
+                - **Fix Cost (Per Unit):** {format_currency(results['solution_metrics']['fix_cost_per_unit'])}
+                - **New Unit Cost:** {format_currency(results['solution_metrics']['new_unit_cost'])}
+                """)
             
-            # Create sample data for Pareto chart
-            if 'failure_mode' in results and 'root_cause' in results:
-                # Create simulated data based on the selected failure mode and root cause
-                failure_modes = {
-                    results['failure_mode']: 35,
-                    f"Similar issue to {results['failure_mode']}": 22,
-                    f"Related to {results['root_cause']}": 18,
-                    "Other related issue 1": 12,
-                    "Other related issue 2": 8,
-                    "Miscellaneous": 5
-                }
-            else:
-                # Default simulated data
-                device_info = DEVICE_TYPES.get(results['device_type'], DEVICE_TYPES['Generic'])
-                common_issues = device_info['common_issues']
-                
-                failure_modes = {}
-                for i, issue in enumerate(common_issues):
-                    failure_modes[issue] = 40 - (i * 5) if i < len(common_issues) else 5
-                
-                # Add some more generic ones if needed
-                if len(failure_modes) < 5:
-                    failure_modes["Assembly defect"] = 10
-                    failure_modes["Component failure"] = 8
-                    failure_modes["Packaging damage"] = 6
-                    failure_modes["Miscellaneous"] = 5
+            with col2:
+                st.markdown("#### Margin Impact")
+                st.markdown(f"""
+                - **Current Margin:** {format_currency(results['current_metrics']['margin_per_unit'])} ({results['current_metrics']['margin_percentage']:.2f}%)
+                - **New Margin:** {format_currency(results['solution_metrics']['new_margin_per_unit'])} ({results['solution_metrics']['new_margin_percentage']:.2f}%)
+                - **Margin Change:** {format_currency(results['solution_metrics']['new_margin_per_unit'] - results['current_metrics']['margin_per_unit'])}
+                - **Expected Reduction:** {results['solution_metrics']['expected_reduction']:.2f}% (with {results['solution_metrics']['solution_confidence']:.0f}% confidence)
+                """)
             
-            # Store in session state for reuse
-            st.session_state.pareto_data = generate_pareto_data(failure_modes)
-            pareto_data = st.session_state.pareto_data
-            
-            # Create Pareto chart
+            # Margin comparison chart
             fig = go.Figure()
-            
-            # Add bar chart for failure modes
             fig.add_trace(go.Bar(
-                x=pareto_data['modes'],
-                y=pareto_data['counts'],
-                name="Count",
-                marker_color=PRIMARY_COLOR
+                name="Unit Cost",
+                x=["Current", "After Fix"],
+                y=[results['current_metrics']['unit_cost'], results['solution_metrics']['new_unit_cost']],
+                marker_color=DANGER_COLOR
+            ))
+            fig.add_trace(go.Bar(
+                name="Margin",
+                x=["Current", "After Fix"],
+                y=[results['current_metrics']['margin_per_unit'], results['solution_metrics']['new_margin_per_unit']],
+                marker_color=SUCCESS_COLOR
             ))
             
-            # Add line chart for cumulative percentage
-            fig.add_trace(go.Scatter(
-                x=pareto_data['modes'],
-                y=pareto_data['cumulative_percent'],
-                name="Cumulative %",
-                marker=dict(color=DANGER_COLOR),
-                line=dict(width=3),
-                yaxis="y2"
-            ))
-            
-            # Update layout
             fig.update_layout(
-                title="Pareto Analysis of Failure Modes",
-                xaxis_title="Failure Mode",
-                yaxis=dict(
-                    title="Count",
-                    titlefont=dict(color=PRIMARY_COLOR),
-                    tickfont=dict(color=PRIMARY_COLOR)
-                ),
-                yaxis2=dict(
-                    title="Cumulative %",
-                    titlefont=dict(color=DANGER_COLOR),
-                    tickfont=dict(color=DANGER_COLOR),
-                    anchor="x",
-                    overlaying="y",
-                    side="right",
-                    range=[0, 100]
-                ),
-                height=400,
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            )
-            
-            # Add 80% line for Pareto principle
-            fig.add_shape(
-                type="line",
-                x0=-0.5, y0=80,
-                x1=len(pareto_data['modes'])-0.5, y1=80,
-                line=dict(color="red", width=2, dash="dash"),
-                yref="y2"
-            )
-            
-            # Add annotation for 80% line
-            fig.add_annotation(
-                x=len(pareto_data['modes'])-1,
-                y=80,
-                xref="x",
-                yref="y2",
-                text="80% of Issues",
-                showarrow=True,
-                arrowhead=1,
-                ax=50,
-                ay=-30
+                title="Cost and Margin Comparison",
+                yaxis_title="Amount ($)",
+                barmode='stack',
+                height=400
             )
             
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Root cause analysis recommendations
-            st.markdown("#### Root Cause Analysis Methodology")
-            
-            # Fishbone diagram explanation
-            st.markdown("""
-            **Recommended Approach: Fishbone (Ishikawa) Diagram Analysis**
-            
-            Focus on these key categories for medical device manufacturing:
-            1. **Materials**: Quality issues, specifications, handling, storage
-            2. **Methods**: Process parameters, procedures, work instructions
-            3. **Machinery**: Equipment maintenance, calibration, tooling
-            4. **Measurement**: Testing, gauges, inspection methods
-            5. **People**: Training, skills, experience, supervision
-            6. **Environment**: Temperature, humidity, cleanliness, layout
-            
-            Conduct structured investigation with a cross-functional team including engineering, manufacturing, and quality personnel.
-            """)
-            
+        
         with tabs[3]:
             # Risk Assessment tab
             st.subheader("Risk Assessment")
@@ -2184,53 +1985,6 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                     st.info("⚠️ High brand risk detected. Consider customer communication plan.")
                 else:
                     st.success("✅ Risk levels are manageable with standard protocols.")
-                    
-                # Add device-specific risk information
-                st.markdown("#### Device-Specific Risk Considerations")
-                
-                device_type = results['device_type']
-                if device_type == "Mobility Aids":
-                    st.markdown("""
-                    - Fall risk from device failure
-                    - User injury from structural collapse
-                    - Stability issues during normal use
-                    - Weight capacity limitations
-                    """)
-                elif device_type == "Cushions & Support":
-                    st.markdown("""
-                    - Pressure ulcer development
-                    - Improper positioning leading to injury
-                    - Skin irritation from materials
-                    - Support degradation over time
-                    """)
-                elif device_type == "Monitoring Devices":
-                    st.markdown("""
-                    - False readings leading to improper treatment
-                    - Missed critical notifications
-                    - Battery failure during use
-                    - Software reliability issues
-                    """)
-                elif device_type == "Orthopedic Supports":
-                    st.markdown("""
-                    - Improper support leading to injury
-                    - Restriction of circulation
-                    - Skin irritation or pressure points
-                    - Component failure during use
-                    """)
-                elif device_type == "Ostomy & Continence":
-                    st.markdown("""
-                    - Leakage leading to skin damage
-                    - Adhesive allergic reactions
-                    - Incorrect fit causing discomfort
-                    - Material integrity issues
-                    """)
-                else:
-                    st.markdown("""
-                    - User injury from device failure
-                    - Improper function affecting treatment
-                    - Component failure during use
-                    - Material integrity issues
-                    """)
     
     # Export options
     col1, col2 = st.columns(2)
@@ -2251,6 +2005,638 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 pdf_buffer = export_as_pdf(results)
                 pdf_data = base64.b64encode(pdf_buffer.read()).decode('utf-8')
                 pdf_download = f'<a href="data:application/pdf;base64,{pdf_data}" download="quality_analysis_{results["sku"]}_{datetime.now().strftime("%Y%m%d")}.pdf" class="export-button">📄 Export as PDF</a>'
+                st.markdown(pdf_download, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error generating PDF: {e}")
+
+def display_marketing_roi_results(results: Dict[str, Any], expanded: bool = True):
+    """Display the results of a marketing ROI analysis."""
+    if not results:
+        return
+    
+    st.markdown("### 📊 Campaign Analysis Results")
+    
+    # Summary metrics in columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        roi_color = generate_color_scale(
+            results['roi'], 100, 0
+        )
+        with st.container():
+            st.markdown(f"""
+            <div class="metric-card" data-tooltip="Return on Investment">
+                <div class="metric-label">ROI</div>
+                <div class="metric-value" style="color: {roi_color};">{results['roi']:.2f}%</div>
+                <div class="metric-subvalue">Return on Investment</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        roas_color = generate_color_scale(
+            results['roas'], 4, 1
+        )
+        st.markdown(f"""
+        <div class="metric-card" data-tooltip="Return on Ad Spend">
+            <div class="metric-label">ROAS</div>
+            <div class="metric-value" style="color: {roas_color};">{results['roas']:.2f}x</div>
+            <div class="metric-subvalue">Return on Ad Spend</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        conv_color = generate_color_scale(
+            results['conversion_rate'], 3, 0.5
+        )
+        st.markdown(f"""
+        <div class="metric-card" data-tooltip="Percentage of clicks that convert to sales">
+            <div class="metric-label">Conversion Rate</div>
+            <div class="metric-value" style="color: {conv_color};">{results['conversion_rate']:.2f}%</div>
+            <div class="metric-subvalue">Clicks to sales</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        cpa_color = generate_color_scale(
+            50 - min(results['cpa'], 50), 40, 10
+        )
+        st.markdown(f"""
+        <div class="metric-card" data-tooltip="Cost Per Acquisition (sales)">
+            <div class="metric-label">CPA</div>
+            <div class="metric-value" style="color: {cpa_color};">${results['cpa']:.2f}</div>
+            <div class="metric-subvalue">Cost per conversion</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Campaign performance banner
+    performance_level = ""
+    performance_color = ""
+    if results['roi'] >= 100:
+        performance_level = "Excellent Performance"
+        performance_color = SUCCESS_COLOR
+    elif results['roi'] >= 50:
+        performance_level = "Good Performance"
+        performance_color = "#88D498"  # Lighter green
+    elif results['roi'] >= 0:
+        performance_level = "Acceptable Performance"
+        performance_color = WARNING_COLOR
+    else:
+        performance_level = "Needs Improvement"
+        performance_color = DANGER_COLOR
+    
+    st.markdown(f"""
+    <div style="background-color: {performance_color}; padding: 1rem; border-radius: 4px; margin: 1rem 0; 
+                color: white; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <span style="font-size: 1.1rem; font-weight: 600;">Campaign Assessment:</span> 
+            <span style="font-size: 1.1rem;">{performance_level}</span>
+        </div>
+        <div>
+            <span style="padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background-color: rgba(255,255,255,0.2);">
+                ${results['revenue']:.2f} Revenue | ${results['profit']:.2f} Profit
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Detailed results in expandable section
+    with st.expander("View Detailed Analysis", expanded=expanded):
+        tabs = st.tabs(["Campaign Performance", "Funnel Analysis", "Cost Metrics", "ROI Breakdown"])
+        
+        with tabs[0]:
+            # Campaign Performance tab
+            st.subheader("Campaign Performance")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Key Metrics")
+                st.markdown(f"""
+                - **Total Ad Spend:** ${results['ad_spend']:.2f}
+                - **Total Revenue:** ${results['revenue']:.2f}
+                - **Total Profit:** ${results['profit']:.2f}
+                - **Return on Investment (ROI):** {results['roi']:.2f}%
+                - **Return on Ad Spend (ROAS):** {results['roas']:.2f}x
+                """)
+            
+            with col2:
+                st.markdown("#### Volume Metrics")
+                st.markdown(f"""
+                - **Impressions:** {results['impressions']:,}
+                - **Clicks:** {results['clicks']:,}
+                - **Conversions:** {results['conversions']:,}
+                - **Average Order Value:** ${results['avg_order_value']:.2f}
+                - **Contribution Margin:** {results['contribution_margin_percent']:.2f}%
+                """)
+            
+            # Financial performance chart
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name="Ad Spend",
+                x=["Cost"],
+                y=[results['ad_spend']],
+                marker_color=DANGER_COLOR,
+                text=f"${results['ad_spend']:.2f}",
+                textposition="auto"
+            ))
+            
+            fig.add_trace(go.Bar(
+                name="Revenue",
+                x=["Revenue"],
+                y=[results['revenue']],
+                marker_color=SECONDARY_COLOR,
+                text=f"${results['revenue']:.2f}",
+                textposition="auto"
+            ))
+            
+            fig.add_trace(go.Bar(
+                name="Profit",
+                x=["Profit"],
+                y=[results['profit']],
+                marker_color=SUCCESS_COLOR,
+                text=f"${results['profit']:.2f}",
+                textposition="auto"
+            ))
+            
+            fig.update_layout(
+                title="Financial Performance",
+                yaxis_title="Amount ($)",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # ROI and ROAS gauge chart
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number+delta",
+                    value=results['roi'],
+                    title={"text": "ROI (%)"},
+                    delta={'reference': 50, 'increasing': {'color': SUCCESS_COLOR}, 'decreasing': {'color': DANGER_COLOR}},
+                    gauge={
+                        "axis": {"range": [-50, 150], "tickwidth": 1},
+                        "bar": {"color": PRIMARY_COLOR},
+                        "bgcolor": "white",
+                        "borderwidth": 2,
+                        "bordercolor": "gray",
+                        "steps": [
+                            {"range": [-50, 0], "color": DANGER_COLOR},
+                            {"range": [0, 50], "color": WARNING_COLOR},
+                            {"range": [50, 100], "color": "#88D498"},
+                            {"range": [100, 150], "color": SUCCESS_COLOR}
+                        ],
+                        "threshold": {
+                            "line": {"color": "black", "width": 4},
+                            "thickness": 0.75,
+                            "value": 50
+                        }
+                    }
+                ))
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number+delta",
+                    value=results['roas'],
+                    title={"text": "ROAS (x)"},
+                    delta={'reference': 3, 'increasing': {'color': SUCCESS_COLOR}, 'decreasing': {'color': DANGER_COLOR}},
+                    gauge={
+                        "axis": {"range": [0, 6], "tickwidth": 1},
+                        "bar": {"color": PRIMARY_COLOR},
+                        "bgcolor": "white",
+                        "borderwidth": 2,
+                        "bordercolor": "gray",
+                        "steps": [
+                            {"range": [0, 1], "color": DANGER_COLOR},
+                            {"range": [1, 3], "color": WARNING_COLOR},
+                            {"range": [3, 4], "color": "#88D498"},
+                            {"range": [4, 6], "color": SUCCESS_COLOR}
+                        ],
+                        "threshold": {
+                            "line": {"color": "black", "width": 4},
+                            "thickness": 0.75,
+                            "value": 3
+                        }
+                    }
+                ))
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+                
+        with tabs[1]:
+            # Funnel Analysis tab
+            st.subheader("Funnel Analysis")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Funnel Metrics")
+                st.markdown(f"""
+                - **Click-Through Rate (CTR):** {results['ctr']:.2f}%
+                - **Conversion Rate:** {results['conversion_rate']:.2f}%
+                - **Funnel Efficiency:** {(results['conversion_rate'] * results['ctr'] / 100):.4f}%
+                """)
+                
+                # Add industry benchmarks
+                st.markdown("#### Industry Benchmarks")
+                st.markdown("""
+                *Medical Device Industry Averages:*
+                - CTR: 1.0-3.0%
+                - Conversion Rate: 1.5-2.5%
+                - ROAS: 2.5-4.0x
+                """)
+            
+            with col2:
+                # Funnel visualization with Plotly
+                stages = ['Impressions', 'Clicks', 'Conversions']
+                values = [results['impressions'], results['clicks'], results['conversions']]
+                
+                colors = [TERTIARY_COLOR, SECONDARY_COLOR, PRIMARY_COLOR]
+                
+                fig = go.Figure()
+                
+                fig.add_trace(go.Funnel(
+                    name="Funnel",
+                    y=stages,
+                    x=values,
+                    textposition="inside",
+                    textinfo="value+percent initial",
+                    opacity=0.8,
+                    marker={"color": colors, "line": {"width": 1, "color": "white"}}
+                ))
+                
+                fig.update_layout(
+                    title="Marketing Funnel",
+                    height=300
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Funnel drop-off analysis
+            st.markdown("#### Funnel Drop-off Analysis")
+            
+            # Calculate drop-offs
+            impression_to_click_dropoff = 100 - results['ctr']
+            click_to_conversion_dropoff = 100 - results['conversion_rate']
+            
+            # Create drop-off visualization
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name="Drop-off Rate",
+                x=["Impression to Click", "Click to Conversion"],
+                y=[impression_to_click_dropoff, click_to_conversion_dropoff],
+                text=[f"{impression_to_click_dropoff:.2f}%", f"{click_to_conversion_dropoff:.2f}%"],
+                textposition="auto",
+                marker_color=[SECONDARY_COLOR, PRIMARY_COLOR],
+                opacity=0.7
+            ))
+            
+            fig.update_layout(
+                title="Funnel Drop-off Analysis",
+                yaxis_title="Drop-off Rate (%)",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Recommendations based on funnel analysis
+            st.markdown("#### Funnel Optimization Insights")
+            
+            if impression_to_click_dropoff > 98:  # Very high impression to click drop-off
+                st.warning("⚠️ Very high impression to click drop-off indicates potential issues with ad creative, targeting, or relevance.")
+            elif impression_to_click_dropoff > 95:  # High impression to click drop-off (common)
+                st.info("ℹ️ The impression to click drop-off is typical for digital advertising but could be improved with better targeting and ad creative.")
+            else:  # Good impression to click rate
+                st.success("✅ The impression to click conversion is performing well, indicating effective ad creative and targeting.")
+                
+            if click_to_conversion_dropoff > 98:  # Very high click to conversion drop-off
+                st.error("❌ Very high click to conversion drop-off indicates significant landing page or offer issues.")
+            elif click_to_conversion_dropoff > 95:  # High click to conversion drop-off
+                st.warning("⚠️ The click to conversion drop-off suggests opportunities to improve landing page experience or offer clarity.")
+            else:  # Good click to conversion rate
+                st.success("✅ The click to conversion rate is performing well, indicating effective landing pages and offers.")
+        
+        with tabs[2]:
+            # Cost Metrics tab
+            st.subheader("Cost Metrics")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Cost Metrics")
+                st.markdown(f"""
+                - **CPM (Cost per 1000 Impressions):** ${results['cpm']:.2f}
+                - **CPC (Cost per Click):** ${results['cpc']:.2f}
+                - **CPA (Cost per Acquisition):** ${results['cpa']:.2f}
+                """)
+                
+                st.markdown("#### Value Metrics")
+                st.markdown(f"""
+                - **Revenue per Click:** ${safe_divide(results['revenue'], results['clicks'], 0):.2f}
+                - **Profit per Click:** ${safe_divide(results['profit'], results['clicks'], 0):.2f}
+                - **Revenue per Impression:** ${safe_divide(results['revenue'] * 1000, results['impressions'], 0):.2f} per 1000
+                """)
+            
+            with col2:
+                # Cost metrics comparison
+                fig = go.Figure()
+                
+                # Add a trace for CPA
+                fig.add_trace(go.Indicator(
+                    mode="number+gauge",
+                    value=results['cpa'],
+                    title={"text": "CPA (Cost per Acquisition)"},
+                    domain={'x': [0, 1], 'y': [0.6, 1]},
+                    gauge={
+                        'axis': {'range': [None, 50]},
+                        'bar': {'color': PRIMARY_COLOR},
+                        'steps': [
+                            {'range': [0, 10], 'color': SUCCESS_COLOR},
+                            {'range': [10, 25], 'color': WARNING_COLOR},
+                            {'range': [25, 50], 'color': DANGER_COLOR}
+                        ]
+                    },
+                    number={'prefix': "$"}
+                ))
+                
+                # Add a trace for CPC
+                fig.add_trace(go.Indicator(
+                    mode="number+gauge",
+                    value=results['cpc'],
+                    title={"text": "CPC (Cost per Click)"},
+                    domain={'x': [0, 1], 'y': [0.3, 0.5]},
+                    gauge={
+                        'axis': {'range': [None, 2]},
+                        'bar': {'color': SECONDARY_COLOR},
+                        'steps': [
+                            {'range': [0, 0.5], 'color': SUCCESS_COLOR},
+                            {'range': [0.5, 1], 'color': WARNING_COLOR},
+                            {'range': [1, 2], 'color': DANGER_COLOR}
+                        ]
+                    },
+                    number={'prefix': "$"}
+                ))
+                
+                # Add a trace for CPM
+                fig.add_trace(go.Indicator(
+                    mode="number+gauge",
+                    value=results['cpm'],
+                    title={"text": "CPM (Cost per 1000 Impressions)"},
+                    domain={'x': [0, 1], 'y': [0, 0.2]},
+                    gauge={
+                        'axis': {'range': [None, 50]},
+                        'bar': {'color': TERTIARY_COLOR},
+                        'steps': [
+                            {'range': [0, 15], 'color': SUCCESS_COLOR},
+                            {'range': [15, 30], 'color': WARNING_COLOR},
+                            {'range': [30, 50], 'color': DANGER_COLOR}
+                        ]
+                    },
+                    number={'prefix': "$"}
+                ))
+                
+                fig.update_layout(
+                    height=500
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Cost comparison bar chart
+            fig = go.Figure()
+            
+            cost_metrics = ['CPM', 'CPC', 'CPA']
+            values = [results['cpm'], results['cpc'], results['cpa']]
+            
+            fig.add_trace(go.Bar(
+                x=cost_metrics,
+                y=values,
+                text=[f"${v:.2f}" for v in values],
+                textposition="auto",
+                marker_color=[TERTIARY_COLOR, SECONDARY_COLOR, PRIMARY_COLOR]
+            ))
+            
+            fig.update_layout(
+                title="Cost Metrics Comparison",
+                yaxis_title="Cost ($)",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Benchmark comparison if available
+            st.markdown("#### Industry Benchmark Comparison")
+            
+            # Create benchmark data - placeholder values for medical device industry
+            benchmarks = {
+                'CPM': 25.0,  # Average CPM for medical device industry
+                'CPC': 0.75,  # Average CPC for medical device industry
+                'CPA': 25.0   # Average CPA for medical device industry
+            }
+            
+            # Calculate performance relative to benchmarks (negative is better)
+            cpm_vs_benchmark = ((results['cpm'] - benchmarks['CPM']) / benchmarks['CPM']) * 100
+            cpc_vs_benchmark = ((results['cpc'] - benchmarks['CPC']) / benchmarks['CPC']) * 100
+            cpa_vs_benchmark = ((results['cpa'] - benchmarks['CPA']) / benchmarks['CPA']) * 100
+            
+            # Create comparison chart
+            fig = go.Figure()
+            
+            metrics = ['CPM vs Benchmark', 'CPC vs Benchmark', 'CPA vs Benchmark']
+            values = [cpm_vs_benchmark, cpc_vs_benchmark, cpa_vs_benchmark]
+            colors = [
+                SUCCESS_COLOR if v <= 0 else DANGER_COLOR for v in values
+            ]
+            
+            fig.add_trace(go.Bar(
+                x=metrics,
+                y=values,
+                text=[f"{v:.1f}%" for v in values],
+                textposition="auto",
+                marker_color=colors
+            ))
+            
+            # Add a horizontal line at 0%
+            fig.add_shape(
+                type="line",
+                x0=-0.5,
+                y0=0,
+                x1=2.5,
+                y1=0,
+                line=dict(
+                    color="black",
+                    width=2,
+                    dash="dash",
+                )
+            )
+            
+            fig.update_layout(
+                title="Performance vs Industry Benchmarks",
+                yaxis_title="% Difference from Benchmark",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tabs[3]:
+            # ROI Breakdown tab
+            st.subheader("ROI Breakdown")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### ROI Components")
+                st.markdown(f"""
+                - **Total Ad Spend:** ${results['ad_spend']:.2f}
+                - **Total Revenue:** ${results['revenue']:.2f}
+                - **Contribution Margin:** {results['contribution_margin_percent']:.2f}%
+                - **Profit (Revenue × Margin):** ${results['profit']:.2f}
+                - **ROI (Profit - Spend) / Spend:** {results['roi']:.2f}%
+                """)
+                
+                st.markdown("#### Breakeven Analysis")
+                
+                # Calculate metrics
+                breakeven_conversions = safe_divide(results['ad_spend'], (results['avg_order_value'] * (results['contribution_margin_percent'] / 100)), 0)
+                breakeven_conversion_rate = safe_divide(breakeven_conversions * 100, results['clicks'], 0)
+                
+                st.markdown(f"""
+                - **Current Conversions:** {results['conversions']}
+                - **Breakeven Conversions Needed:** {breakeven_conversions:.2f}
+                - **Conversions Above Breakeven:** {results['conversions'] - breakeven_conversions:.2f}
+                - **Current Conversion Rate:** {results['conversion_rate']:.2f}%
+                - **Breakeven Conversion Rate:** {breakeven_conversion_rate:.2f}%
+                """)
+            
+            with col2:
+                # ROI waterfall chart
+                fig = go.Figure(go.Waterfall(
+                    name="ROI Components",
+                    orientation="v",
+                    measure=["absolute", "relative", "total"],
+                    x=["Ad Spend", "Profit", "Net (ROI)"],
+                    textposition="outside",
+                    text=[
+                        f"-${results['ad_spend']:.2f}",
+                        f"+${results['profit']:.2f}",
+                        f"${(results['profit'] - results['ad_spend']):.2f}"
+                    ],
+                    y=[
+                        -results['ad_spend'],
+                        results['profit'],
+                        0
+                    ],
+                    connector={"line": {"color": "rgb(63, 63, 63)"}},
+                    decreasing={"marker": {"color": DANGER_COLOR}},
+                    increasing={"marker": {"color": SUCCESS_COLOR}},
+                    totals={"marker": {"color": PRIMARY_COLOR}}
+                ))
+                
+                fig.update_layout(
+                    title="ROI Components",
+                    height=300
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # ROI sensitivity analysis
+            st.markdown("#### ROI Sensitivity Analysis")
+            
+            # Create data for sensitivity analysis
+            conversion_rates = np.linspace(0, results['conversion_rate'] * 2, 20)
+            roi_values = []
+            
+            for conv_rate in conversion_rates:
+                # Calculate projected conversions
+                projected_conversions = (conv_rate / 100) * results['clicks']
+                # Calculate projected revenue
+                projected_revenue = projected_conversions * results['avg_order_value']
+                # Calculate projected profit
+                projected_profit = projected_revenue * (results['contribution_margin_percent'] / 100)
+                # Calculate projected ROI
+                projected_roi = safe_divide(projected_profit - results['ad_spend'], results['ad_spend'], -100) * 100
+                roi_values.append(projected_roi)
+            
+            # Create sensitivity chart
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=conversion_rates,
+                y=roi_values,
+                mode='lines+markers',
+                name='ROI',
+                line=dict(color=PRIMARY_COLOR, width=3),
+                marker=dict(size=8)
+            ))
+            
+            # Add a vertical line at current conversion rate
+            fig.add_shape(
+                type="line",
+                x0=results['conversion_rate'],
+                y0=min(roi_values),
+                x1=results['conversion_rate'],
+                y1=max(roi_values),
+                line=dict(
+                    color="red",
+                    width=2,
+                    dash="dash",
+                )
+            )
+            
+            # Add a horizontal line at 0% ROI (breakeven)
+            fig.add_shape(
+                type="line",
+                x0=min(conversion_rates),
+                y0=0,
+                x1=max(conversion_rates),
+                y1=0,
+                line=dict(
+                    color="gray",
+                    width=2,
+                    dash="dash",
+                )
+            )
+            
+            # Add annotation for current position
+            fig.add_annotation(
+                x=results['conversion_rate'],
+                y=results['roi'],
+                text=f"Current: {results['conversion_rate']:.2f}%, ROI: {results['roi']:.2f}%",
+                showarrow=True,
+                arrowhead=1
+            )
+            
+            fig.update_layout(
+                title="ROI Sensitivity to Conversion Rate",
+                xaxis_title="Conversion Rate (%)",
+                yaxis_title="ROI (%)",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Export options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if results:
+            df = export_marketing_roi_as_csv(results)
+            csv_download = generate_download_link(
+                df, 
+                f"marketing_roi_analysis_{datetime.now().strftime('%Y%m%d')}.csv",f"marketing_roi_analysis_{datetime.now().strftime('%Y%m%d')}.csv", 
+                "📥 Export as CSV"
+            )
+            st.markdown(csv_download, unsafe_allow_html=True)
+    
+    with col2:
+        if results:
+            try:
+                pdf_buffer = export_marketing_roi_as_pdf(results)
+                pdf_data = base64.b64encode(pdf_buffer.read()).decode('utf-8')
+                pdf_download = f'<a href="data:application/pdf;base64,{pdf_data}" download="marketing_roi_analysis_{datetime.now().strftime("%Y%m%d")}.pdf" class="export-button">📄 Export as PDF</a>'
                 st.markdown(pdf_download, unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Error generating PDF: {e}")
@@ -2279,72 +2665,11 @@ def display_quality_analysis_form():
             )
         
         with col3:
-            # Use the current device type from session state
-            device_type = st.selectbox(
-                "Device Type",
-                options=list(DEVICE_TYPES.keys()),
-                index=list(DEVICE_TYPES.keys()).index(st.session_state.get('selected_device_type', 'Generic')),
-                help="Select the specific device category"
-            )
-            
-            # Update session state if changed
-            if device_type != st.session_state.get('selected_device_type', 'Generic'):
-                st.session_state.selected_device_type = device_type
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            manufacturing_process = st.selectbox(
-                "Manufacturing Process",
-                options=MANUFACTURING_PROCESSES,
-                index=0,
-                help="Primary manufacturing process for this product"
-            )
-        
-        with col2:
             issue_description = st.text_input(
                 "Issue Description", 
                 placeholder="Brief description of the quality issue",
                 help="Describe the quality problem being addressed"
             )
-        
-        # Root cause analysis section
-        st.markdown("""
-        <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1.5rem;">
-            <i class="fas fa-search"></i> Root Cause Analysis
-        </h3>
-        """, unsafe_allow_html=True)
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            root_cause = st.selectbox(
-                "Primary Root Cause",
-                options=["Not determined"] + ROOT_CAUSE_CATEGORIES,
-                index=0,
-                help="Select the primary root cause category"
-            )
-            
-            # Only use the root cause if it's not "Not determined"
-            root_cause = None if root_cause == "Not determined" else root_cause
-        
-        with col2:
-            failure_mode = st.text_input(
-                "Specific Failure Mode",
-                placeholder="E.g., cracked housing, loose connection",
-                help="Specific mode of failure observed"
-            )
-        
-        with col3:
-            quality_control_method = st.selectbox(
-                "Quality Control Method",
-                options=["Not specified"] + QUALITY_CONTROL_METHODS,
-                index=0,
-                help="Current quality control method being used"
-            )
-            
-            # Only use the QC method if it's not "Not specified"
-            quality_control_method = None if quality_control_method == "Not specified" else quality_control_method
         
         st.markdown("""
         <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1.5rem;">
@@ -2537,14 +2862,9 @@ def display_quality_analysis_form():
                     results = analyze_quality_issue(
                         sku=sku,
                         product_type=product_type,
-                        device_type=device_type,
-                        manufacturing_process=manufacturing_process,
                         sales_30d=sales_30d,
                         returns_30d=returns_30d,
                         issue_description=issue_description,
-                        root_cause=root_cause,
-                        failure_mode=failure_mode if failure_mode else None,
-                        quality_control_method=quality_control_method,
                         current_unit_cost=current_unit_cost,
                         fix_cost_upfront=fix_cost_upfront,
                         fix_cost_per_unit=fix_cost_per_unit,
@@ -2590,6 +2910,10 @@ def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "qua
     # Determine which chat history to use based on module type
     if module_type == "quality" and results:
         chat_history_key = "chat_history"
+    elif module_type == "marketing":
+        chat_history_key = "marketing_chat_history"
+    elif module_type == "tariff":
+        chat_history_key = "tariff_chat_history"
     elif module_type == "monte_carlo":
         chat_history_key = "monte_carlo_chat_history"
     else:
@@ -2597,11 +2921,15 @@ def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "qua
     
     # Set the title based on module type
     if module_type == "quality":
-        title = "Medical Device Manufacturing & Quality AI Assistant"
+        title = "Quality Management AI Assistant"
+    elif module_type == "marketing":
+        title = "Marketing ROI AI Assistant"
+    elif module_type == "tariff":
+        title = "Tariff Impact AI Assistant"
     elif module_type == "monte_carlo":
         title = "Risk Analysis AI Assistant"
     else:
-        title = "Medical Device Manufacturing AI Assistant"
+        title = "AI Assistant"
     
     st.markdown(f"""
     <h3 style="color: #0096C7; border-bottom: 2px solid #0096C7; padding-bottom: 0.5rem; margin-top: 1rem;">
@@ -2609,23 +2937,21 @@ def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "qua
     </h3>
     """, unsafe_allow_html=True)
     
-    # Add explanation based on the selected device type
-    device_type = st.session_state.get('selected_device_type', 'Generic')
-    device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-    
     # Add a brief explanation of the assistant's capabilities based on module type
     if module_type == "quality":
-        explanation = f"Ask questions about quality issues, manufacturing processes, and troubleshooting for {device_type} devices."
+        explanation = "Ask questions about quality issues, regulatory considerations, and implementation strategies."
+    elif module_type == "marketing":
+        explanation = "Ask questions about marketing campaign optimization, ROI improvement, and compliance for medical device marketing."
+    elif module_type == "tariff":
+        explanation = "Ask questions about tariff mitigation strategies, supply chain optimization, and pricing strategies."
     elif module_type == "monte_carlo":
-        explanation = f"Ask questions about risk analysis, manufacturing process variability, and implementation strategies for {device_type} devices."
+        explanation = "Ask questions about risk analysis, probability interpretation, and implementation strategies."
     else:
-        explanation = f"Ask questions about manufacturing processes, quality control, and troubleshooting for medical devices, particularly {device_type}."
+        explanation = "Ask questions about quality management, regulatory compliance, and cost analysis."
     
     st.markdown(f"""
     <div style="background-color: #f8f9fa; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; border-left: 3px solid #0096C7;">
         <strong>AI features:</strong> {explanation}
-        <br><br>
-        <strong>Device expertise:</strong> {device_info['description']}
     </div>
     """, unsafe_allow_html=True)
     
@@ -2644,34 +2970,54 @@ def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "qua
                 <br><br>
                 Based on the analysis, my recommendation is: <strong>{results['recommendation']}</strong>
                 <br><br>
-                For this {results['device_type']} using {results['manufacturing_process']}, I can help you identify specific causes and troubleshooting steps. What specific aspects would you like help with?
+                How can I help you with this quality issue today?
+            </div>
+            """, unsafe_allow_html=True)
+        elif module_type == "marketing" and results:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> I've analyzed your marketing campaign performance. Your ROI is {results['roi']:.2f}% with a ROAS of {results['roas']:.2f}x. 
+                <br><br>
+                Your conversion rate is {results['conversion_rate']:.2f}% and your CPA is ${results['cpa']:.2f}.
+                <br><br>
+                How can I help you optimize this marketing campaign today?
+            </div>
+            """, unsafe_allow_html=True)
+        elif module_type == "tariff" and results:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> I've analyzed the tariff impact on your product. The {results['tariff_rate']:.2f}% tariff reduces your margin from {results['original_margin_percentage']:.2f}% to {results['new_margin_percentage']:.2f}%.
+                <br><br>
+                To maintain your original margin, you would need to increase prices by {results['price_increase_percentage']:.2f}%.
+                <br><br>
+                How can I help with your tariff mitigation strategy today?
             </div>
             """, unsafe_allow_html=True)
         elif module_type == "monte_carlo" and results:
             st.markdown(f"""
             <div class="assistant-bubble">
-                <strong>AI Assistant:</strong> I've analyzed your Monte Carlo simulation results for your {st.session_state.get('selected_device_type', 'Generic')} device quality improvement project.
+                <strong>AI Assistant:</strong> I've analyzed your Monte Carlo simulation results. There's a {results['probability_metrics']['prob_positive_roi']:.2f}% probability of achieving positive ROI.
                 <br><br>
-                There's a {results['probability_metrics']['prob_positive_roi']:.1f}% probability of achieving positive ROI, with a median ROI of {results['roi_stats']['median']:.2f}%.
+                The median ROI is {results['roi_stats']['median']:.2f}% and the median payback period is {results['payback_stats']['median']:.2f} months.
                 <br><br>
-                Given the manufacturing variability in {st.session_state.get('selected_device_type', 'Generic')} products, what specific risk factors would you like to discuss?
+                How can I help interpret these risk analysis results for you today?
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="assistant-bubble">
-                <strong>AI Assistant:</strong> Hello! I'm your Medical Device Manufacturing and Quality Expert specializing in {device_type} devices.
+                <strong>AI Assistant:</strong> Hello! I'm your {title} for medical devices.
                 <br><br>
                 I can help with:
                 <ul>
-                    <li>Manufacturing process troubleshooting for {device_type}</li>
-                    <li>Quality issues with {', '.join(device_info['examples'][:3])}</li>
-                    <li>Root cause analysis for common problems like {', '.join(device_info['common_issues'][:3])}</li>
-                    <li>Process control recommendations</li>
-                    <li>Quality control and inspection methods</li>
+                    <li>Quality issue analysis and recommendations</li>
+                    <li>Regulatory compliance guidance for FDA and ISO standards</li>
+                    <li>Risk management and CAPA processes</li>
+                    <li>Cost-benefit analysis for quality improvements</li>
+                    <li>Implementation strategies for quality solutions</li>
                 </ul>
                 
-                How can I assist you with your {device_type} manufacturing or quality needs today?
+                How can I assist you today with your medical device needs?
             </div>
             """, unsafe_allow_html=True)
     else:
@@ -2686,112 +3032,75 @@ def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "qua
     
     # Input area with suggested prompts
     user_input = st.text_input(
-        f"Ask about {device_type} manufacturing and quality:",
+        f"Ask the {title}:",
         key=f"chat_input_{module_type}", 
         placeholder="Type your question here or use the suggested questions below"
     )
     
-    # Create device-specific suggested prompts
-    device_specific_prompts = {
-        "Mobility Aids": [
-            "What are common causes of frame instability?",
-            "How to troubleshoot wheel alignment issues?",
-            "Best QC methods for weight capacity testing?"
-        ],
-        "Cushions & Support": [
-            "What causes premature foam compression?",
-            "How to prevent cover material tears?",
-            "Best testing methods for pressure distribution?"
-        ],
-        "Monitoring Devices": [
-            "Common causes of sensor drift in BPMs?",
-            "How to improve PCB assembly quality?",
-            "Best calibration verification methods?"
-        ],
-        "Orthopedic Supports": [
-            "What causes hinge mechanism failures?",
-            "How to prevent strap attachment issues?",
-            "Quality tests for material durability?"
-        ],
-        "Ostomy & Continence": [
-            "What causes adhesive bond failures?",
-            "How to improve seal integrity?",
-            "Best leak testing methods?"
-        ],
-        "Medical Software": [
-            "Common causes of app crashes?",
-            "How to improve testing for medical apps?",
-            "Best validation methods for software updates?"
-        ],
-        "Respiratory Aids": [
-            "What causes flow rate inconsistencies?",
-            "How to troubleshoot motor noise issues?",
-            "Quality checks for tubing connections?"
-        ],
-        "Home Care Equipment": [
-            "Common causes of motor failures?",
-            "How to improve structural stability?",
-            "Best load testing methods?"
-        ],
-        "Therapeutic Devices": [
-            "What causes controller malfunctions?",
-            "How to prevent electrode degradation?",
-            "Best output verification methods?"
-        ],
-        "Generic": [
-            "Common injection molding defects?",
-            "How to improve assembly quality?",
-            "Best statistical process control methods?"
-        ]
-    }
-    
-    # Get the appropriate suggested prompts based on device type
-    suggested_prompts = device_specific_prompts.get(device_type, device_specific_prompts["Generic"])
-    
-    # Add manufacturing process specific prompts if results are available
-    if results and 'manufacturing_process' in results:
-        manufacturing_process = results['manufacturing_process']
-        
-        if manufacturing_process == "Injection molding":
-            suggested_prompts = [
-                "What causes sink marks in injection molded parts?",
-                "How to troubleshoot short shots?",
-                "Best process controls for plastic molding?"
-            ]
-        elif manufacturing_process in ["Metal fabrication", "Metal machining", "Welding & assembly"]:
-            suggested_prompts = [
-                "Common causes of metal part dimensional variation?",
-                "How to prevent weld failures?",
-                "Best quality checks for metal components?"
-            ]
-        elif manufacturing_process == "PCB assembly":
-            suggested_prompts = [
-                "What causes solder joint failures?",
-                "How to prevent component misalignment?",
-                "Best inspection methods for PCBs?"
-            ]
-        elif manufacturing_process in ["Fabric cutting & sewing", "Foam molding"]:
-            suggested_prompts = [
-                "Common causes of seam failures?",
-                "How to improve foam molding consistency?",
-                "Best quality checks for textile products?"
-            ]
-    
     # Suggested prompt buttons in columns for better spacing
     col1, col2, col3 = st.columns(3)
     
-    # Different suggested prompts based on context
-    with col1:
-        if st.button(suggested_prompts[0], key=f"prompt1_{module_type}", use_container_width=True):
-            user_input = suggested_prompts[0]
-    
-    with col2:
-        if st.button(suggested_prompts[1], key=f"prompt2_{module_type}", use_container_width=True):
-            user_input = suggested_prompts[1]
-    
-    with col3:
-        if st.button(suggested_prompts[2], key=f"prompt3_{module_type}", use_container_width=True):
-            user_input = suggested_prompts[2]
+    # Different suggested prompts based on module type
+    if module_type == "quality" and results:
+        with col1:
+            if st.button("What are the next steps?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What are the next steps I should take based on this analysis?"
+        
+        with col2:
+            if st.button("Regulatory considerations?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "What regulatory considerations should I keep in mind for this quality issue?"
+        
+        with col3:
+            if st.button("How to improve solution?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "How can I improve the effectiveness of the proposed solution?"
+    elif module_type == "marketing" and results:
+        with col1:
+            if st.button("How to improve ROI?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What strategies can I implement to improve the ROI of this marketing campaign?"
+        
+        with col2:
+            if st.button("Industry benchmarks?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "How does this campaign compare to industry benchmarks for medical devices?"
+        
+        with col3:
+            if st.button("Budget allocation?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "How should I allocate my marketing budget for optimal results?"
+    elif module_type == "tariff" and results:
+        with col1:
+            if st.button("Alternative sourcing?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What alternative sourcing options should I consider to mitigate tariff impact?"
+        
+        with col2:
+            if st.button("Pricing strategy?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "What pricing strategy would you recommend given the tariff impact?"
+        
+        with col3:
+            if st.button("Supply chain changes?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "What supply chain adjustments could help optimize landed costs?"
+    elif module_type == "monte_carlo" and results:
+        with col1:
+            if st.button("Risk assessment?", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What does this risk assessment tell me about proceeding with this project?"
+        
+        with col2:
+            if st.button("Implementation strategy?", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "What implementation approach would you recommend given the uncertainty?"
+        
+        with col3:
+            if st.button("Key metrics to track?", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "What key metrics should we track during implementation to manage risk?"
+    else:
+        with col1:
+            if st.button("CAPA best practices", key=f"prompt1_{module_type}", use_container_width=True):
+                user_input = "What are the best practices for implementing an effective CAPA process for medical devices?"
+        
+        with col2:
+            if st.button("FDA inspection readiness", key=f"prompt2_{module_type}", use_container_width=True):
+                user_input = "How should we prepare for an FDA inspection of our quality management system?"
+        
+        with col3:
+            if st.button("Risk management tips", key=f"prompt3_{module_type}", use_container_width=True):
+                user_input = "What are some practical tips for risk management in medical device design and development?"
     
     # Add a submit button
     if st.button("Send", key=f"send_msg_btn_{module_type}", use_container_width=True):
@@ -2837,533 +3146,499 @@ def display_ai_assistant(results: Dict[str, Any] = None, module_type: str = "qua
         </div>
         """, unsafe_allow_html=True)
 
-def display_process_control_analysis():
-    """Display the process control analysis UI."""
-    st.markdown("### 📈 Process Control Analysis")
+def display_landed_cost_calculator():
+    """Display the landed cost calculator UI."""
+    st.markdown("### 🚢 Landed Cost & Tariff Calculator")
     st.markdown("""
-    Analyze manufacturing process controls and variability for quality improvement.
+    Calculate the impact of tariffs, shipping, and other import costs on your product margins.
     """)
-    
-    # Get device type info
-    device_type = st.session_state.get('selected_device_type', 'Generic')
-    device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-    
-    # Get common manufacturing processes for selected device type
-    common_processes = device_info['manufacturing_processes']
     
     col1, col2 = st.columns(2)
     
     with col1:
-        with st.form(key="process_control_form"):
-            st.markdown("#### Manufacturing Process Information")
+        with st.form(key="landed_cost_form"):
+            st.markdown("#### Product & Pricing")
             
-            manufacturing_process = st.selectbox(
-                "Primary Manufacturing Process",
-                options=MANUFACTURING_PROCESSES,
-                index=MANUFACTURING_PROCESSES.index(common_processes[0]) if common_processes[0] in MANUFACTURING_PROCESSES else 0,
-                help="Primary manufacturing process being analyzed"
+            sales_price = st.number_input(
+                "Sales Price ($)",
+                min_value=0.01,
+                value=25.0,
+                step=1.0
             )
             
-            process_step = st.text_input(
-                "Process Step",
-                placeholder="E.g., Injection molding, Assembly, Welding",
-                help="Specific manufacturing step being analyzed"
+            cogs = st.number_input(
+                "Manufacturing Cost (COGS) ($)",
+                min_value=0.01,
+                value=10.0,
+                step=1.0
             )
             
-            # Different parameters based on manufacturing process
-            if manufacturing_process == "Injection molding":
-                param1_name = "Mold Temperature (°C)"
-                param1_default = 80
-                param2_name = "Injection Pressure (MPa)"
-                param2_default = 100
-                param3_name = "Cooling Time (sec)"
-                param3_default = 15
-            elif manufacturing_process in ["Metal fabrication", "Metal machining"]:
-                param1_name = "Cutting Speed (m/min)"
-                param1_default = 150
-                param2_name = "Feed Rate (mm/rev)"
-                param2_default = 0.2
-                param3_name = "Tool Life (%)"
-                param3_default = 80
-            elif manufacturing_process == "PCB assembly":
-                param1_name = "Soldering Temperature (°C)"
-                param1_default = 245
-                param2_name = "Conveyor Speed (cm/min)"
-                param2_default = 60
-                param3_name = "Preheat Time (sec)"
-                param3_default = 30
-            elif manufacturing_process in ["Fabric cutting & sewing", "Foam molding"]:
-                param1_name = "Material Thickness (mm)"
-                param1_default = 5
-                param2_name = "Cutting Pressure (kPa)"
-                param2_default = 200
-                param3_name = "Feed Rate (mm/sec)"
-                param3_default = 10
-            else:
-                param1_name = "Parameter 1"
-                param1_default = 100
-                param2_name = "Parameter 2"
-                param2_default = 50
-                param3_name = "Parameter 3"
-                param3_default = 25
+            tariff_rate = st.number_input(
+                "Tariff Rate (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=25.0,
+                step=1.0
+            )
             
-            # Process parameters
-            st.markdown("#### Process Parameters")
+            st.markdown("#### Logistics Costs")
             
             col_a, col_b = st.columns(2)
             
             with col_a:
-                param1 = st.number_input(
-                    param1_name,
+                shipping_cost = st.number_input(
+                    "Shipping Cost per Shipment ($)",
                     min_value=0.0,
-                    value=float(param1_default),
-                    step=1.0
+                    value=1000.0,
+                    step=100.0
                 )
                 
-                param1_lower = st.number_input(
-                    f"{param1_name} Lower Limit",
+                customs_fee = st.number_input(
+                    "Customs Processing Fee ($)",
                     min_value=0.0,
-                    value=float(param1_default * 0.9),
-                    step=1.0
-                )
-                
-                param1_upper = st.number_input(
-                    f"{param1_name} Upper Limit",
-                    min_value=0.0,
-                    value=float(param1_default * 1.1),
-                    step=1.0
+                    value=150.0,
+                    step=10.0
                 )
             
             with col_b:
-                param2 = st.number_input(
-                    param2_name,
-                    min_value=0.0,
-                    value=float(param2_default),
-                    step=1.0
-                )
-                
-                param2_lower = st.number_input(
-                    f"{param2_name} Lower Limit",
-                    min_value=0.0,
-                    value=float(param2_default * 0.9),
-                    step=1.0
-                )
-                
-                param2_upper = st.number_input(
-                    f"{param2_name} Upper Limit",
-                    min_value=0.0,
-                    value=float(param2_default * 1.1),
-                    step=1.0
-                )
-            
-            # Additional parameters and process capability
-            st.markdown("#### Process Capability")
-            
-            col_a, col_b = st.columns(2)
-            
-            with col_a:
-                param3 = st.number_input(
-                    param3_name,
-                    min_value=0.0,
-                    value=float(param3_default),
-                    step=1.0
-                )
-                
-                cpk_value = st.number_input(
-                    "Process Capability (Cpk)",
-                    min_value=0.0,
-                    max_value=3.0,
-                    value=1.33,
-                    step=0.1,
-                    help="Current process capability index"
-                )
-            
-            with col_b:
-                defect_rate = st.number_input(
-                    "Current Defect Rate (%)",
-                    min_value=0.0,
-                    max_value=100.0,
-                    value=2.5,
-                    step=0.1,
-                    help="Current defect rate percentage"
-                )
-                
-                sample_size = st.number_input(
-                    "Sample Size",
+                units_per_shipment = st.number_input(
+                    "Units per Shipment",
                     min_value=1,
-                    value=100,
-                    step=10,
-                    help="Number of samples used for analysis"
+                    value=1000,
+                    step=100
+                )
+                
+                broker_fee = st.number_input(
+                    "Customs Broker Fee ($)",
+                    min_value=0.0,
+                    value=200.0,
+                    step=10.0
                 )
             
-            submitted = st.form_submit_button("Analyze Process Control")
+            storage_cost = st.number_input(
+                "Storage Cost per Unit ($)",
+                min_value=0.0,
+                value=0.2,
+                step=0.1
+            )
+            
+            other_costs = st.number_input(
+                "Other Costs per Unit ($)",
+                min_value=0.0,
+                value=0.0,
+                step=0.1
+            )
+            
+            submitted = st.form_submit_button("Calculate Landed Cost")
             
             if submitted:
-                with st.spinner("Analyzing process control..."):
+                with st.spinner("Calculating landed cost..."):
                     try:
-                        # Generate simulated process control data
-                        np.random.seed(42)  # For reproducibility
-                        
-                        # Generate sample data for parameter 1
-                        param1_std = (param1_upper - param1_lower) / (6 * cpk_value)
-                        param1_samples = np.random.normal(param1, param1_std, sample_size)
-                        
-                        # Generate sample data for parameter 2
-                        param2_std = (param2_upper - param2_lower) / (6 * cpk_value)
-                        param2_samples = np.random.normal(param2, param2_std, sample_size)
-                        
-                        # Calculate process capability indices
-                        param1_cp = (param1_upper - param1_lower) / (6 * np.std(param1_samples))
-                        param1_cpk = min(
-                            (np.mean(param1_samples) - param1_lower) / (3 * np.std(param1_samples)),
-                            (param1_upper - np.mean(param1_samples)) / (3 * np.std(param1_samples))
+                        results = calculate_landed_cost(
+                            sales_price=sales_price,
+                            cogs=cogs,
+                            tariff_rate=tariff_rate,
+                            shipping_cost=shipping_cost,
+                            storage_cost=storage_cost,
+                            customs_fee=customs_fee,
+                            broker_fee=broker_fee,
+                            other_costs=other_costs,
+                            units_per_shipment=units_per_shipment
                         )
                         
-                        param2_cp = (param2_upper - param2_lower) / (6 * np.std(param2_samples))
-                        param2_cpk = min(
-                            (np.mean(param2_samples) - param2_lower) / (3 * np.std(param2_samples)),
-                            (param2_upper - np.mean(param2_samples)) / (3 * np.std(param2_samples))
+                        # Generate tariff scenarios
+                        scenarios = generate_tariff_scenarios(
+                            sales_price=sales_price,
+                            cogs=cogs,
+                            base_tariff=tariff_rate,
+                            shipping_cost=shipping_cost,
+                            storage_cost=storage_cost,
+                            customs_fee=customs_fee,
+                            broker_fee=broker_fee,
+                            other_costs=other_costs,
+                            units_per_shipment=units_per_shipment
                         )
                         
-                        # Generate control chart data (mock data for X-bar chart)
-                        num_subgroups = 25
-                        subgroup_size = 4
-                        xbar_data = []
-                        
-                        for i in range(num_subgroups):
-                            # Add some patterns to make it interesting
-                            if i > 15:
-                                # Trend pattern in later points
-                                shift = (i - 15) * param1_std * 0.2
-                            else:
-                                shift = 0
-                                
-                            subgroup = np.random.normal(param1 + shift, param1_std, subgroup_size)
-                            xbar_data.append(np.mean(subgroup))
-                        
-                        # Calculate control limits
-                        overall_mean = np.mean(xbar_data)
-                        overall_std = np.std(param1_samples)
-                        
-                        ucl = overall_mean + 3 * overall_std / np.sqrt(subgroup_size)
-                        lcl = overall_mean - 3 * overall_std / np.sqrt(subgroup_size)
-                        
-                        # Store in session state for reuse
-                        st.session_state.process_control_data = {
-                            "manufacturing_process": manufacturing_process,
-                            "process_step": process_step,
-                            "param1_name": param1_name,
-                            "param1_samples": param1_samples.tolist(),
-                            "param1_mean": float(np.mean(param1_samples)),
-                            "param1_std": float(np.std(param1_samples)),
-                            "param1_cp": float(param1_cp),
-                            "param1_cpk": float(param1_cpk),
-                            "param1_lower": param1_lower,
-                            "param1_upper": param1_upper,
-                            "param2_name": param2_name,
-                            "param2_samples": param2_samples.tolist(),
-                            "param2_mean": float(np.mean(param2_samples)),
-                            "param2_std": float(np.std(param2_samples)),
-                            "param2_cp": float(param2_cp),
-                            "param2_cpk": float(param2_cpk),
-                            "param2_lower": param2_lower,
-                            "param2_upper": param2_upper,
-                            "param3_name": param3_name,
-                            "param3_value": param3,
-                            "defect_rate": defect_rate,
-                            "sample_size": sample_size,
-                            "xbar_data": xbar_data,
-                            "ucl": float(ucl),
-                            "lcl": float(lcl),
-                            "overall_mean": float(overall_mean)
+                        st.session_state.tariff_calculations = {
+                            "results": results,
+                            "scenarios": scenarios
                         }
-                        
                     except Exception as e:
-                        st.error(f"Error analyzing process control: {str(e)}")
-                        logger.exception("Error in process control analysis")
+                        st.error(f"Error calculating landed cost: {str(e)}")
+                        logger.exception("Error in landed cost calculation")
     
     with col2:
-        if 'process_control_data' in st.session_state and st.session_state.process_control_data:
-            data = st.session_state.process_control_data
+        if st.session_state.tariff_calculations:
+            results = st.session_state.tariff_calculations["results"]
+            scenarios = st.session_state.tariff_calculations["scenarios"]
             
-            st.markdown("#### Process Capability Analysis")
+            st.markdown("#### Results")
             
-            # Summary metrics
+            # Summary cards
             col_a, col_b = st.columns(2)
             
             with col_a:
-                cp_color = generate_color_scale(data['param1_cp'], 1.33, 1.0)
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">{data['param1_name']} Capability (Cp)</div>
-                    <div class="metric-value" style="color: {cp_color};">{data['param1_cp']:.2f}</div>
-                    <div class="metric-subvalue">Cpk: {data['param1_cpk']:.2f}</div>
+                    <div class="metric-label">Landed Cost</div>
+                    <div class="metric-value">${results['landed_cost']:.2f}</div>
+                    <div class="metric-subvalue">Per unit</div>
                 </div>
                 """, unsafe_allow_html=True)
             
             with col_b:
-                defect_color = generate_color_scale(5.0 - min(data['defect_rate'], 5.0), 4.0, 1.0)
+                margin_color = generate_color_scale(
+                    results['new_margin_percentage'], 40, 15
+                )
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">Current Defect Rate</div>
-                    <div class="metric-value" style="color: {defect_color};">{data['defect_rate']:.2f}%</div>
-                    <div class="metric-subvalue">Based on {data['sample_size']} samples</div>
+                    <div class="metric-label">New Margin</div>
+                    <div class="metric-value" style="color: {margin_color};">{results['new_margin_percentage']:.2f}%</div>
+                    <div class="metric-subvalue">Was: {results['original_margin_percentage']:.2f}%</div>
                 </div>
                 """, unsafe_allow_html=True)
             
-            # Process capability chart for parameter 1
-            st.markdown(f"#### {data['param1_name']} Process Capability")
+            # Cost breakdown
+            st.markdown("#### Cost Breakdown")
             
             fig = go.Figure()
             
-            # Add histogram
-            fig.add_trace(go.Histogram(
-                x=data['param1_samples'],
-                opacity=0.75,
-                marker_color=SECONDARY_COLOR,
-                name="Process Distribution"
+            # Sort components by value for better visualization
+            cost_components = [
+                ("COGS", results['original_cogs']),
+                ("Tariff", results['tariff_amount']),
+                ("Shipping", results['per_unit_shipping']),
+                ("Storage", results['storage_cost']),
+                ("Customs", results['per_unit_customs']),
+                ("Broker", results['per_unit_broker']),
+                ("Other", results['other_costs'])
+            ]
+            
+            # Filter out zero values and sort by value
+            cost_components = [(name, value) for name, value in cost_components if value > 0]
+            cost_components.sort(key=lambda x: x[1], reverse=True)
+            
+            labels = [name for name, _ in cost_components]
+            values = [value for _, value in cost_components]
+            
+            fig.add_trace(go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                textinfo='label+percent',
+                insidetextorientation='radial'
             ))
             
-            # Add specification lines
-            fig.add_shape(
-                type="line",
-                x0=data['param1_lower'], y0=0,
-                x1=data['param1_lower'], y1=20,
-                line=dict(color="red", width=2, dash="dash"),
-                name="Lower Spec"
-            )
-            
-            fig.add_shape(
-                type="line",
-                x0=data['param1_upper'], y0=0,
-                x1=data['param1_upper'], y1=20,
-                line=dict(color="red", width=2, dash="dash"),
-                name="Upper Spec"
-            )
-            
-            # Add mean line
-            fig.add_shape(
-                type="line",
-                x0=data['param1_mean'], y0=0,
-                x1=data['param1_mean'], y1=20,
-                line=dict(color="green", width=2),
-                name="Process Mean"
-            )
-            
-            # Add annotations for Cp and Cpk
-            fig.add_annotation(
-                x=data['param1_lower'] + (data['param1_upper'] - data['param1_lower']) * 0.2,
-                y=15,
-                text=f"Cp: {data['param1_cp']:.2f}<br>Cpk: {data['param1_cpk']:.2f}",
-                showarrow=False,
-                font=dict(size=14, color="black"),
-                bgcolor="white",
-                bordercolor="black",
-                borderwidth=1
-            )
-            
             fig.update_layout(
-                title=f"Process Capability for {data['param1_name']}",
-                xaxis_title=data['param1_name'],
-                yaxis_title="Frequency",
+                title="Landed Cost Components",
                 height=300
             )
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Control chart (X-bar chart)
-            st.markdown("#### Statistical Process Control Chart")
+            # Tariff impact
+            st.markdown("#### Tariff Impact")
+            
+            # Create a line chart showing margin % at different tariff rates
+            tariff_rates = [float(s.split('%')[0]) for s in scenarios.keys()]
+            margin_percentages = [s['new_margin_percentage'] for s in scenarios.values()]
             
             fig = go.Figure()
             
-            # Add X-bar values
             fig.add_trace(go.Scatter(
-                x=list(range(1, len(data['xbar_data']) + 1)),
-                y=data['xbar_data'],
+                x=tariff_rates,
+                y=margin_percentages,
                 mode='lines+markers',
-                name='X-bar',
-                line=dict(color=PRIMARY_COLOR, width=2),
+                name='Margin %',
+                line=dict(color=PRIMARY_COLOR, width=3),
                 marker=dict(size=8)
             ))
             
-            # Add center line (process mean)
-            fig.add_shape(
-                type="line",
-                x0=1, y0=data['overall_mean'],
-                x1=len(data['xbar_data']), y1=data['overall_mean'],
-                line=dict(color="green", width=2),
-                name="Center Line"
-            )
-            
-            # Add upper control limit
-            fig.add_shape(
-                type="line",
-                x0=1, y0=data['ucl'],
-                x1=len(data['xbar_data']), y1=data['ucl'],
-                line=dict(color="red", width=2, dash="dash"),
-                name="UCL"
-            )
-            
-            # Add lower control limit
-            fig.add_shape(
-                type="line",
-                x0=1, y0=data['lcl'],
-                x1=len(data['xbar_data']), y1=data['lcl'],
-                line=dict(color="red", width=2, dash="dash"),
-                name="LCL"
-            )
-            
-            # Add annotations for control limits
-            fig.add_annotation(
-                x=len(data['xbar_data']),
-                y=data['ucl'],
-                text=f"UCL: {data['ucl']:.2f}",
-                showarrow=False,
-                xanchor="left",
-                font=dict(size=12, color="red")
-            )
-            
-            fig.add_annotation(
-                x=len(data['xbar_data']),
-                y=data['lcl'],
-                text=f"LCL: {data['lcl']:.2f}",
-                showarrow=False,
-                xanchor="left",
-                font=dict(size=12, color="red")
-            )
-            
-            fig.update_layout(
-                title=f"X-bar Control Chart for {data['param1_name']}",
-                xaxis_title="Sample Group",
-                yaxis_title=data['param1_name'],
-                height=300
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Process improvement recommendations
-            st.markdown("#### Process Control Recommendations")
-            
-            if data['param1_cpk'] < 1.0:
-                st.warning("⚠️ Process is not capable (Cpk < 1.0). Process improvement is required.")
-                
-                if data['manufacturing_process'] == "Injection molding":
-                    st.markdown("""
-                    **Recommended Actions:**
-                    1. Verify mold temperature control system and sensors
-                    2. Check material drying parameters and conditions
-                    3. Implement cavity pressure sensors for better process control
-                    4. Review gate and runner design for balanced filling
-                    5. Consider scientific molding approach with comprehensive DOE
-                    """)
-                elif data['manufacturing_process'] in ["Metal fabrication", "Metal machining"]:
-                    st.markdown("""
-                    **Recommended Actions:**
-                    1. Implement tool wear monitoring system
-                    2. Review fixture design and clamping force
-                    3. Check machine alignment and calibration
-                    4. Optimize cutting parameters through DOE
-                    5. Consider improved cooling/lubrication methods
-                    """)
-                elif data['manufacturing_process'] == "PCB assembly":
-                    st.markdown("""
-                    **Recommended Actions:**
-                    1. Verify reflow oven temperature profile
-                    2. Check solder paste application consistency
-                    3. Implement automated optical inspection (AOI)
-                    4. Review component placement accuracy
-                    5. Control ambient conditions (temperature, humidity)
-                    """)
-                elif data['manufacturing_process'] in ["Fabric cutting & sewing", "Foam molding"]:
-                    st.markdown("""
-                    **Recommended Actions:**
-                    1. Verify material property consistency
-                    2. Check cutting tool condition and replacement schedule
-                    3. Implement tension control for fabric handling
-                    4. Control environmental conditions
-                    5. Enhance operator training and work instructions
-                    """)
-                else:
-                    st.markdown("""
-                    **Recommended Actions:**
-                    1. Identify and address special cause variation
-                    2. Conduct Measurement System Analysis (MSA)
-                    3. Implement Statistical Process Control (SPC)
-                    4. Review process parameters and tolerances
-                    5. Consider process redesign if capability cannot be improved
-                    """)
-            elif data['param1_cpk'] < 1.33:
-                st.info("ℹ️ Process is marginally capable (1.0 < Cpk < 1.33). Improvement is recommended.")
-                st.markdown("""
-                **Recommended Actions:**
-                1. Continue monitoring the process with SPC charts
-                2. Implement targeted improvements to reduce variation
-                3. Review and optimize process parameters
-                4. Enhance preventive maintenance procedures
-                5. Conduct operator training refreshers
-                """)
-            else:
-                st.success("✅ Process is capable (Cpk > 1.33). Maintain current controls.")
-                st.markdown("""
-                **Actions to Maintain Process:**
-                1. Document current process parameters and controls
-                2. Continue regular monitoring with SPC
-                3. Implement preventive maintenance schedule
-                4. Standardize setup procedures
-                5. Conduct periodic capability studies
-                """)
-            
-            # Show potential improvement with better process control
-            st.markdown("#### Potential Quality Improvement")
-            
-            # Calculate potential defect rate with improved Cpk
-            improved_cpk = 1.67  # Target for improved process
-            current_dpmo = 3.4 * (10 ** (6 - (data['param1_cpk'] * 3)))  # Approximation
-            improved_dpmo = 3.4 * (10 ** (6 - (improved_cpk * 3)))  # Approximation
-            
-            current_defect_pct = min(data['defect_rate'], current_dpmo / 10000)  # Cap at calculated rate
-            improved_defect_pct = improved_dpmo / 10000
-            
-            # Create comparison chart
-            fig = go.Figure()
-            
-            fig.add_trace(go.Bar(
-                x=["Current Process", "Improved Process"],
-                y=[current_defect_pct, improved_defect_pct],
-                text=[f"{current_defect_pct:.2f}%", f"{improved_defect_pct:.4f}%"],
-                textposition="auto",
-                marker_color=[WARNING_COLOR, SUCCESS_COLOR]
+            # Add a horizontal line for the target margin (e.g., 30%)
+            target_margin = 30
+            fig.add_trace(go.Scatter(
+                x=[min(tariff_rates), max(tariff_rates)],
+                y=[target_margin, target_margin],
+                mode='lines',
+                name=f'Target Margin ({target_margin}%)',
+                line=dict(color='red', width=2, dash='dash')
             ))
             
             fig.update_layout(
-                title="Potential Defect Rate Improvement",
-                xaxis_title="Process State",
-                yaxis_title="Defect Rate (%)",
+                title="Margin at Different Tariff Rates",
+                xaxis_title="Tariff Rate (%)",
+                yaxis_title="Margin (%)",
+                height=350
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Price adjustment analysis
+            st.markdown("#### Price Adjustment Analysis")
+            
+            st.markdown(f"""
+            To maintain your original margin of **{results['original_margin_percentage']:.2f}%**, 
+            you would need to increase your price by **{results['price_increase_percentage']:.2f}%** 
+            (${results['price_increase_needed']:.2f} per unit).
+            
+            New breakeven price: **${results['breakeven_price']:.2f}**
+            """)
+            
+            # Create a waterfall chart for price adjustment
+            fig = go.Figure(go.Waterfall(
+                name="Price Adjustment",
+                orientation="v",
+                measure=["absolute", "relative", "total"],
+                x=["Original Price", "Required Increase", "New Price"],
+                textposition="outside",
+                text=[
+                    f"${results['sales_price']:.2f}",
+                    f"+${results['price_increase_needed']:.2f}",
+                    f"${results['breakeven_price']:.2f}"
+                ],
+                y=[
+                    results['sales_price'],
+                    results['price_increase_needed'],
+                    0
+                ],
+                connector={"line": {"color": "rgb(63, 63, 63)"}},
+                increasing={"marker": {"color": WARNING_COLOR}},
+                totals={"marker": {"color": PRIMARY_COLOR}}
+            ))
+            
+            fig.update_layout(
+                title="Price Adjustment to Maintain Margin",
+                showlegend=False,
                 height=300
             )
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Potential cost savings
-            if 'quality_analysis_results' in st.session_state and st.session_state.quality_analysis_results:
-                quality_results = st.session_state.quality_analysis_results
-                
-                # Calculate potential savings
-                annual_returns = quality_results['current_metrics']['annual_returns']
-                loss_per_return = quality_results['current_metrics']['loss_per_return']
-                
-                # Simple estimate: improvement in defect rate translates to improvement in returns
-                if current_defect_pct > 0:
-                    potential_reduction = (current_defect_pct - improved_defect_pct) / current_defect_pct
-                    potential_returns_prevented = annual_returns * potential_reduction
-                    potential_savings = potential_returns_prevented * loss_per_return
-                    
-                    st.markdown(f"""
-                    **Potential Annual Savings: {format_currency(potential_savings)}**
-                    
-                    By improving process capability from Cpk {data['param1_cpk']:.2f} to Cpk {improved_cpk:.2f}, 
-                    you could prevent approximately {potential_returns_prevented:.0f} returns per year.
-                    """)
+            # Add AI assistant for tariff analysis
+            st.markdown("### 🤖 Tariff Impact AI Assistant")
+            display_ai_assistant(results, "tariff")
+
+def calculate_ad_roi_ui():
+    """Display the advertising ROI calculator UI."""
+    st.markdown("### 📈 Advertising ROI Calculator")
+    st.markdown("""
+    Calculate and visualize the return on investment for your advertising campaigns.
+    """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        with st.form(key="ad_roi_form"):
+            st.markdown("#### Campaign Metrics")
+            
+            ad_spend = st.number_input(
+                "Ad Spend ($)",
+                min_value=0.01,
+                value=5000.0,
+                step=500.0
+            )
+            
+            impressions = st.number_input(
+                "Impressions",
+                min_value=1,
+                value=500000,
+                step=10000
+            )
+            
+            clicks = st.number_input(
+                "Clicks",
+                min_value=0,
+                value=15000,
+                step=1000
+            )
+            
+            conversions = st.number_input(
+                "Conversions (Sales)",
+                min_value=0,
+                value=300,
+                step=10
+            )
+            
+            avg_order_value = st.number_input(
+                "Average Order Value ($)",
+                min_value=0.01,
+                value=75.0,
+                step=5.0
+            )
+            
+            contribution_margin_percent = st.slider(
+                "Contribution Margin (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=40.0,
+                step=1.0
+            )
+            
+            submitted = st.form_submit_button("Calculate ROI")
+            
+            if submitted:
+                with st.spinner("Calculating ad ROI..."):
+                    try:
+                        results = calculate_ad_roi(
+                            ad_spend=ad_spend,
+                            impressions=impressions,
+                            clicks=clicks,
+                            conversions=conversions,
+                            avg_order_value=avg_order_value,
+                            contribution_margin_percent=contribution_margin_percent
+                        )
+                        
+                        st.session_state.ad_roi_results = results
+                    except Exception as e:
+                        st.error(f"Error calculating ad ROI: {str(e)}")
+                        logger.exception("Error in ad ROI calculation")
+    
+    with col2:
+        if hasattr(st.session_state, 'ad_roi_results') and st.session_state.ad_roi_results:
+            results = st.session_state.ad_roi_results
+            
+            st.markdown("#### Results")
+            
+            # Summary cards
+            col_a, col_b, col_c = st.columns(3)
+            
+            with col_a:
+                roi_color = generate_color_scale(
+                    results['roi'], 200, 0
+                )
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">ROI</div>
+                    <div class="metric-value" style="color: {roi_color};">{results['roi']:.2f}%</div>
+                    <div class="metric-subvalue">Return on Investment</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_b:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">ROAS</div>
+                    <div class="metric-value">{results['roas']:.2f}x</div>
+                    <div class="metric-subvalue">Return on Ad Spend</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_c:
+                cpa_color = generate_color_scale(
+                    50 - min(results['cpa'], 50), 40, 10
+                )
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">CPA</div>
+                    <div class="metric-value" style="color: {cpa_color};">${results['cpa']:.2f}</div>
+                    <div class="metric-subvalue">Cost Per Acquisition</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Funnel visualization
+            st.markdown("#### Campaign Funnel")
+            
+            stages = ['Impressions', 'Clicks', 'Conversions']
+            values = [results['impressions'], results['clicks'], results['conversions']]
+            
+            # Create logarithmic scale for better visualization
+            log_values = [max(1, v) for v in values]
+            log_values = [np.log10(v) for v in log_values]
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Funnel(
+                name='Funnel',
+                y=stages,
+                x=values,
+                textinfo="value+percent initial",
+                marker={"color": [TERTIARY_COLOR, SECONDARY_COLOR, PRIMARY_COLOR]}
+            ))
+            
+            fig.update_layout(
+                title="Campaign Conversion Funnel",
+                height=300
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Performance metrics
+            st.markdown("#### Performance Metrics")
+            
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.markdown(f"""
+                - **CTR (Click-Through Rate):** {results['ctr']:.2f}%
+                - **Conversion Rate:** {results['conversion_rate']:.2f}%
+                - **CPM (Cost per 1000 Impressions):** ${results['cpm']:.2f}
+                """)
+            
+            with col_b:
+                st.markdown(f"""
+                - **CPC (Cost per Click):** ${results['cpc']:.2f}
+                - **Revenue:** ${results['revenue']:.2f}
+                - **Profit:** ${results['profit']:.2f}
+                """)
+            
+            # Financial visualization
+            st.markdown("#### Financial Breakdown")
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name='Ad Spend',
+                x=['Cost'],
+                y=[results['ad_spend']],
+                marker_color=DANGER_COLOR
+            ))
+            
+            fig.add_trace(go.Bar(
+                name='Revenue',
+                x=['Revenue'],
+                y=[results['revenue']],
+                marker_color=SECONDARY_COLOR
+            ))
+            
+            fig.add_trace(go.Bar(
+                name='Profit',
+                x=['Profit'],
+                y=[results['profit']],
+                marker_color=SUCCESS_COLOR
+            ))
+            
+            fig.update_layout(
+                title="Financial Performance",
+                height=350,
+                yaxis_title="Amount ($)"
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Export options
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                df = export_marketing_roi_as_csv(results)
+                csv_download = generate_download_link(
+                    df, 
+                    f"marketing_roi_analysis_{datetime.now().strftime('%Y%m%d')}.csv", 
+                    "📥 Export as CSV"
+                )
+                st.markdown(csv_download, unsafe_allow_html=True)
+            
+            with col_b:
+                try:
+                    pdf_buffer = export_marketing_roi_as_pdf(results)
+                    pdf_data = base64.b64encode(pdf_buffer.read()).decode('utf-8')
+                    pdf_download = f'<a href="data:application/pdf;base64,{pdf_data}" download="marketing_roi_analysis_{datetime.now().strftime("%Y%m%d")}.pdf" class="export-button">📄 Export as PDF</a>'
+                    st.markdown(pdf_download, unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Error generating PDF: {e}")
+            
+            # Add AI assistant for marketing ROI
+            st.markdown("### 🤖 Marketing ROI AI Assistant")
+            display_ai_assistant(results, "marketing")
 
 def run_monte_carlo_simulation_ui():
     """Display the Monte Carlo simulation UI."""
@@ -3372,27 +3647,10 @@ def run_monte_carlo_simulation_ui():
     Run a Monte Carlo simulation to understand risks and probabilities in your quality improvement project.
     """)
     
-    # Get device type info for context-specific parameters
-    device_type = st.session_state.get('selected_device_type', 'Generic')
-    device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-    
     col1, col2 = st.columns(2)
     
     with col1:
         with st.form(key="monte_carlo_form"):
-            st.markdown("#### Device Information")
-            
-            # Display the selected device type
-            st.info(f"**Device Type:** {device_type}")
-            st.caption(f"Common issues: {', '.join(device_info['common_issues'][:3])}")
-            
-            manufacturing_process = st.selectbox(
-                "Manufacturing Process",
-                options=MANUFACTURING_PROCESSES,
-                index=MANUFACTURING_PROCESSES.index(device_info['manufacturing_processes'][0]) if len(device_info['manufacturing_processes']) > 0 and device_info['manufacturing_processes'][0] in MANUFACTURING_PROCESSES else 0,
-                help="Primary manufacturing process for this device"
-            )
-            
             st.markdown("#### Base Parameters")
             
             base_unit_cost = st.number_input(
@@ -3458,36 +3716,12 @@ def run_monte_carlo_simulation_ui():
                 step=100
             )
             
-            with st.expander("Manufacturing Variability Settings"):
-                # Adjust default variability based on device type and manufacturing process
-                if manufacturing_process == "Injection molding":
-                    default_cost_var = 0.08
-                    default_return_var = 0.20
-                    default_reduction_var = 0.25
-                elif manufacturing_process in ["Metal fabrication", "Metal machining"]:
-                    default_cost_var = 0.06
-                    default_return_var = 0.15
-                    default_reduction_var = 0.20
-                elif manufacturing_process == "PCB assembly":
-                    default_cost_var = 0.07
-                    default_return_var = 0.25
-                    default_reduction_var = 0.30
-                elif manufacturing_process in ["Fabric cutting & sewing", "Foam molding"]:
-                    default_cost_var = 0.10
-                    default_return_var = 0.25
-                    default_reduction_var = 0.30
-                else:
-                    default_cost_var = 0.05
-                    default_return_var = 0.15
-                    default_reduction_var = 0.20
-                
-                st.markdown(f"#### Variability for {device_type} using {manufacturing_process}")
-                
+            with st.expander("Advanced Variability Settings"):
                 cost_std_dev = st.slider(
-                    "Manufacturing Cost Variability",
+                    "Cost Variability",
                     min_value=0.01,
                     max_value=0.50,
-                    value=default_cost_var,
+                    value=0.05,
                     step=0.01,
                     format="%.2f",
                     help="Standard deviation as a fraction of base cost"
@@ -3504,7 +3738,7 @@ def run_monte_carlo_simulation_ui():
                 )
                 
                 sales_std_dev = st.slider(
-                    "Sales Volume Variability",
+                    "Sales Variability",
                     min_value=0.01,
                     max_value=0.50,
                     value=0.10,
@@ -3517,17 +3751,17 @@ def run_monte_carlo_simulation_ui():
                     "Return Rate Variability",
                     min_value=0.01,
                     max_value=0.50,
-                    value=default_return_var,
+                    value=0.15,
                     step=0.01,
                     format="%.2f",
                     help="Standard deviation as a fraction of base return rate"
                 )
                 
                 reduction_std_dev = st.slider(
-                    "Solution Effectiveness Variability",
+                    "Reduction Variability",
                     min_value=0.01,
                     max_value=0.50,
-                    value=default_reduction_var,
+                    value=0.20,
                     step=0.01,
                     format="%.2f",
                     help="Standard deviation as a fraction of expected reduction"
@@ -3656,98 +3890,6 @@ def run_monte_carlo_simulation_ui():
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Manufacturing-specific insights based on device type and process
-            st.markdown(f"#### {device_type} Manufacturing Insights")
-            
-            device_specific_insights = {
-                "Mobility Aids": [
-                    "Frame stability variability is a key factor",
-                    "Welding process control is critical for consistent quality",
-                    "Component assembly variations affect overall quality"
-                ],
-                "Cushions & Support": [
-                    "Foam density variations significantly impact performance",
-                    "Cover material and stitching consistency are critical",
-                    "Environmental factors during production affect quality"
-                ],
-                "Monitoring Devices": [
-                    "PCB assembly process control is critical for electronics reliability",
-                    "Sensor calibration variability directly impacts return rates",
-                    "Software validation effectiveness varies with complexity"
-                ],
-                "Orthopedic Supports": [
-                    "Material cutting precision affects fit and comfort",
-                    "Hinge and strapping assembly variability is significant",
-                    "Material batch variations impact overall quality"
-                ],
-                "Ostomy & Continence": [
-                    "Seal integrity variations significantly impact performance",
-                    "Adhesive application consistency is critical",
-                    "Material welding/bonding process control is essential"
-                ],
-                "Medical Software": [
-                    "Testing coverage variability impacts bug detection",
-                    "User interface consistency affects user satisfaction",
-                    "Integration testing thoroughness varies with complexity"
-                ],
-                "Respiratory Aids": [
-                    "Air flow control component consistency is critical",
-                    "Assembly precision directly impacts device performance",
-                    "Motor performance variability affects reliability"
-                ],
-                "Therapeutic Devices": [
-                    "Electronics assembly quality directly impacts functionality",
-                    "Sensor calibration consistency affects therapeutic effectiveness",
-                    "Housing assembly variations impact durability"
-                ],
-                "Generic": [
-                    "Manufacturing process variability is a key factor",
-                    "Component quality consistency affects overall performance",
-                    "Assembly precision varies with complexity"
-                ]
-            }
-            
-            # Process-specific insights
-            process_specific_insights = {
-                "Injection molding": [
-                    "Material drying variations impact part quality",
-                    "Mold temperature consistency is critical",
-                    "Gate freeze-off timing affects part dimensions"
-                ],
-                "Metal fabrication": [
-                    "Material property variations affect consistency",
-                    "Tool wear rates impact dimensional accuracy",
-                    "Fixture stability variations affect precision"
-                ],
-                "PCB assembly": [
-                    "Solder paste application consistency is critical",
-                    "Component placement accuracy varies with speed",
-                    "Reflow profile control affects joint quality"
-                ],
-                "Fabric cutting & sewing": [
-                    "Material tension variations affect dimension accuracy",
-                    "Cutting tool wear impacts edge quality",
-                    "Sewing tension consistency affects seam strength"
-                ],
-                "Foam molding": [
-                    "Material mixing variations impact density",
-                    "Mold temperature control affects cell structure",
-                    "Curing time consistency impacts resilience"
-                ]
-            }
-            
-            # Display device-specific insights
-            device_insights = device_specific_insights.get(device_type, device_specific_insights["Generic"])
-            for insight in device_insights:
-                st.markdown(f"- {insight}")
-            
-            # Display process-specific insights if available
-            if manufacturing_process in process_specific_insights:
-                st.markdown(f"#### {manufacturing_process} Process Insights")
-                process_insights = process_specific_insights[manufacturing_process]
-                for insight in process_insights:
-                    st.markdown(f"- {insight}")
-            
             # Statistics table
             st.markdown("#### Statistical Summary")
             
@@ -3799,7 +3941,7 @@ def run_monte_carlo_simulation_ui():
             - The median ROI is **{results['roi_stats']['median']:.2f}%**
             - The median payback period is **{results['payback_stats']['median']:.2f}** months
             
-            The simulation accounts for manufacturing variability in {device_type} production using {manufacturing_process}.
+            The simulation accounts for variability in costs, pricing, sales volumes, return rates, and expected reduction effectiveness.
             """)
             
             # Export options
@@ -3809,12 +3951,12 @@ def run_monte_carlo_simulation_ui():
                 df = export_monte_carlo_as_csv(results)
                 csv_download = generate_download_link(
                     df, 
-                    f"monte_carlo_analysis_{device_type.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv", 
+                    f"monte_carlo_analysis_{datetime.now().strftime('%Y%m%d')}.csv", 
                     "📥 Export as CSV"
                 )
                 st.markdown(csv_download, unsafe_allow_html=True)
             
-            # Add AI assistant for risk analysis
+            # Add AI assistant for Monte Carlo analysis
             st.markdown("### 🤖 Risk Analysis AI Assistant")
             display_ai_assistant(results, "monte_carlo")
 
@@ -3822,7 +3964,7 @@ def display_analysis_page():
     """Display the main analysis page with tabs."""
     display_header()
     
-    tabs = st.tabs(["Quality ROI Analysis", "Process Control Analysis", "Root Cause Analysis", "Monte Carlo Simulation"])
+    tabs = st.tabs(["Quality ROI Analysis", "Tariff Calculator", "Marketing ROI", "Monte Carlo Simulation"])
     
     with tabs[0]:
         if not st.session_state.analysis_submitted:
@@ -3849,7 +3991,7 @@ def display_analysis_page():
                 <div style="background-color: {TERTIARY_COLOR}; padding: 0.5rem 1rem; border-radius: 20px; 
                       display: inline-block; margin-bottom: 1rem;">
                     <span style="font-weight: 600;">Analyzing SKU:</span> {st.session_state.quality_analysis_results['sku']} | 
-                    <span style="font-weight: 600;">Type:</span> {st.session_state.quality_analysis_results['device_type']}
+                    <span style="font-weight: 600;">Type:</span> {st.session_state.quality_analysis_results['product_type']}
                 </div>
                 """, unsafe_allow_html=True)
             
@@ -3889,369 +4031,22 @@ def display_analysis_page():
                 display_ai_assistant(st.session_state.quality_analysis_results)
     
     with tabs[1]:
-        display_process_control_analysis()
+        display_landed_cost_calculator()
     
     with tabs[2]:
-        st.markdown("### 🧩 Root Cause Analysis")
-        
-        # Get device type info
-        device_type = st.session_state.get('selected_device_type', 'Generic')
-        device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-        
-        st.markdown(f"""
-        Analyze potential root causes of quality issues for {device_type} devices.
-        
-        Common issues for this device type include:
-        - {', '.join(device_info['common_issues'])}
-        """)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            with st.form(key="root_cause_form"):
-                st.markdown("#### Issue Information")
-                
-                issue_description = st.text_area(
-                    "Issue Description",
-                    placeholder="Describe the quality issue in detail...",
-                    help="Provide a detailed description of the problem"
-                )
-                
-                root_cause = st.selectbox(
-                    "Primary Root Cause Category",
-                    options=ROOT_CAUSE_CATEGORIES,
-                    index=0,
-                    help="Select the primary root cause category"
-                )
-                
-                # Generate failure modes based on root cause and device type
-                if root_cause == "Design flaw":
-                    failure_mode_options = [
-                        f"Inadequate {device_type.lower()} design specifications",
-                        f"Poor ergonomic design for {device_type.lower()}",
-                        "Improper material selection",
-                        "Insufficient stress analysis",
-                        "Incompatible component interfaces",
-                        "Other design issue"
-                    ]
-                elif root_cause == "Material failure":
-                    failure_mode_options = [
-                        "Material degradation",
-                        "Inconsistent material properties",
-                        "Contamination in raw materials",
-                        "Wrong material grade used",
-                        "Material fatigue",
-                        "Other material issue"
-                    ]
-                elif root_cause == "Manufacturing defect":
-                    failure_mode_options = [
-                        "Process parameter deviation",
-                        "Equipment malfunction",
-                        "Operator error",
-                        "Poor process control",
-                        "Tooling wear or damage",
-                        "Other manufacturing issue"
-                    ]
-                elif root_cause == "Assembly error":
-                    failure_mode_options = [
-                        "Missing components",
-                        "Incorrect assembly sequence",
-                        "Improper fastening",
-                        "Misalignment during assembly",
-                        "Wrong components used",
-                        "Other assembly issue"
-                    ]
-                elif root_cause == "Component failure":
-                    failure_mode_options = [
-                        "Electronic component failure",
-                        "Mechanical component wear",
-                        "Fastener failure",
-                        "Bearing/hinge failure",
-                        "Sensor calibration drift",
-                        "Other component issue"
-                    ]
-                elif root_cause == "Software bug":
-                    failure_mode_options = [
-                        "Logic error",
-                        "Memory leak",
-                        "User interface issue",
-                        "Data processing error",
-                        "Device communication problem",
-                        "Other software issue"
-                    ]
-                else:
-                    failure_mode_options = [
-                        "Unknown failure mode",
-                        "Multiple failure modes",
-                        "Intermittent issue",
-                        "Environmental factor",
-                        "User-related issue",
-                        "Other issue"
-                    ]
-                
-                failure_mode = st.selectbox(
-                    "Specific Failure Mode",
-                    options=failure_mode_options,
-                    index=0,
-                    help="Select the specific failure mode"
-                )
-                
-                st.markdown("#### Frequency Analysis")
-                
-                # Create sample data for demonstration
-                failure_modes_input = st.text_area(
-                    "Failure Modes and Counts",
-                    value=f"{failure_mode_options[0]}: 35\n{failure_mode_options[1]}: 22\n{failure_mode_options[2]}: 18\n{failure_mode_options[3]}: 12\n{failure_mode_options[4]}: 8\n{failure_mode_options[5]}: 5",
-                    help="Enter each failure mode and count on a new line in the format 'Mode: Count'"
-                )
-                
-                submitted = st.form_submit_button("Analyze Root Causes")
-                
-                if submitted:
-                    with st.spinner("Analyzing root causes..."):
-                        try:
-                            # Parse failure modes and counts
-                            failure_modes = {}
-                            for line in failure_modes_input.strip().split('\n'):
-                                if ':' in line:
-                                    mode, count = line.split(':', 1)
-                                    try:
-                                        failure_modes[mode.strip()] = int(count.strip())
-                                    except ValueError:
-                                        st.error(f"Invalid count for '{mode}': {count}")
-                            
-                            # Generate Pareto analysis
-                            if failure_modes:
-                                st.session_state.root_cause_analysis = {
-                                    "issue_description": issue_description,
-                                    "root_cause": root_cause,
-                                    "failure_mode": failure_mode,
-                                    "failure_modes": failure_modes,
-                                    "pareto_data": generate_pareto_data(failure_modes)
-                                }
-                            else:
-                                st.error("No valid failure modes found. Please check the format.")
-                        except Exception as e:
-                            st.error(f"Error analyzing root causes: {str(e)}")
-                            logger.exception("Error in root cause analysis")
-        
-        with col2:
-            if 'root_cause_analysis' in st.session_state and st.session_state.root_cause_analysis:
-                data = st.session_state.root_cause_analysis
-                
-                st.markdown("#### Root Cause Analysis Results")
-                
-                # Display primary root cause and failure mode
-                st.markdown(f"""
-                **Primary Root Cause:** {data['root_cause']}  
-                **Main Failure Mode:** {data['failure_mode']}
-                """)
-                
-                # Create Pareto chart
-                pareto_data = data['pareto_data']
-                
-                fig = go.Figure()
-                
-                # Add bar chart for failure modes
-                fig.add_trace(go.Bar(
-                    x=pareto_data['modes'],
-                    y=pareto_data['counts'],
-                    name="Count",
-                    marker_color=PRIMARY_COLOR
-                ))
-                
-                # Add line chart for cumulative percentage
-                fig.add_trace(go.Scatter(
-                    x=pareto_data['modes'],
-                    y=pareto_data['cumulative_percent'],
-                    name="Cumulative %",
-                    marker=dict(color=DANGER_COLOR),
-                    line=dict(width=3),
-                    yaxis="y2"
-                ))
-                
-                # Update layout
-                fig.update_layout(
-                    title="Pareto Analysis of Failure Modes",
-                    xaxis_title="Failure Mode",
-                    yaxis=dict(
-                        title="Count",
-                        titlefont=dict(color=PRIMARY_COLOR),
-                        tickfont=dict(color=PRIMARY_COLOR)
-                    ),
-                    yaxis2=dict(
-                        title="Cumulative %",
-                        titlefont=dict(color=DANGER_COLOR),
-                        tickfont=dict(color=DANGER_COLOR),
-                        anchor="x",
-                        overlaying="y",
-                        side="right",
-                        range=[0, 100]
-                    ),
-                    height=400,
-                    showlegend=True,
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1
-                    )
-                )
-                
-                # Add 80% line for Pareto principle
-                fig.add_shape(
-                    type="line",
-                    x0=-0.5, y0=80,
-                    x1=len(pareto_data['modes'])-0.5, y1=80,
-                    line=dict(color="red", width=2, dash="dash"),
-                    yref="y2"
-                )
-                
-                # Add annotation for 80% line
-                fig.add_annotation(
-                    x=len(pareto_data['modes'])-1,
-                    y=80,
-                    xref="x",
-                    yref="y2",
-                    text="80% of Issues",
-                    showarrow=True,
-                    arrowhead=1,
-                    ax=50,
-                    ay=-30
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Add fishbone diagram explanation (simplified visualization)
-                st.markdown("#### Ishikawa (Fishbone) Analysis")
-                
-                # Create simplified fishbone diagram
-                categories = ["Materials", "Methods", "Machinery", "Measurement", "People", "Environment"]
-                
-                # Create a sunburst chart as a simplified fishbone visualization
-                labels = ["Root Cause"]
-                parents = [""]
-                values = [100]
-                
-                # Add main categories
-                for category in categories:
-                    labels.append(category)
-                    parents.append("Root Cause")
-                    values.append(16)  # Equal distribution for main categories
-                
-                # Add sub-causes based on root cause and device type
-                sub_causes = {
-                    "Materials": ["Quality issues", "Specifications", "Handling", "Storage"],
-                    "Methods": ["Process parameters", "Procedures", "Work instructions", "Testing"],
-                    "Machinery": ["Maintenance", "Calibration", "Tooling", "Settings"],
-                    "Measurement": ["Testing methods", "Gauges", "Inspection", "Standards"],
-                    "People": ["Training", "Skills", "Experience", "Supervision"],
-                    "Environment": ["Temperature", "Humidity", "Cleanliness", "Layout"]
-                }
-                
-                for category, causes in sub_causes.items():
-                    for cause in causes:
-                        labels.append(cause)
-                        parents.append(category)
-                        values.append(4)  # Equal distribution for sub-causes
-                
-                fig = go.Figure(go.Sunburst(
-                    labels=labels,
-                    parents=parents,
-                    values=values,
-                    branchvalues="total",
-                    marker=dict(
-                        colors=[PRIMARY_COLOR] + [SECONDARY_COLOR] * len(categories) + [TERTIARY_COLOR] * sum(len(causes) for causes in sub_causes.values()),
-                        line=dict(color='white', width=1)
-                    ),
-                    hovertemplate='<b>%{label}</b><br>Category: %{parent}<br>',
-                    maxdepth=2
-                ))
-                
-                fig.update_layout(
-                    title="Root Cause Categories",
-                    height=500
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Recommendations
-                st.markdown("#### Recommended Actions")
-                
-                # Generate recommendations based on primary root cause
-                if data['root_cause'] == "Design flaw":
-                    st.markdown("""
-                    1. Conduct design review with cross-functional team
-                    2. Perform FMEA on the affected components
-                    3. Update design specifications and validation protocols
-                    4. Verify design changes with appropriate testing
-                    5. Update documentation and notify stakeholders
-                    """)
-                elif data['root_cause'] == "Material failure":
-                    st.markdown("""
-                    1. Review material specifications and requirements
-                    2. Test alternative materials with improved properties
-                    3. Audit material suppliers and handling processes
-                    4. Implement incoming material testing protocols
-                    5. Update material requirements and specifications
-                    """)
-                elif data['root_cause'] == "Manufacturing defect":
-                    st.markdown("""
-                    1. Analyze manufacturing process parameters and controls
-                    2. Implement Statistical Process Control (SPC)
-                    3. Review and update operator training procedures
-                    4. Implement additional in-process quality checks
-                    5. Consider process automation for critical steps
-                    """)
-                elif data['root_cause'] == "Assembly error":
-                    st.markdown("""
-                    1. Review assembly processes, fixtures, and tools
-                    2. Improve work instructions with visual aids
-                    3. Implement error-proofing (poka-yoke) mechanisms
-                    4. Enhanced operator training for critical assembly steps
-                    5. Add verification steps and inspection points
-                    """)
-                elif data['root_cause'] == "Component failure":
-                    st.markdown("""
-                    1. Evaluate component specifications and requirements
-                    2. Audit component suppliers and validation processes
-                    3. Implement incoming component testing/inspection
-                    4. Consider alternative components with better reliability
-                    5. Review environmental and usage conditions
-                    """)
-                elif data['root_cause'] == "Software bug":
-                    st.markdown("""
-                    1. Conduct thorough code reviews of affected modules
-                    2. Implement additional unit and integration tests
-                    3. Enhance error handling and logging capabilities
-                    4. Improve version control and release processes
-                    5. Consider automated testing frameworks
-                    """)
-                else:
-                    st.markdown("""
-                    1. Gather additional data to identify specific root causes
-                    2. Form cross-functional investigation team
-                    3. Implement immediate containment actions
-                    4. Develop and verify corrective actions
-                    5. Monitor effectiveness after implementation
-                    """)
+        calculate_ad_roi_ui()
     
     with tabs[3]:
         run_monte_carlo_simulation_ui()
 
 def display_standalone_assistant_page():
     """Display the standalone AI assistant page."""
-    st.title("🤖 Medical Device Manufacturing & Quality AI Assistant")
+    st.title("🤖 Quality Management AI Assistant")
     
-    # Get device type info
-    device_type = st.session_state.get('selected_device_type', 'Generic')
-    device_info = DEVICE_TYPES.get(device_type, DEVICE_TYPES['Generic'])
-    
-    st.markdown(f"""
+    st.markdown("""
     <div style="margin-bottom: 1.5rem;">
-        Chat with our AI assistant to get expert advice on medical device manufacturing, 
-        quality issues, and troubleshooting for {device_type} devices.
+        Chat with our AI assistant to get expert advice on medical device quality management, 
+        regulatory compliance, and process improvements.
     </div>
     """, unsafe_allow_html=True)
     
@@ -4263,175 +4058,50 @@ def display_standalone_assistant_page():
         display_ai_assistant()
     
     with col2:
-        # Information panel for the selected device type
-        st.markdown(f"""
+        # Information panel
+        st.markdown("""
         <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px; margin-bottom: 1rem;">
-            <h4>{device_type} - Device Information</h4>
-            <p>{device_info['description']}</p>
-            
-            <strong>Examples:</strong>
+            <h4>AI Assistant Capabilities</h4>
             <ul style="margin-left: 1rem; padding-left: 0.5rem;">
-                {' '.join([f'<li>{example}</li>' for example in device_info['examples']])}
-            </ul>
-            
-            <strong>Common Issues:</strong>
-            <ul style="margin-left: 1rem; padding-left: 0.5rem;">
-                {' '.join([f'<li>{issue}</li>' for issue in device_info['common_issues']])}
-            </ul>
-            
-            <strong>Manufacturing Processes:</strong>
-            <ul style="margin-left: 1rem; padding-left: 0.5rem;">
-                {' '.join([f'<li>{process}</li>' for process in device_info['manufacturing_processes']])}
+                <li>Quality issue analysis and recommendations</li>
+                <li>Regulatory compliance guidance (FDA, ISO)</li>
+                <li>CAPA and quality process consulting</li>
+                <li>Risk management advice</li>
+                <li>Implementation and validation strategies</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
         
-        # Manufacturing issues troubleshooting guide
-        with st.expander("Manufacturing Troubleshooting Guide", expanded=False):
-            if device_type == "Mobility Aids":
-                st.markdown("""
-                **Common Manufacturing Issues:**
-                
-                **Frame instability:**
-                - Check welding quality and consistency
-                - Verify torque specifications on fasteners
-                - Inspect material thickness and quality
-                
-                **Wheel alignment issues:**
-                - Check axle straightness and mounting
-                - Verify bearing installation and quality
-                - Inspect frame alignment and squareness
-                
-                **Brake failures:**
-                - Verify spring tension and mechanism alignment
-                - Check cable routing and attachment points
-                - Inspect brake pad material and installation
-                """)
-            elif device_type == "Cushions & Support":
-                st.markdown("""
-                **Common Manufacturing Issues:**
-                
-                **Foam compression issues:**
-                - Verify foam density and compression resistance
-                - Check molding process parameters
-                - Inspect foam curing conditions
-                
-                **Cover material tears:**
-                - Check fabric cutting alignment and tension
-                - Verify seam allowances and stitch density
-                - Inspect material handling procedures
-                
-                **Pressure distribution problems:**
-                - Verify foam layering and assembly
-                - Check insert placement and alignment
-                - Test pressure mapping for consistency
-                """)
-            elif device_type == "Monitoring Devices":
-                st.markdown("""
-                **Common Manufacturing Issues:**
-                
-                **Sensor calibration drift:**
-                - Verify initial calibration procedures
-                - Check component thermal stability
-                - Inspect calibration reference standards
-                
-                **Display/electronics failures:**
-                - Check PCB solder joint quality
-                - Verify component placement accuracy
-                - Inspect conformal coating application
-                
-                **Battery issues:**
-                - Verify battery connection design
-                - Check protection circuit function
-                - Test charging and discharging cycles
-                """)
-            elif device_type == "Orthopedic Supports":
-                st.markdown("""
-                **Common Manufacturing Issues:**
-                
-                **Strap failures:**
-                - Check stitching pattern and thread tension
-                - Verify attachment point reinforcement
-                - Inspect elastic material quality and stretch
-                
-                **Hinge malfunctions:**
-                - Verify alignment during assembly
-                - Check rivet/fastener installation
-                - Inspect lubrication and friction surfaces
-                
-                **Material wear issues:**
-                - Check edge finishing processes
-                - Verify material thickness consistency
-                - Inspect hook-and-loop fastener quality
-                """)
-            else:
-                st.markdown("""
-                **Common Manufacturing Issues:**
-                
-                **Injection molding defects:**
-                - Check material drying and moisture content
-                - Verify mold temperature and cooling
-                - Inspect injection speed and pressure parameters
-                
-                **Assembly problems:**
-                - Check fixture design and part positioning
-                - Verify fastener installation procedures
-                - Inspect component alignment guides
-                
-                **Dimensional variations:**
-                - Check tool wear and replacement schedule
-                - Verify machine calibration and maintenance
-                - Inspect environmental conditions (temperature/humidity)
-                """)
-        
-        # Quality control reference
-        with st.expander("Quality Control Methods", expanded=False):
+        # Quick reference
+        with st.expander("FDA Regulations Quick Reference", expanded=False):
             st.markdown("""
-            ### AQL Sampling Plans
-            
-            **AQL 0.65 (Critical):**
-            - For critical characteristics affecting safety
-            - High inspection rigor (typically used for medical devices)
-            - Example: For lot size 1000, sample size 80 units
-            
-            **AQL 1.0 (Major):**
-            - For major characteristics affecting function
-            - Medium inspection rigor
-            - Example: For lot size 1000, sample size 50 units
-            
-            **AQL 2.5 (Minor):**
-            - For minor characteristics affecting appearance
-            - Lower inspection rigor
-            - Example: For lot size 1000, sample size 32 units
-            
-            ### Inspection Methods
-            
-            **Visual Inspection:**
-            - Workmanship standards with visual aids
-            - Magnification for small features
-            - Lighting conditions specified
-            
-            **Dimensional Inspection:**
-            - Gauges, calipers, CMM measurement
-            - Go/no-go fixtures for critical dimensions
-            - Specified measurement accuracy requirements
-            
-            **Functional Testing:**
-            - Operation cycling tests
-            - Performance parameter verification
-            - Load testing to specified requirements
+            - **21 CFR 820**: Quality System Regulation
+            - **21 CFR 803**: Medical Device Reporting
+            - **21 CFR 806**: Medical Device Corrections and Removals
+            - **21 CFR 807**: Establishment Registration and Device Listing
+            - **21 CFR 812**: Investigational Device Exemptions
+            - **21 CFR 814**: Premarket Approval
             """)
         
-        # Example questions for the selected device type
+        with st.expander("ISO Standards Quick Reference", expanded=False):
+            st.markdown("""
+            - **ISO 13485:2016**: Medical devices QMS requirements for regulatory purposes
+            - **ISO 14971:2019**: Medical devices - Application of risk management
+            - **ISO 14155:2020**: Clinical investigation of medical devices for human subjects
+            - **ISO 10993**: Biological evaluation of medical devices
+            - **ISO 15223-1**: Medical device symbols
+            """)
+        
+        # Example questions
         st.markdown("""
         <div style="background-color: #e9f7fe; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
             <h4>Example Questions</h4>
             <ul style="margin-left: 1rem; padding-left: 0.5rem;">
-                <li>What are common manufacturing defects in {device_type}?</li>
-                <li>How can we improve quality control for {device_info['examples'][0] if device_info['examples'] else 'medical devices'}?</li>
-                <li>What process controls should we implement for {device_info['manufacturing_processes'][0] if device_info['manufacturing_processes'] else 'manufacturing'}?</li>
-                <li>How to troubleshoot {device_info['common_issues'][0] if device_info['common_issues'] else 'quality issues'}?</li>
-                <li>What testing methods are appropriate for {device_type}?</li>
+                <li>What should I include in my CAPA documentation?</li>
+                <li>How do I prepare for an FDA inspection?</li>
+                <li>Explain design validation requirements for medical devices</li>
+                <li>What are risk management best practices?</li>
+                <li>How should we handle a supplier quality issue?</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -4459,7 +4129,7 @@ def main():
         <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px; margin-top: 2rem; 
                     text-align: center; border-top: 1px solid #dee2e6;">
             <div style="color: #6c757d; font-size: 0.8rem;">
-                Medical Device Quality Analysis Tool v1.1.0 | © 2025 Medical Device Quality Management
+                Product Profitability Analysis Tool v1.1.0 | © 2025 Medical Device Quality Management
             </div>
             <div style="color: #6c757d; font-size: 0.8rem; margin-top: 0.5rem;">
                 For support contact: <a href="mailto:alexander.popoff@vivehealth.com">alexander.popoff@vivehealth.com</a>
