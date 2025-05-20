@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import warnings
 import traceback
+import re  # Add this missing import for regex
 from typing import Dict, List, Tuple, Optional, Union, Any
 from io import BytesIO
 
@@ -42,6 +43,8 @@ if 'analysis_submitted' not in st.session_state:
     st.session_state.analysis_submitted = False
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
+if 'standalone_chat_history' not in st.session_state:
+    st.session_state.standalone_chat_history = []
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "analysis"
 if 'view_mode' not in st.session_state:
@@ -54,6 +57,8 @@ if 'monte_carlo_scenario' not in st.session_state:
     st.session_state.monte_carlo_scenario = None
 if 'compare_list' not in st.session_state:
     st.session_state.compare_list = []
+if 'api_key_status' not in st.session_state:
+    st.session_state.api_key_status = None
 
 # --- CSS INJECTION ---
 st.markdown(f"""
@@ -188,6 +193,35 @@ st.markdown(f"""
     .stSpinner > div {{
         border-top-color: var(--primary) !important;
     }}
+    /* Navigation menu styling */
+    .nav-link {{
+        display: block;
+        padding: 0.75rem 1rem;
+        border-radius: 4px;
+        margin-bottom: 0.5rem;
+        color: var(--text-primary);
+        text-decoration: none;
+        transition: background-color 0.3s ease;
+    }}
+    .nav-link:hover {{
+        background-color: var(--tertiary);
+        color: var(--text-primary);
+        text-decoration: none;
+    }}
+    .nav-link.active {{
+        background-color: var(--primary);
+        color: white;
+        font-weight: 600;
+    }}
+    .chat-container {{
+        height: 500px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        background-color: var(--background);
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -269,53 +303,116 @@ def get_recommendation_badge(recommendation: str) -> str:
         return f'<span class="badge badge-success">{recommendation}</span>'
 
 # --- AI ASSISTANT FUNCTIONS ---
-# Add this at the top of the file with the other imports
-import time
+def check_openai_api_key():
+    """Check if OpenAI API key is available and valid."""
+    api_key = st.secrets.get("openai_api_key", None)
+    
+    if not api_key:
+        st.session_state.api_key_status = "missing"
+        logger.warning("OpenAI API key not found in secrets")
+        return False
+    
+    # Verify the API key is valid with a simple test request
+    try:
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+        payload = {
+            "model": "gpt-4o", 
+            "messages": [{"role": "user", "content": "Test"}],
+            "max_tokens": 5
+        }
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions", 
+            headers=headers, 
+            json=payload, 
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            st.session_state.api_key_status = "valid"
+            logger.info("OpenAI API key is valid")
+            return True
+        else:
+            st.session_state.api_key_status = "invalid"
+            logger.error(f"OpenAI API key is invalid: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        st.session_state.api_key_status = "error"
+        logger.exception("Error checking OpenAI API key")
+        return False
 
-# Then update the call_openai_api function
 def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
     """Call the OpenAI API with the given messages."""
     api_key = st.secrets.get("openai_api_key", None)
     
-    # For demonstration purposes - simulate API response in case API key is missing
+    # If API key is missing, generate a simulated response
     if not api_key:
         logger.warning("OpenAI API key not found in secrets, using simulated response")
-        # Simulate API thinking time
-        time.sleep(2)
+        return generate_simulated_response(messages)
+    
+    # If API key is available, make the actual API call
+    try:
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+        payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions", 
+            headers=headers, 
+            json=payload, 
+            timeout=30
+        )
         
-        # Extract relevant info from the prompt
-        sku = "Unknown"
-        return_rate = "Unknown"
-        recommendation = "Unknown"
-        
-        for msg in messages:
-            if msg["role"] == "system":
-                content = msg["content"]
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        else:
+            logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
+            return f"Error: The AI assistant encountered a problem (HTTP {response.status_code}). Please try again later or contact support if the issue persists."
+    except requests.exceptions.Timeout:
+        logger.error("OpenAI API timeout")
+        return "Error: The AI assistant timed out. Please try again later when the service is less busy."
+    except requests.exceptions.ConnectionError:
+        logger.error("OpenAI API connection error")
+        return "Error: Could not connect to the AI service. Please check your internet connection and try again."
+    except Exception as e:
+        logger.exception("Error calling OpenAI API")
+        return f"Error: The AI assistant encountered an unexpected problem. Please try again later or contact support if the issue persists."
+
+def generate_simulated_response(messages):
+    """Generate a simulated response for demonstration when API key is missing."""
+    # Simulate API thinking time
+    time.sleep(2)
+    
+    # Extract relevant info from the system prompt
+    sku = "Unknown"
+    return_rate = "Unknown"
+    recommendation = "Unknown"
+    
+    for msg in messages:
+        if msg["role"] == "system":
+            content = msg["content"]
+            
+            # Extract sku if present
+            sku_match = re.search(r"SKU: ([^\n]+)", content)
+            if sku_match:
+                sku = sku_match.group(1)
                 
-                # Extract sku if present
-                sku_match = re.search(r"SKU: ([^\n]+)", content)
-                if sku_match:
-                    sku = sku_match.group(1)
-                    
-                # Extract return rate if present
-                return_rate_match = re.search(r"Return Rate \(30d\): ([0-9.]+)%", content)
-                if return_rate_match:
-                    return_rate = return_rate_match.group(1)
-                    
-                # Extract recommendation if present
-                rec_match = re.search(r"Recommendation: ([^\n]+)", content)
-                if rec_match:
-                    recommendation = rec_match.group(1)
-        
-        # Generate simulated response based on latest user message
-        user_message = "Unknown query"
-        for msg in reversed(messages):
-            if msg["role"] == "user":
-                user_message = msg["content"]
-                break
+            # Extract return rate if present
+            return_rate_match = re.search(r"Return Rate \(30d\): ([0-9.]+)%", content)
+            if return_rate_match:
+                return_rate = return_rate_match.group(1)
                 
-        if "next steps" in user_message.lower():
-            return f"""Based on my analysis of SKU {sku} with a return rate of {return_rate}%, I recommend the following next steps:
+            # Extract recommendation if present
+            rec_match = re.search(r"Recommendation: ([^\n]+)", content)
+            if rec_match:
+                recommendation = rec_match.group(1)
+    
+    # Generate simulated response based on latest user message
+    user_message = "Unknown query"
+    for msg in reversed(messages):
+        if msg["role"] == "user":
+            user_message = msg["content"]
+            break
+            
+    if "next steps" in user_message.lower():
+        return f"""Based on my analysis of SKU {sku} with a return rate of {return_rate}%, I recommend the following next steps:
 
 1. **Form a quality investigation team** with representatives from Engineering, Manufacturing, and Customer Service
 2. **Conduct root cause analysis** using the 5-Why method to determine the underlying causes
@@ -324,9 +421,9 @@ def call_openai_api(messages, model="gpt-4o", temperature=0.7, max_tokens=1024):
 5. **Track key metrics weekly** to monitor improvement progress
 
 The recommendation to "{recommendation}" is based on both financial impact and risk assessment. I suggest prioritizing this issue according to the recommendation category."""
-            
-        elif "regulatory" in user_message.lower():
-            return f"""For SKU {sku}, here are the key regulatory considerations to keep in mind:
+        
+    elif "regulatory" in user_message.lower():
+        return f"""For SKU {sku}, here are the key regulatory considerations to keep in mind:
 
 1. **Document all quality investigations** according to 21 CFR 820.100 requirements
 2. **Evaluate if a CAPA is required** based on the severity and recurrence of the issue
@@ -335,9 +432,9 @@ The recommendation to "{recommendation}" is based on both financial impact and r
 5. **Verify if design controls need to be updated** to prevent similar issues
 
 Based on the recommendation of "{recommendation}", I would suggest reviewing your Risk Management File to update the risk assessment as needed."""
-            
-        elif "improve" in user_message.lower():
-            return f"""To improve the effectiveness of the proposed solution for SKU {sku}, I recommend:
+        
+    elif "improve" in user_message.lower():
+        return f"""To improve the effectiveness of the proposed solution for SKU {sku}, I recommend:
 
 1. **Conduct small-scale testing** before full implementation to validate the expected {return_rate}% reduction
 2. **Gather voice of customer data** to ensure the solution addresses actual user needs
@@ -346,9 +443,20 @@ Based on the recommendation of "{recommendation}", I would suggest reviewing you
 5. **Consider alternative solutions** as backup plans in case primary solution doesn't achieve expected results
 
 This approach will help increase confidence in the solution and improve the projected ROI of the fix."""
-            
-        else:
-            return f"""Based on the quality analysis for SKU {sku}, with a return rate of {return_rate}%, I recommend focusing on these key areas:
+        
+    elif "standalone" in user_message.lower() or not sku or sku == "Unknown":
+        return """As your Quality Management expert, I can help with:
+
+1. **Quality issues analysis** - Understanding root causes and recommending solutions
+2. **Regulatory guidance** - Navigating FDA regulations and compliance requirements
+3. **Risk assessment** - Evaluating potential impacts to patients, business, and brand
+4. **Cost-benefit analysis** - Calculating ROI for quality improvements
+5. **Documentation review** - Ensuring quality records meet requirements
+
+How can I assist you today? Feel free to ask about specific medical device quality challenges you're facing."""
+    
+    else:
+        return f"""Based on the quality analysis for SKU {sku}, with a return rate of {return_rate}%, I recommend focusing on these key areas:
 
 1. **Impact Assessment**: Evaluate the full impact on patients, customers, and business operations
 2. **Risk Mitigation**: Develop strategies to address the {recommendation} recommendation
@@ -357,28 +465,25 @@ This approach will help increase confidence in the solution and improve the proj
 5. **Continuous Monitoring**: Establish a process to track this metric after implementing the fix
 
 Would you like me to elaborate on any of these areas or provide specific guidance for your situation?"""
-    
-    # If API key is available, make the actual API call
-    try:
-        headers = {"Content-Type":"application/json","Authorization":f"Bearer {api_key}"}
-        payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30)
-        
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
-            return f"Error from API: {response.status_code} - {response.text}"
-    except Exception as e:
-        logger.exception("Error calling OpenAI API")
-        return f"Error calling AI assistant: {str(e)}"
 
-def get_system_prompt(results: Dict[str, Any]) -> str:
+def get_system_prompt(results: Dict[str, Any] = None) -> str:
     """Generate the system prompt for the AI assistant based on analysis results."""
     if not results:
         return """
         You are a Quality Management expert for medical devices. 
         Provide guidance on quality issues, cost analysis, and regulatory compliance.
+        
+        Your expertise includes:
+        - Quality Management Systems (QMS) requirements per ISO 13485 and 21 CFR 820
+        - Risk management per ISO 14971
+        - Corrective and Preventive Action (CAPA) processes
+        - FDA regulations including Medical Device Reporting (MDR)
+        - Design controls and validation
+        - Manufacturing process improvements
+        - Cost-benefit analysis for quality initiatives
+        
+        When providing guidance, be specific to the medical device industry and reference
+        relevant regulations or standards when appropriate.
         """
     
     return f"""
@@ -405,7 +510,9 @@ def get_system_prompt(results: Dict[str, Any]) -> str:
     3. Regulatory considerations for medical devices
     4. Best practices for implementing the recommended solution
     
-    Be concise but thorough in your responses.
+    Be concise but thorough in your responses. Reference FDA regulations and medical device 
+    industry standards when relevant. Remember to consider both patient safety and business 
+    impact in your recommendations.
     """
 
 # --- CORE ANALYSIS FUNCTIONS ---
@@ -494,8 +601,8 @@ def analyze_quality_issue(
         cumulative_extra_cost = fix_cost_upfront
         
         for year in range(1, 4):
-            future_sales *= (1 + annualized_growth)
-            future_returns *= (1 + annualized_growth)
+            future_sales *= (1 + annualized_growth/100)  # Convert percentage to decimal
+            future_returns *= (1 + annualized_growth/100)
             returns_without_fix = (future_sales / annual_sales) * annual_returns
             returns_prevented_future = returns_without_fix - future_returns
             yearly_savings = returns_prevented_future * loss_per_return * confidence_factor
@@ -543,7 +650,8 @@ def analyze_quality_issue(
                 "sales_price": sales_price,
                 "margin_per_unit": margin_per_unit,
                 "margin_percentage": margin_percentage,
-                "loss_per_return": loss_per_return  # Added this field
+                "loss_per_return": loss_per_return,
+                "annual_return_rate": return_rate_30d  # Added for compatibility with other functions
             },
             "solution_metrics": {
                 "fix_cost_upfront": fix_cost_upfront,
@@ -1152,6 +1260,7 @@ def display_header():
             2. **Tariff Calculator**: Determine the impact of tariffs and import costs on product margins
             3. **Marketing ROI**: Analyze advertising campaign performance metrics
             4. **Monte Carlo Simulation**: Understand risks and probabilities with statistical modeling
+            5. **Quality AI Assistant**: Get expert advice from our AI assistant for medical device quality management
             
             Each tab provides specialized analysis tools with interactive visualizations and export options.
             
@@ -1175,6 +1284,71 @@ def display_header():
         </div>
     </div>
     """.format(datetime.now().strftime("%Y-%m-%d")), unsafe_allow_html=True)
+
+def display_navigation():
+    """Display the navigation menu."""
+    st.sidebar.markdown("## Navigation")
+    
+    if st.sidebar.button("📊 Analysis Tools", key="nav_analysis", use_container_width=True, 
+                         help="Access the main analysis tools"):
+        st.session_state.current_page = "analysis"
+        st.rerun()
+    
+    if st.sidebar.button("🤖 AI Assistant", key="nav_assistant", use_container_width=True,
+                          help="Chat with the Quality Management AI Assistant"):
+        st.session_state.current_page = "assistant"
+        st.rerun()
+    
+    # Add OpenAI API status indicator
+    if st.session_state.api_key_status is None:
+        # Check API key on first load
+        check_openai_api_key()
+    
+    status_color = {
+        "valid": "#40916C",  # Green
+        "missing": "#E76F51",  # Red
+        "invalid": "#E76F51",  # Red
+        "error": "#E9C46A",  # Yellow
+        None: "#ADB5BD"  # Gray
+    }
+    
+    status_text = {
+        "valid": "AI Assistant Connected",
+        "missing": "AI Assistant: API Key Missing",
+        "invalid": "AI Assistant: Invalid API Key",
+        "error": "AI Assistant: Connection Error",
+        None: "AI Assistant: Status Unknown"
+    }
+    
+    # Use a markdown-based status indicator 
+    st.sidebar.markdown(f"""
+    <div style="margin-top: 2rem; padding: 0.5rem; border-radius: 4px; background-color: #f8f9fa;">
+        <div style="display: flex; align-items: center;">
+            <div style="width: 10px; height: 10px; border-radius: 50%; background-color: {status_color[st.session_state.api_key_status]}; margin-right: 8px;"></div>
+            <span style="font-size: 0.8rem; color: #6c757d;">{status_text[st.session_state.api_key_status]}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Add helpful resources
+    st.sidebar.markdown("## Resources")
+    with st.sidebar.expander("Quality Analysis Guidelines", expanded=False):
+        st.markdown("""
+        - Focus on high-risk issues first
+        - Consider both financial and patient impact
+        - Document all quality investigations
+        - Follow 21 CFR 820.100 for CAPAs
+        - Use root cause analysis techniques
+        """)
+    
+    with st.sidebar.expander("Regulatory References", expanded=False):
+        st.markdown("""
+        - **FDA QSR**: 21 CFR 820
+        - **Medical Device Reporting**: 21 CFR 803
+        - **Quality Management System**: ISO 13485:2016
+        - **Risk Management**: ISO 14971:2019
+        - **Post-Market Surveillance**: 21 CFR 822
+        """)
 
 def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True):
     """Display the results of a quality issue analysis."""
@@ -1250,7 +1424,6 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
         
         with tabs[0]:
             # Financial Impact tab
-            financial_impact = results['financial_impact']
             st.subheader("Financial Impact")
             
             # Calculate values needed for display
@@ -1267,7 +1440,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 - **Return Rate:** {results['current_metrics']['return_rate_30d']:.2f}%
                 - **Loss Per Return:** {format_currency(loss_per_return)}
                 - **Annual Loss:** {format_currency(financial_impact['annual_loss'])}
-                """, unsafe_allow_html=True)
+                """)
             
             with col2:
                 st.markdown("#### After Improvement")
@@ -1276,7 +1449,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                 - **Gross Savings:** {format_currency(financial_impact['savings'])}
                 - **Adjusted Savings:** {format_currency(financial_impact['adjusted_savings'])} (with {results['solution_metrics']['solution_confidence']}% confidence)
                 - **Implementation Cost:** {format_currency(financial_impact['implementation_cost'])} (includes {format_currency(results['solution_metrics']['fix_cost_upfront'])} upfront)
-                """, unsafe_allow_html=True)
+                """)
             
             # Waterfall chart with hover tooltips
             fig = go.Figure(go.Waterfall(
@@ -1374,7 +1547,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                     hoverinfo="text",
                     hovertext=[
                         f"1-Year ROI: {results['financial_impact']['roi_1yr']:.2f}%<br>Implementation cost: ${results['financial_impact']['implementation_cost']:,.2f}<br>First year savings: ${results['financial_impact']['adjusted_savings']:,.2f}",
-                        f"3-Year ROI: {results['financial_impact']['roi_3yr']:.2f}%<br>Includes annual growth of {annualized_growth:.1f}%<br>Cumulative 3-year benefit: ${cumulative_savings:,.2f}"
+                        f"3-Year ROI: {results['financial_impact']['roi_3yr']:.2f}%<br>Includes annual growth of {st.session_state.get('annualized_growth', 0):.1f}%<br>Cumulative 3-year benefit: ${st.session_state.get('cumulative_savings', 0):,.2f}"
                     ]
                 ))
                 fig.update_layout(
@@ -1421,7 +1594,7 @@ def display_quality_issue_results(results: Dict[str, Any], expanded: bool = True
                     dict(
                         x=0.5,
                         y=-0.15,
-                        text=f"Break-even in {results['financial_impact']['payback_period']:.1f} months<br>Monthly net benefit: ${monthly_net_benefit:,.2f}",
+                        text=f"Break-even in {results['financial_impact']['payback_period']:.1f} months<br>Monthly net benefit: ${st.session_state.get('monthly_net_benefit', 0):,.2f}",
                         showarrow=False,
                         align="center"
                     )
@@ -1857,11 +2030,8 @@ def display_quality_analysis_form():
         
         return None
 
-def display_ai_assistant(results: Dict[str, Any]):
+def display_ai_assistant(results: Dict[str, Any] = None):
     """Display the AI assistant chat interface."""
-    if not results:
-        return
-    
     system_prompt = get_system_prompt(results)
     
     st.markdown("""
@@ -1877,23 +2047,44 @@ def display_ai_assistant(results: Dict[str, Any]):
     </div>
     """, unsafe_allow_html=True)
     
+    # Which chat history to use
+    chat_history = st.session_state.chat_history if results else st.session_state.standalone_chat_history
+    
     # Display chat history in a scrollable container
-    st.markdown('<div style="height: 350px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; margin-bottom: 1rem;">', unsafe_allow_html=True)
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
     
     # If no chat history yet, add a welcome message
-    if not st.session_state.chat_history:
-        st.markdown(f"""
-        <div class="assistant-bubble">
-            <strong>AI Assistant:</strong> I've analyzed the quality data for {results['sku']}. The return rate is {results['current_metrics']['return_rate_30d']:.2f}% with an estimated annual loss of {format_currency(results['financial_impact']['annual_loss'])}. 
-            <br><br>
-            Based on the analysis, my recommendation is: <strong>{results['recommendation']}</strong>
-            <br><br>
-            How can I help you with this quality issue today?
-        </div>
-        """, unsafe_allow_html=True)
+    if not chat_history:
+        if results:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> I've analyzed the quality data for {results['sku']}. The return rate is {results['current_metrics']['return_rate_30d']:.2f}% with an estimated annual loss of {format_currency(results['financial_impact']['annual_loss'])}. 
+                <br><br>
+                Based on the analysis, my recommendation is: <strong>{results['recommendation']}</strong>
+                <br><br>
+                How can I help you with this quality issue today?
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="assistant-bubble">
+                <strong>AI Assistant:</strong> Hello! I'm your Quality Management Assistant for medical devices.
+                <br><br>
+                I can help with:
+                <ul>
+                    <li>Quality issue analysis and recommendations</li>
+                    <li>Regulatory compliance guidance for FDA and ISO standards</li>
+                    <li>Risk management and CAPA processes</li>
+                    <li>Cost-benefit analysis for quality improvements</li>
+                    <li>Implementation strategies for quality solutions</li>
+                </ul>
+                
+                How can I assist you today with your medical device quality management needs?
+            </div>
+            """, unsafe_allow_html=True)
     else:
         # Display actual chat history
-        for msg in st.session_state.chat_history:
+        for msg in chat_history:
             if msg["role"] == "user":
                 st.markdown(f'<div class="user-bubble"><strong>You:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
             else:
@@ -1903,35 +2094,55 @@ def display_ai_assistant(results: Dict[str, Any]):
     
     # Input area with suggested prompts
     user_input = st.text_input(
-        "Ask about this quality issue:",
-        key="chat_input", 
+        "Ask about quality management:",
+        key=f"chat_input_{'results' if results else 'standalone'}", 
         placeholder="Type your question here or use the suggested questions below"
     )
     
     # Suggested prompt buttons in columns for better spacing
     col1, col2, col3 = st.columns(3)
     
-    with col1:
-        if st.button("What are the next steps?", key="prompt1", use_container_width=True):
-            user_input = "What are the next steps I should take based on this analysis?"
-    
-    with col2:
-        if st.button("Regulatory considerations?", key="prompt2", use_container_width=True):
-            user_input = "What regulatory considerations should I keep in mind for this quality issue?"
-    
-    with col3:
-        if st.button("How to improve solution?", key="prompt3", use_container_width=True):
-            user_input = "How can I improve the effectiveness of the proposed solution?"
+    # Different suggested prompts based on context
+    if results:
+        with col1:
+            if st.button("What are the next steps?", key="prompt1", use_container_width=True):
+                user_input = "What are the next steps I should take based on this analysis?"
+        
+        with col2:
+            if st.button("Regulatory considerations?", key="prompt2", use_container_width=True):
+                user_input = "What regulatory considerations should I keep in mind for this quality issue?"
+        
+        with col3:
+            if st.button("How to improve solution?", key="prompt3", use_container_width=True):
+                user_input = "How can I improve the effectiveness of the proposed solution?"
+    else:
+        with col1:
+            if st.button("CAPA best practices", key="prompt1_standalone", use_container_width=True):
+                user_input = "What are the best practices for implementing an effective CAPA process for medical devices?"
+        
+        with col2:
+            if st.button("FDA inspection readiness", key="prompt2_standalone", use_container_width=True):
+                user_input = "How should we prepare for an FDA inspection of our quality management system?"
+        
+        with col3:
+            if st.button("Risk management tips", key="prompt3_standalone", use_container_width=True):
+                user_input = "What are some practical tips for risk management in medical device design and development?"
     
     # Add a submit button
-    if st.button("Send", key="send_msg_btn", use_container_width=True):
+    if st.button("Send", key=f"send_msg_btn_{'results' if results else 'standalone'}", use_container_width=True):
         if user_input:
+            # Determine which chat history to use
+            if results:
+                chat_key = "chat_history"
+            else:
+                chat_key = "standalone_chat_history"
+                
             # Add user message to chat history
-            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            getattr(st.session_state, chat_key).append({"role": "user", "content": user_input})
             
             # Prepare messages for API call
             messages = [{"role": "system", "content": system_prompt}] + [
-                {"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history
+                {"role": m["role"], "content": m["content"]} for m in getattr(st.session_state, chat_key)
             ]
             
             # Show spinner while waiting for API response
@@ -1939,13 +2150,20 @@ def display_ai_assistant(results: Dict[str, Any]):
                 ai_resp = call_openai_api(messages)
             
             # Add AI response to chat history
-            st.session_state.chat_history.append({"role": "assistant", "content": ai_resp})
+            getattr(st.session_state, chat_key).append({"role": "assistant", "content": ai_resp})
             st.rerun()
     
     # Add a clear conversation button
-    if st.session_state.chat_history and st.button("Clear Conversation", key="clear_chat_btn"):
-        st.session_state.chat_history = []
-        st.rerun()
+    if (results and st.session_state.chat_history) or (not results and st.session_state.standalone_chat_history):
+        if st.button(
+            "Clear Conversation", 
+            key=f"clear_chat_btn_{'results' if results else 'standalone'}"
+        ):
+            if results:
+                st.session_state.chat_history = []
+            else:
+                st.session_state.standalone_chat_history = []
+            st.rerun()
     
     # Display API connection status
     api_key = st.secrets.get("openai_api_key", None)
@@ -1959,6 +2177,7 @@ def display_ai_assistant(results: Dict[str, Any]):
         st.markdown("""
         <div style="text-align: center; margin-top: 0.5rem; font-size: 0.8rem; color: #6c757d;">
             <i class="fas fa-circle" style="color: #E76F51;"></i> AI assistant not connected - API key missing
+            <p>Using simulated responses for demonstration.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2572,7 +2791,7 @@ def run_monte_carlo_simulation_ui():
                             price_std_dev=price_std_dev,
                             sales_std_dev=sales_std_dev,
                             return_std_dev=return_std_dev,
-                            reduction_std_dev=reduction_std_dev
+                            reduction_std_reduction_std_dev=reduction_std_dev
                         )
                         
                         st.session_state.monte_carlo_scenario = results
@@ -2810,6 +3029,73 @@ def display_analysis_page():
     with tabs[3]:
         run_monte_carlo_simulation_ui()
 
+def display_standalone_assistant_page():
+    """Display the standalone AI assistant page."""
+    st.title("🤖 Quality Management AI Assistant")
+    
+    st.markdown("""
+    <div style="margin-bottom: 1.5rem;">
+        Chat with our AI assistant to get expert advice on medical device quality management, 
+        regulatory compliance, and process improvements.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Split the page into two columns
+    col1, col2 = st.columns([7, 3])
+    
+    with col1:
+        # Main chat interface
+        display_ai_assistant()
+    
+    with col2:
+        # Information panel
+        st.markdown("""
+        <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px; margin-bottom: 1rem;">
+            <h4>AI Assistant Capabilities</h4>
+            <ul style="margin-left: 1rem; padding-left: 0.5rem;">
+                <li>Quality issue analysis and recommendations</li>
+                <li>Regulatory compliance guidance (FDA, ISO)</li>
+                <li>CAPA and quality process consulting</li>
+                <li>Risk management advice</li>
+                <li>Implementation and validation strategies</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Quick reference
+        with st.expander("FDA Regulations Quick Reference", expanded=False):
+            st.markdown("""
+            - **21 CFR 820**: Quality System Regulation
+            - **21 CFR 803**: Medical Device Reporting
+            - **21 CFR 806**: Medical Device Corrections and Removals
+            - **21 CFR 807**: Establishment Registration and Device Listing
+            - **21 CFR 812**: Investigational Device Exemptions
+            - **21 CFR 814**: Premarket Approval
+            """)
+        
+        with st.expander("ISO Standards Quick Reference", expanded=False):
+            st.markdown("""
+            - **ISO 13485:2016**: Medical devices QMS requirements for regulatory purposes
+            - **ISO 14971:2019**: Medical devices - Application of risk management
+            - **ISO 14155:2020**: Clinical investigation of medical devices for human subjects
+            - **ISO 10993**: Biological evaluation of medical devices
+            - **ISO 15223-1**: Medical device symbols
+            """)
+        
+        # Example questions
+        st.markdown("""
+        <div style="background-color: #e9f7fe; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
+            <h4>Example Questions</h4>
+            <ul style="margin-left: 1rem; padding-left: 0.5rem;">
+                <li>What should I include in my CAPA documentation?</li>
+                <li>How do I prepare for an FDA inspection?</li>
+                <li>Explain design validation requirements for medical devices</li>
+                <li>What are risk management best practices?</li>
+                <li>How should we handle a supplier quality issue?</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
 # --- MAIN APPLICATION ---
 def main():
     """Main application function."""
@@ -2819,16 +3105,21 @@ def main():
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
         """, unsafe_allow_html=True)
         
+        # Display sidebar navigation
+        display_navigation()
+        
         # Handle page navigation
         if st.session_state.current_page == "analysis":
             display_analysis_page()
+        elif st.session_state.current_page == "assistant":
+            display_standalone_assistant_page()
         
         # Add footer with version and additional info
         st.markdown("""
         <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px; margin-top: 2rem; 
                     text-align: center; border-top: 1px solid #dee2e6;">
             <div style="color: #6c757d; font-size: 0.8rem;">
-                Product Profitability Analysis Tool v1.0.1 | © 2025 Medical Device Quality Management
+                Product Profitability Analysis Tool v1.1.0 | © 2025 Medical Device Quality Management
             </div>
             <div style="color: #6c757d; font-size: 0.8rem; margin-top: 0.5rem;">
                 For support contact: <a href="mailto:quality@meddevice.com">quality@meddevice.com</a>
@@ -2855,7 +3146,7 @@ def main():
             if st.button("Reset Application State"):
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
-                st.experimental_rerun()
+                st.rerun()
 
 if __name__ == "__main__":
     main()
