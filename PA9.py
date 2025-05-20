@@ -2687,24 +2687,24 @@ if st.checkbox("Run Tariff Rate Scenario Analysis", key="tariff_scenario_check")
     st.markdown("<h3 class='sub-header'>Tariff Rate Scenario Analysis</h3>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    min_tariff = st.number_input("Minimum Tariff Rate (%)", min_value=0, max_value=100, value=0)
-                
-                with col2:
-                    max_tariff = st.number_input("Maximum Tariff Rate (%)", min_value=0, max_value=100, value=50)
-                
-                with col3:
-                    tariff_steps = st.number_input("Number of Steps", min_value=2, max_value=20, value=10)
-                
-                if st.button("Generate Tariff Scenarios"):
-                    with st.spinner("Analyzing tariff scenarios..."):
-                        # Generate scenarios
-                        scenarios_df = generate_tariff_scenarios(
-                            msrp, cost_to_produce, min_tariff, max_tariff, tariff_steps,
-                            shipping_cost, storage_cost, customs_fee, broker_fee,
-                            other_costs, units_per_shipment
-                        )
+    
+    with col1:
+        min_tariff = st.number_input("Minimum Tariff Rate (%)", min_value=0, max_value=100, value=0)
+    
+    with col2:
+        max_tariff = st.number_input("Maximum Tariff Rate (%)", min_value=0, max_value=100, value=50)
+    
+    with col3:
+        tariff_steps = st.number_input("Number of Steps", min_value=2, max_value=20, value=10)
+    
+    if st.button("Generate Tariff Scenarios"):
+        with st.spinner("Analyzing tariff scenarios..."):
+            # Generate scenarios
+            scenarios_df = generate_tariff_scenarios(
+                msrp, cost_to_produce, min_tariff, max_tariff, tariff_steps,
+                shipping_cost, storage_cost, customs_fee, broker_fee,
+                other_costs, units_per_shipment
+            )
                         
                         # Create plot
                         fig = make_subplots(specs=[[{"secondary_y": True}]])
