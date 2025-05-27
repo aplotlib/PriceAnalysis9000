@@ -1,32 +1,8 @@
-# Core framework
-streamlit>=1.18.1
-
-# Data manipulation & computation
-pandas>=1.5.3
-numpy>=1.24.2
-
-# Plotting & visualization
-plotly>=5.13.1
-matplotlib>=3.7.1
-
-# HTTP & API clients
-requests>=2.28.2
-openai>=0.27.0
-
-# Excel support (for pd.read_excel)
-openpyxl>=3.1.0
-xlrd>=2.0.1
-
-# Error monitoring
-sentry-sdk>=1.17.0
-
-# Environment & secrets management
-python-dotenv>=0.21.0
-
-# Date utilities (used indirectly by pandas)
-python-dateutil>=2.8.2
-
-# (Optional / development—move to dev-requirements.txt if you prefer)
-# pytest>=7.2.0
-# black>=24.1.0
-# flake8>=6.0.0
+streamlit
+pandas
+numpy
+requests
+beautifulsoup4
+xlsxwriter
+reportlab
+openai
