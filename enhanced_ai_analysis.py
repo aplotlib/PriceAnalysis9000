@@ -1,0 +1,482 @@
+"""
+Enhanced AI Analysis Module - Amazon Listing Optimization Edition
+
+**STABLE AI INTEGRATION FOR AMAZON SELLERS**
+
+Provides robust AI-powered analysis using OpenAI GPT-4o with comprehensive
+error handling and Amazon-specific optimization focus.
+
+Author: Assistant
+Version: 6.0 - Medical Device Quality Management Edition with URL Integration
+"""
+
+import logging
+import os
+import json
+import re
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple, Union
+from collections import Counter
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Safe imports
+def safe_import(module_name):
+    try:
+        return __import__(module_name), True
+    except ImportError:
+        logger.warning(f"Module {module_name} not available")
+        return None, False
+
+# Check for dependencies
+requests, has_requests = safe_import('requests')
+
+# API Configuration
+API_TIMEOUT = 30
+MAX_RETRIES = 2
+MAX_TOKENS = 2500  # Increased for comprehensive analysis
+
+class APIClient:
+    """Robust OpenAI API client with error handling"""
+    
+    def __init__(self):
+        self.api_key = self._get_api_key()
+        self.base_url = "https://api.openai.com/v1/chat/completions"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}" if self.api_key else ""
+        }
+        
+        # Log API key status
+        if self.api_key:
+            logger.info(f"API key configured (first 10 chars): {self.api_key[:10]}...")
+        else:
+            logger.warning("No API key found - AI features will be disabled")
+    
+    def _get_api_key(self) -> Optional[str]:
+        """Get API key from multiple sources"""
+        # Try Streamlit secrets first
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets'):
+                # Try multiple possible key names
+                for key_name in ["openai_api_key", "OPENAI_API_KEY", "openai", "api_key"]:
+                    if key_name in st.secrets:
+                        logger.info(f"Found API key in Streamlit secrets under '{key_name}'")
+                        return str(st.secrets[key_name])
+                    
+                # Check nested secrets
+                if "openai" in st.secrets and "api_key" in st.secrets["openai"]:
+                    logger.info("Found API key in nested Streamlit secrets")
+                    return str(st.secrets["openai"]["api_key"])
+        except Exception as e:
+            logger.debug(f"Streamlit secrets not available: {e}")
+        
+        # Try environment variable
+        for env_name in ["OPENAI_API_KEY", "OPENAI_API", "API_KEY"]:
+            api_key = os.environ.get(env_name)
+            if api_key:
+                logger.info(f"Found API key in environment variable '{env_name}'")
+                return api_key
+        
+        logger.warning("No OpenAI API key found in Streamlit secrets or environment")
+        return None
+    
+    def is_available(self) -> bool:
+        """Check if API is available"""
+        return bool(self.api_key and has_requests)
+    
+    def call_api(self, messages: List[Dict[str, str]], 
+                model: str = "gpt-4o-mini",  # Using mini for cost efficiency
+                temperature: float = 0.3,
+                max_tokens: int = MAX_TOKENS) -> Dict[str, Any]:
+        """Make API call with retry logic - matches main app's expectations"""
+        
+        if not self.is_available():
+            return {
+                "success": False,
+                "error": "API not available - missing key or requests module",
+                "result": "AI analysis requires OpenAI API key. Please add OPENAI_API_KEY to your Streamlit secrets or environment variables."
+            }
+        
+        # Ensure we're using the correct model name
+        if model == "gpt-4o":
+            model = "gpt-4o-mini"  # Use the more cost-effective version
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                logger.info(f"Making API call to {model} (attempt {attempt + 1}/{MAX_RETRIES})")
+                
+                response = requests.post(
+                    self.base_url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=API_TIMEOUT
+                )
+                
+                logger.info(f"API response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result["choices"][0]["message"]["content"]
+                    logger.info(f"API call successful, response length: {len(content)} chars")
+                    
+                    return {
+                        "success": True,
+                        "result": content,
+                        "usage": result.get("usage", {}),
+                        "model": model
+                    }
+                    
+                elif response.status_code == 401:
+                    error_msg = "Invalid API key. Please check your OpenAI API key configuration."
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "result": None
+                    }
+                    
+                elif response.status_code == 429:
+                    # Rate limit - wait and retry
+                    import time
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Rate limited, waiting {wait_time} seconds")
+                    time.sleep(wait_time)
+                    continue
+                    
+                else:
+                    error_data = response.json() if response.text else {}
+                    error_msg = error_data.get('error', {}).get('message', f'API error {response.status_code}')
+                    logger.error(f"API error: {error_msg}")
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "result": None
+                    }
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"API timeout on attempt {attempt + 1}")
+                if attempt == MAX_RETRIES - 1:
+                    return {
+                        "success": False,
+                        "error": "API timeout after multiple attempts",
+                        "result": None
+                    }
+            except Exception as e:
+                logger.error(f"API call error: {str(e)}")
+                if attempt == MAX_RETRIES - 1:
+                    return {
+                        "success": False,
+                        "error": f"API call failed: {str(e)}",
+                        "result": None
+                    }
+        
+        return {
+            "success": False,
+            "error": "Max retries exceeded",
+            "result": None
+        }
+
+class EnhancedAIAnalyzer:
+    """Main AI analyzer class optimized for Amazon listings and medical devices"""
+    
+    def __init__(self):
+        self.api_client = APIClient()
+        logger.info(f"Enhanced AI Analyzer initialized - API available: {self.api_client.is_available()}")
+    
+    def get_api_status(self) -> Dict[str, Any]:
+        """Get API availability status - matches main app's expectations"""
+        is_available = self.api_client.is_available()
+        
+        status = {
+            'available': is_available,
+            'configured': bool(self.api_client.api_key)
+        }
+        
+        if not self.api_client.api_key:
+            status['error'] = 'API key not configured'
+            status['message'] = 'Add OPENAI_API_KEY to Streamlit secrets or environment'
+        elif not has_requests:
+            status['error'] = 'Requests module not available'
+            status['message'] = 'Install requests: pip install requests'
+        else:
+            # Try a test call with minimal tokens
+            test_response = self.api_client.call_api(
+                [{"role": "user", "content": "Hi"}],
+                max_tokens=5
+            )
+            
+            if test_response['success']:
+                status['message'] = 'API is working correctly'
+                status['model'] = test_response.get('model', 'gpt-4o-mini')
+            else:
+                status['available'] = False
+                status['error'] = test_response.get('error', 'Unknown error')
+                status['message'] = f"API test failed: {status['error']}"
+        
+        logger.info(f"API status check: {status}")
+        return status
+    
+    def _extract_customer_keywords(self, reviews: List[Dict]) -> Dict[str, List[str]]:
+        """Extract keywords from customer reviews"""
+        positive_words = []
+        negative_words = []
+        all_words = []
+        
+        stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 
+                    'with', 'is', 'was', 'it', 'this', 'that', 'have', 'has', 'i', 'my', 'your',
+                    'very', 'been', 'be', 'are', 'not', 'will', 'can', 'would', 'could', 'should'}
+        
+        for review in reviews:
+            body = str(review.get('body', '')).lower()
+            rating = review.get('rating', 3)
+            
+            # Extract meaningful words
+            words = re.findall(r'\b[a-z]+\b', body)
+            filtered = [w for w in words if w not in stopwords and len(w) > 3]
+            
+            all_words.extend(filtered)
+            if rating >= 4:
+                positive_words.extend(filtered)
+            elif rating <= 2:
+                negative_words.extend(filtered)
+        
+        # Get most common words
+        all_counter = Counter(all_words)
+        pos_counter = Counter(positive_words)
+        neg_counter = Counter(negative_words)
+        
+        return {
+            'all_keywords': [word for word, _ in all_counter.most_common(30)],
+            'positive_keywords': [word for word, _ in pos_counter.most_common(20)],
+            'negative_keywords': [word for word, _ in neg_counter.most_common(20)]
+        }
+    
+    def _analyze_listing_keyword_gaps(self, listing_details: Dict, customer_keywords: Dict) -> List[str]:
+        """Identify keyword gaps between listing and customer language"""
+        gaps = []
+        
+        # Extract current listing keywords
+        listing_text = ' '.join([
+            listing_details.get('title', ''),
+            ' '.join(listing_details.get('bullet_points', [])),
+            listing_details.get('description', ''),
+            listing_details.get('backend_keywords', '')
+        ]).lower()
+        
+        listing_words = set(re.findall(r'\b[a-z]+\b', listing_text))
+        
+        # Find high-frequency customer keywords not in listing
+        for keyword in customer_keywords['all_keywords'][:15]:
+            if keyword not in listing_words:
+                gaps.append(keyword)
+        
+        return gaps[:10]  # Top 10 gaps
+    
+    def analyze_reviews_for_listing_optimization(self, 
+                                                reviews: List[Dict],
+                                                product_info: Dict,
+                                                listing_details: Optional[Dict] = None,
+                                                metrics: Optional[Dict] = None) -> str:
+        """
+        Main method called by the app for AI analysis
+        Returns a formatted string with optimization recommendations
+        """
+        try:
+            # Extract customer keywords first
+            customer_keywords = self._extract_customer_keywords(reviews)
+            
+            # Analyze keyword gaps if listing details provided
+            keyword_gaps = []
+            if listing_details and listing_details.get('title'):
+                keyword_gaps = self._analyze_listing_keyword_gaps(listing_details, customer_keywords)
+            
+            # Prepare review summaries - include ALL reviews unless filtered by user
+            review_texts = []
+            review_count_by_rating = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+            
+            # Sort reviews by rating (negative first) for better analysis
+            sorted_reviews = sorted(reviews, key=lambda x: (x.get('rating', 3), x.get('verified', False)))
+            
+            for i, review in enumerate(sorted_reviews, 1):
+                rating = review.get('rating', 3)
+                review_count_by_rating[rating] += 1
+                
+                # Include more reviews for comprehensive analysis
+                if i <= 50:  # Increased from 30
+                    title = review.get('title', '')[:100]
+                    body = review.get('body', '')[:400]  # Increased from 300
+                    verified = " [Verified]" if review.get('verified') else ""
+                    
+                    review_text = f"Review {i} ({rating}/5){verified}: {title} - {body}"
+                    review_texts.append(review_text)
+            
+            # Build the comprehensive prompt
+            listing_context = ""
+            if listing_details and listing_details.get('title'):
+                listing_context = f"""
+CURRENT LISTING DETAILS (Auto-populated from URL):
+Title: {listing_details.get('title', 'Not provided')}
+Brand: {listing_details.get('brand', 'Not provided')}
+Category: {listing_details.get('category', 'Not provided')}
+ASIN: {listing_details.get('asin', 'Not provided')}
+Source URL: {listing_details.get('url', 'Not provided')}
+
+Current Bullet Points:
+{chr(10).join([f'• {b}' for b in listing_details.get('bullet_points', []) if b.strip()])}
+
+Current Description Preview:
+{listing_details.get('description', 'Not provided')[:500]}
+
+Backend Keywords: {listing_details.get('backend_keywords', 'Not provided')}
+
+KEYWORD GAP ANALYSIS:
+Customer keywords missing from listing: {', '.join(keyword_gaps) if keyword_gaps else 'None identified'}
+Top positive customer keywords: {', '.join(customer_keywords['positive_keywords'][:10])}
+Top negative customer keywords: {', '.join(customer_keywords['negative_keywords'][:10])}
+"""
+            else:
+                listing_context = """
+No listing details provided. Focus on extracting optimization opportunities directly from customer feedback.
+"""
+            
+            # Medical device context for quality management
+            medical_device_context = """
+MEDICAL DEVICE CONSIDERATIONS:
+- Safety concerns and adverse events must be addressed
+- Quality and reliability issues are critical
+- Usability and user training needs
+- Regulatory compliance implications
+- Documentation and instruction clarity
+- Post-market surveillance insights
+"""
+            
+            # Review volume context
+            review_volume_context = f"""
+REVIEW ANALYSIS SCOPE:
+Total Reviews Available: {len(reviews)}
+Reviews Analyzed in Detail: {min(50, len(reviews))}
+Rating Distribution: 1★({review_count_by_rating[1]}) 2★({review_count_by_rating[2]}) 3★({review_count_by_rating[3]}) 4★({review_count_by_rating[4]}) 5★({review_count_by_rating[5]})
+Average Rating: {sum(r.get('rating', 3) for r in reviews) / len(reviews):.2f}/5
+Verified Purchase Rate: {sum(1 for r in reviews if r.get('verified')) / len(reviews) * 100:.1f}%
+"""
+            
+            prompt = f"""You are an expert Amazon listing optimization specialist with medical device expertise.
+Analyze these customer reviews to provide SPECIFIC, ACTIONABLE listing improvements that directly address customer feedback.
+
+{review_volume_context}
+
+{listing_context}
+
+{medical_device_context}
+
+CUSTOMER REVIEWS (Sorted by rating, negative first for priority):
+{chr(10).join(review_texts)}
+
+Provide optimization recommendations in this EXACT format:
+
+## TITLE OPTIMIZATION
+Current title issues based on reviews:
+[List specific problems/missing keywords customers mention]
+
+Recommended new title (max 200 chars, incorporating customer language):
+[Exact title that addresses concerns and includes high-frequency customer keywords]
+
+Keywords added from customer language: [list the specific keywords you added]
+
+## BULLET POINT REWRITE
+Based on customer feedback patterns, here are 5 optimized bullets:
+
+• Bullet 1 (Address top complaint: [specific issue]): [Complete bullet point text]
+• Bullet 2 (Safety/Quality assurance): [Complete bullet point text addressing quality concerns]
+• Bullet 3 (Ease of use/Training): [Complete bullet point text addressing usability]
+• Bullet 4 (Technical specs customers ask about): [Complete bullet point text]
+• Bullet 5 (Support/Warranty/Guarantee): [Complete bullet point text]
+
+## A9 ALGORITHM OPTIMIZATION
+Backend keywords extracted from customer language (250 chars max):
+[Comma-separated list using actual customer terminology]
+
+Keywords to REMOVE (mentioned in negative context): [list]
+
+## IMMEDIATE QUICK WINS
+1. [Most critical change based on negative reviews - be specific]
+2. [Address most common question/confusion from reviews]
+3. [Conversion improvement based on positive review language]
+
+## QUALITY & SAFETY PRIORITIES (Medical Device Specific)
+- [Top safety concern from reviews]
+- [Quality issue to address]
+- [Documentation/instruction improvement needed]
+
+Focus on using the EXACT language customers use in their reviews."""
+
+            # Make the API call
+            response = self.api_client.call_api(
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are an Amazon listing optimization expert specializing in medical devices. Always use the exact language and terminology that customers use in their reviews. Be specific and actionable."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=2500
+            )
+            
+            if response['success']:
+                logger.info("AI analysis completed successfully")
+                
+                # Add context note if listing details were used
+                result = response['result']
+                if listing_details and listing_details.get('title'):
+                    context_note = f"\n\n---\n📌 **Analysis Context**: This analysis compared your current listing (auto-populated from {listing_details.get('url', 'Amazon URL')}) with {len(reviews)} customer reviews. Keywords gaps identified: {len(keyword_gaps)} high-frequency customer terms missing from your listing.\n\n💡 **Tip**: Use the AI Chat feature to discuss these recommendations and get specific implementation advice for your situation."
+                else:
+                    context_note = f"\n\n---\n📌 **Analysis Context**: Analyzed {len(reviews)} customer reviews. For more targeted recommendations, use the URL auto-populate feature to include your current listing details.\n\n💡 **Tip**: Use the AI Chat feature to discuss these recommendations and get specific implementation advice for your situation."
+                
+                return result + context_note
+            else:
+                error_msg = response.get('error', 'Unknown error')
+                logger.error(f"AI analysis failed: {error_msg}")
+                
+                # Return a helpful error message
+                return f"""## AI Analysis Error
+
+{error_msg}
+
+### Troubleshooting Steps:
+1. Check that your OpenAI API key is correctly configured
+2. Verify the API key has sufficient credits
+3. Ensure you're using a valid API key that starts with 'sk-'
+
+### Manual Analysis Recommendations:
+While AI is unavailable, focus on:
+- Addressing the most common complaints in reviews
+- Adding safety and quality assurances to bullet points
+- Including customer keywords in your title
+- Updating backend search terms with review language
+
+💡 **Tip**: Once AI is working, use the AI Chat feature to discuss specific optimization strategies."""
+                
+        except Exception as e:
+            logger.error(f"Error in analyze_reviews_for_listing_optimization: {str(e)}")
+            return f"""## Analysis Error
+
+An error occurred during analysis: {str(e)}
+
+Please check your configuration and try again.
+
+💡 **Tip**: Use the AI Chat feature to get help troubleshooting this error."""
+
+# Export main class
+__all__ = ['EnhancedAIAnalyzer', 'APIClient']
