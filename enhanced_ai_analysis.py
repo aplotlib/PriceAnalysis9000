@@ -7,7 +7,7 @@ Provides robust AI-powered analysis using OpenAI GPT-4o with comprehensive
 error handling and Amazon-specific optimization focus.
 
 Author: Assistant
-Version: 6.0 - Medical Device Quality Management Edition with URL Integration
+Version: 7.0 - Medical Device Quality Management Edition with Marketplace Data Integration
 """
 
 import logging
@@ -283,11 +283,75 @@ class EnhancedAIAnalyzer:
         
         return gaps[:10]  # Top 10 gaps
     
+    def analyze_marketplace_data(self, marketplace_data: Dict[str, Any]) -> Dict[str, str]:
+        """Analyze marketplace data (returns, reimbursements) for insights"""
+        insights = {
+            'return_analysis': '',
+            'reimbursement_analysis': '',
+            'correlation_insights': ''
+        }
+        
+        # Analyze return patterns
+        if 'return_patterns' in marketplace_data:
+            fba_returns = marketplace_data['return_patterns'].get('fba', {})
+            fbm_returns = marketplace_data['return_patterns'].get('fbm', {})
+            
+            total_returns = fba_returns.get('count', 0) + fbm_returns.get('count', 0)
+            
+            if total_returns > 0:
+                # Combine return reasons
+                all_reasons = {}
+                if fba_returns.get('reasons'):
+                    for reason, count in fba_returns['reasons'].items():
+                        all_reasons[reason] = all_reasons.get(reason, 0) + count
+                if fbm_returns.get('reasons'):
+                    for reason, count in fbm_returns['reasons'].items():
+                        all_reasons[reason] = all_reasons.get(reason, 0) + count
+                
+                # Sort reasons by frequency
+                top_reasons = sorted(all_reasons.items(), key=lambda x: x[1], reverse=True)[:5]
+                
+                insights['return_analysis'] = f"""
+RETURN PATTERN ANALYSIS:
+- Total Returns: {total_returns} (FBA: {fba_returns.get('count', 0)}, FBM: {fbm_returns.get('count', 0)})
+- Top Return Reasons: {', '.join([f"{reason} ({count})" for reason, count in top_reasons])}
+- A-to-Z Claims: {fbm_returns.get('a_to_z_claims', 0)}
+- Customer Comments Sample: {'; '.join(fba_returns.get('customer_comments', [])[:3])}
+"""
+        
+        # Analyze reimbursements
+        if 'financial_impact' in marketplace_data and 'reimbursements' in marketplace_data['financial_impact']:
+            reimb = marketplace_data['financial_impact']['reimbursements']
+            insights['reimbursement_analysis'] = f"""
+REIMBURSEMENT ANALYSIS:
+- Total Reimbursements: {reimb.get('count', 0)}
+- Total Amount: ${reimb.get('total_amount', 0):.2f}
+- Main Reasons: {', '.join([f"{k} ({v})" for k, v in list(reimb.get('reasons', {}).items())[:3]])}
+"""
+        
+        # Correlation insights
+        if marketplace_data.get('related_products'):
+            related_asins = []
+            for source, asins in marketplace_data['related_products'].items():
+                related_asins.extend(asins)
+            related_asins = list(set(related_asins))
+            
+            if related_asins:
+                insights['correlation_insights'] = f"""
+RELATED PRODUCT INSIGHTS:
+- Found {len(related_asins)} related ASINs with similar issues
+- Consider reviewing these products for common problems
+- Pattern suggests potential product line or category issues
+"""
+        
+        return insights
+    
     def analyze_reviews_for_listing_optimization(self, 
                                                 reviews: List[Dict],
                                                 product_info: Dict,
                                                 listing_details: Optional[Dict] = None,
-                                                metrics: Optional[Dict] = None) -> str:
+                                                metrics: Optional[Dict] = None,
+                                                marketplace_data: Optional[Dict] = None) -> str:
         """
         Main method called by the app for AI analysis
         Returns a formatted string with optimization recommendations
@@ -350,6 +414,22 @@ Top negative customer keywords: {', '.join(customer_keywords['negative_keywords'
 No listing details provided. Focus on extracting optimization opportunities directly from customer feedback.
 """
             
+            # Add marketplace data context if available
+            marketplace_context = ""
+            if marketplace_data:
+                mp_insights = self.analyze_marketplace_data(marketplace_data)
+                marketplace_context = f"""
+MARKETPLACE DATA INSIGHTS:
+{mp_insights['return_analysis']}
+{mp_insights['reimbursement_analysis']}
+{mp_insights['correlation_insights']}
+
+KEY PATTERNS:
+- Use return reasons to address specific product issues in bullets
+- Incorporate solutions to common problems in the listing
+- Add preventive information based on return/reimbursement patterns
+"""
+            
             # Medical device context for quality management
             medical_device_context = """
 MEDICAL DEVICE CONSIDERATIONS:
@@ -372,11 +452,13 @@ Verified Purchase Rate: {sum(1 for r in reviews if r.get('verified')) / len(revi
 """
             
             prompt = f"""You are an expert Amazon listing optimization specialist with medical device expertise.
-Analyze these customer reviews to provide SPECIFIC, ACTIONABLE listing improvements that directly address customer feedback.
+Analyze these customer reviews AND marketplace data to provide SPECIFIC, ACTIONABLE listing improvements that directly address customer feedback and return patterns.
 
 {review_volume_context}
 
 {listing_context}
+
+{marketplace_context}
 
 {medical_device_context}
 
@@ -386,47 +468,53 @@ CUSTOMER REVIEWS (Sorted by rating, negative first for priority):
 Provide optimization recommendations in this EXACT format:
 
 ## TITLE OPTIMIZATION
-Current title issues based on reviews:
-[List specific problems/missing keywords customers mention]
+Current title issues based on reviews and returns:
+[List specific problems/missing keywords customers mention and return reasons]
 
-Recommended new title (max 200 chars, incorporating customer language):
+Recommended new title (max 200 chars, incorporating customer language and addressing return issues):
 [Exact title that addresses concerns and includes high-frequency customer keywords]
 
 Keywords added from customer language: [list the specific keywords you added]
 
 ## BULLET POINT REWRITE
-Based on customer feedback patterns, here are 5 optimized bullets:
+Based on customer feedback and return patterns, here are 5 optimized bullets:
 
-• Bullet 1 (Address top complaint: [specific issue]): [Complete bullet point text]
-• Bullet 2 (Safety/Quality assurance): [Complete bullet point text addressing quality concerns]
-• Bullet 3 (Ease of use/Training): [Complete bullet point text addressing usability]
+• Bullet 1 (Address top complaint/return reason: [specific issue]): [Complete bullet point text]
+• Bullet 2 (Safety/Quality assurance): [Complete bullet point text addressing quality concerns from returns]
+• Bullet 3 (Ease of use/Training): [Complete bullet point text addressing usability issues]
 • Bullet 4 (Technical specs customers ask about): [Complete bullet point text]
-• Bullet 5 (Support/Warranty/Guarantee): [Complete bullet point text]
+• Bullet 5 (Support/Warranty/Guarantee): [Complete bullet point text addressing return policy concerns]
 
 ## A9 ALGORITHM OPTIMIZATION
-Backend keywords extracted from customer language (250 chars max):
-[Comma-separated list using actual customer terminology]
+Backend keywords extracted from customer language and return reasons (250 chars max):
+[Comma-separated list using actual customer terminology and return-related keywords]
 
-Keywords to REMOVE (mentioned in negative context): [list]
+Keywords to REMOVE (mentioned in negative context or return reasons): [list]
 
 ## IMMEDIATE QUICK WINS
-1. [Most critical change based on negative reviews - be specific]
-2. [Address most common question/confusion from reviews]
+1. [Most critical change based on negative reviews and returns - be specific]
+2. [Address most common return reason from marketplace data]
 3. [Conversion improvement based on positive review language]
 
 ## QUALITY & SAFETY PRIORITIES (Medical Device Specific)
-- [Top safety concern from reviews]
-- [Quality issue to address]
-- [Documentation/instruction improvement needed]
+- [Top safety concern from reviews and returns]
+- [Quality issue to address based on reimbursement patterns]
+- [Documentation/instruction improvement needed based on return comments]
 
-Focus on using the EXACT language customers use in their reviews."""
+## RETURN REDUCTION STRATEGY
+Based on marketplace data analysis:
+- [Specific listing change to reduce top return reason]
+- [Information to add that would prevent common misunderstandings]
+- [Quality assurance message to include]
+
+Focus on using the EXACT language customers use in their reviews and return comments."""
 
             # Make the API call
             response = self.api_client.call_api(
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are an Amazon listing optimization expert specializing in medical devices. Always use the exact language and terminology that customers use in their reviews. Be specific and actionable."
+                        "content": "You are an Amazon listing optimization expert specializing in medical devices. Always use the exact language and terminology that customers use in their reviews and return comments. Be specific and actionable."
                     },
                     {"role": "user", "content": prompt}
                 ],
@@ -439,10 +527,21 @@ Focus on using the EXACT language customers use in their reviews."""
                 
                 # Add context note if listing details were used
                 result = response['result']
+                context_notes = []
+                
                 if listing_details and listing_details.get('title'):
-                    context_note = f"\n\n---\n📌 **Analysis Context**: This analysis compared your current listing (auto-populated from {listing_details.get('url', 'Amazon URL')}) with {len(reviews)} customer reviews. Keywords gaps identified: {len(keyword_gaps)} high-frequency customer terms missing from your listing.\n\n💡 **Tip**: Use the AI Chat feature to discuss these recommendations and get specific implementation advice for your situation."
+                    context_notes.append(f"This analysis compared your current listing (auto-populated from {listing_details.get('url', 'Amazon URL')}) with {len(reviews)} customer reviews.")
+                    if keyword_gaps:
+                        context_notes.append(f"Keywords gaps identified: {len(keyword_gaps)} high-frequency customer terms missing from your listing.")
+                
+                if marketplace_data:
+                    context_notes.append("Marketplace data (returns and reimbursements) was analyzed to provide return reduction strategies.")
+                
+                context_note = ""
+                if context_notes:
+                    context_note = f"\n\n---\n📌 **Analysis Context**: {' '.join(context_notes)}\n\n💡 **Tip**: Use the AI Chat feature to discuss these recommendations and get specific implementation advice for your situation."
                 else:
-                    context_note = f"\n\n---\n📌 **Analysis Context**: Analyzed {len(reviews)} customer reviews. For more targeted recommendations, use the URL auto-populate feature to include your current listing details.\n\n💡 **Tip**: Use the AI Chat feature to discuss these recommendations and get specific implementation advice for your situation."
+                    context_note = f"\n\n---\n📌 **Analysis Context**: Analyzed {len(reviews)} customer reviews. For more targeted recommendations, use the URL auto-populate feature to include your current listing details and upload marketplace data files.\n\n💡 **Tip**: Use the AI Chat feature to discuss these recommendations and get specific implementation advice for your situation."
                 
                 return result + context_note
             else:
@@ -465,6 +564,7 @@ While AI is unavailable, focus on:
 - Adding safety and quality assurances to bullet points
 - Including customer keywords in your title
 - Updating backend search terms with review language
+- Reviewing return patterns to identify common issues
 
 💡 **Tip**: Once AI is working, use the AI Chat feature to discuss specific optimization strategies."""
                 
