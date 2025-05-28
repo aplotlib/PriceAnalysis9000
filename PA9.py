@@ -405,52 +405,54 @@ def display_header():
             st.rerun()
 
 def display_tutorial():
-    """Display interactive tutorial for first-time users - FIXED"""
+    """Display interactive tutorial for first-time users"""
     if st.session_state.show_tutorial:
-        st.markdown("""
-        <div class="tutorial-box">
-            <h3>🎯 Quick Start Guide</h3>
-            <p>Welcome to the Vive Health Review Intelligence Platform! Follow these steps:</p>
-
-            <ol>
-                <li><span class="highlight">Enter Product Details (Optional but Recommended)</span>
-                    <ul>
-                        <li>Paste your Amazon product URL for auto-population, OR</li>
-                        <li>Manually enter your ASIN and listing details</li>
-                    </ul>
-                </li>
-
-                <li><span class="highlight">Upload Review Data (Required)</span>
-                    <ul>
-                        <li>Export reviews from Helium 10 as CSV</li>
-                        <li>Upload the file in the Review Data section</li>
-                    </ul>
-                </li>
-
-                <li><span class="highlight">Add Marketplace Files (Optional)</span>
-                    <ul>
-                        <li>Upload returns and reimbursement reports</li>
-                        <li>Get deeper insights into quality issues</li>
-                    </ul>
-                </li>
-
-                <li><span class="highlight">Run Analysis</span>
-                    <ul>
-                        <li>Choose quick metrics or full AI analysis</li>
-                        <li>Export results for action planning</li>
-                    </ul>
-                </li>
-            </ol>
-
-            <p style="color: #FFB700; margin-top: 1rem;">
-                💡 <strong>Pro Tip:</strong> Use the AI Assistant at any time for help or to discuss your results!
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        # Use columns for better layout
+        col1, col2, col3 = st.columns([1, 6, 1])
         
-        if st.button("Got it! Let's start", type="primary"):
-            st.session_state.show_tutorial = False
-            st.rerun()
+        with col2:
+            st.markdown('<div class="tutorial-box">', unsafe_allow_html=True)
+            st.markdown('<h3 style="color: #00D9FF; margin-top: 0;">🎯 Quick Start Guide</h3>', unsafe_allow_html=True)
+            st.markdown('Welcome to the Vive Health Review Intelligence Platform! Follow these steps:', unsafe_allow_html=True)
+            
+            st.markdown("")  # Space
+            
+            # Step 1
+            st.markdown('**1. Enter Product Details** *(Optional but Recommended)*', unsafe_allow_html=True)
+            st.markdown('   - Paste your Amazon product URL for auto-population, OR', unsafe_allow_html=True)
+            st.markdown('   - Manually enter your ASIN and listing details', unsafe_allow_html=True)
+            
+            st.markdown("")  # Space
+            
+            # Step 2
+            st.markdown('**2. Upload Review Data** *(Required)*', unsafe_allow_html=True)
+            st.markdown('   - Export reviews from Helium 10 as CSV', unsafe_allow_html=True)
+            st.markdown('   - Upload the file in the Review Data section', unsafe_allow_html=True)
+            
+            st.markdown("")  # Space
+            
+            # Step 3
+            st.markdown('**3. Add Marketplace Files** *(Optional)*', unsafe_allow_html=True)
+            st.markdown('   - Upload returns and reimbursement reports', unsafe_allow_html=True)
+            st.markdown('   - Get deeper insights into quality issues', unsafe_allow_html=True)
+            
+            st.markdown("")  # Space
+            
+            # Step 4
+            st.markdown('**4. Run Analysis**', unsafe_allow_html=True)
+            st.markdown('   - Choose quick metrics or full AI analysis', unsafe_allow_html=True)
+            st.markdown('   - Export results for action planning', unsafe_allow_html=True)
+            
+            st.markdown("")  # Space
+            
+            st.markdown('<p style="color: #FFB700; font-weight: bold;">💡 Pro Tip: Use the AI Assistant at any time for help or to discuss your results!</p>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown("")  # Space
+            
+            if st.button("Got it! Let's start", type="primary", use_container_width=True):
+                st.session_state.show_tutorial = False
+                st.rerun()
 
 def validate_asin(asin: str) -> Tuple[bool, str]:
     """Validate ASIN format"""
