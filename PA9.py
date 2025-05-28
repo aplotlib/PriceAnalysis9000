@@ -1,6 +1,6 @@
 """
 Amazon Review Analyzer - Medical Device Quality Management Edition
-Version 10.0 - Enhanced with Logical User Flow
+Version 10.1 - Fixed Tutorial Display and Marketplace Analysis
 """
 
 import streamlit as st
@@ -56,7 +56,7 @@ except ImportError:
 # Configuration
 APP_CONFIG = {
     'title': 'Vive Health Review Intelligence',
-    'version': '10.0',
+    'version': '10.1',
     'company': 'Vive Health',
     'support_email': 'alexander.popoff@vivehealth.com'
 }
@@ -225,6 +225,33 @@ def inject_cyberpunk_css():
         box-shadow: 0 0 20px rgba(0, 217, 255, 0.4), inset 0 0 20px rgba(0, 217, 255, 0.1);
     }}
     
+    .tutorial-box {{
+        background: rgba(10, 10, 15, 0.95); 
+        border: 2px solid var(--primary);
+        border-radius: 15px; 
+        padding: 2rem; 
+        margin: 1rem 0;
+        box-shadow: 0 0 30px rgba(0, 217, 255, 0.5);
+    }}
+    
+    .tutorial-box h3 {{
+        color: var(--primary);
+        margin-top: 0;
+    }}
+    
+    .tutorial-box ol {{
+        margin-left: 1rem;
+    }}
+    
+    .tutorial-box li {{
+        margin: 1rem 0;
+    }}
+    
+    .tutorial-box .highlight {{
+        color: var(--accent);
+        font-weight: bold;
+    }}
+    
     .workflow-box {{
         background: rgba(0, 217, 255, 0.1); 
         border: 2px solid var(--primary);
@@ -311,29 +338,6 @@ def inject_cyberpunk_css():
         padding: 0.5rem;
     }}
     
-    /* Tutorial overlay */
-    .tutorial-overlay {{
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.8);
-        z-index: 1000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }}
-    
-    .tutorial-content {{
-        background: var(--dark);
-        border: 2px solid var(--primary);
-        border-radius: 20px;
-        padding: 2rem;
-        max-width: 600px;
-        box-shadow: 0 0 50px rgba(0, 217, 255, 0.5);
-    }}
-    
     /* Hide Streamlit defaults */
     #MainMenu, footer, header {{ visibility: hidden; }}
     </style>
@@ -371,7 +375,7 @@ def display_header():
     <div class="cyber-header">
         <h1 style="font-size: 3em; margin: 0;">VIVE HEALTH REVIEW INTELLIGENCE</h1>
         <p style="color: var(--primary); text-transform: uppercase; letter-spacing: 3px;">
-            Medical Device Quality Management Platform v10.0
+            Medical Device Quality Management Platform v10.1
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -401,34 +405,10 @@ def display_header():
             st.rerun()
 
 def display_tutorial():
-    """Display interactive tutorial for first-time users"""
+    """Display interactive tutorial for first-time users - FIXED"""
     if st.session_state.show_tutorial:
         st.markdown("""
-        <style>
-            .neon-box {
-                border: 2px solid #0ff;
-                padding: 20px;
-                background-color: #000;
-                box-shadow: 0 0 10px #0ff;
-                border-radius: 10px;
-                margin-bottom: 20px;
-                color: #fff;
-            }
-            .neon-box h3 {
-                color: #0ff;
-            }
-            .neon-box ul, .neon-box ol {
-                padding-left: 20px;
-            }
-            .highlight {
-                color: #ff0;
-                font-weight: bold;
-            }
-        </style>
-        """, unsafe_allow_html=True)
-
-        st.markdown("""
-        <div class="neon-box">
+        <div class="tutorial-box">
             <h3>🎯 Quick Start Guide</h3>
             <p>Welcome to the Vive Health Review Intelligence Platform! Follow these steps:</p>
 
@@ -462,7 +442,7 @@ def display_tutorial():
                 </li>
             </ol>
 
-            <p style="color: #ff0; margin-top: 1rem;">
+            <p style="color: #FFB700; margin-top: 1rem;">
                 💡 <strong>Pro Tip:</strong> Use the AI Assistant at any time for help or to discuss your results!
             </p>
         </div>
@@ -929,24 +909,38 @@ def display_step3_marketplace_files():
         st.markdown("---")
         st.markdown("### 📊 Marketplace Data Summary")
         
-        total_returns = 0
-        total_reimbursements = 0
+        # Process correlations to ensure data is up to date
+        process_marketplace_correlations()
         
-        for file_type, data in st.session_state.marketplace_files.items():
-            if data:
-                if file_type == 'reimbursements':
-                    total_reimbursements = data['summary'].get('total_cash_reimbursed', 0)
-                else:
-                    total_returns += data['summary'].get('total_returns', 0)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            files_count = sum(1 for v in st.session_state.marketplace_files.values() if v)
-            st.metric("Files Loaded", files_count)
-        with col2:
-            st.metric("Total Returns", total_returns)
-        with col3:
-            st.metric("Reimbursements", f"${total_reimbursements:.2f}")
+        # Get data from marketplace_data (processed correlations)
+        if st.session_state.marketplace_data:
+            total_returns = 0
+            total_reimbursements = 0
+            
+            # Count returns from marketplace_data
+            if 'return_patterns' in st.session_state.marketplace_data:
+                for file_type, return_data in st.session_state.marketplace_data['return_patterns'].items():
+                    if return_data and 'count' in return_data:
+                        total_returns += return_data['count']
+            
+            # Get reimbursements from marketplace_data
+            if 'financial_impact' in st.session_state.marketplace_data:
+                if 'reimbursements' in st.session_state.marketplace_data['financial_impact']:
+                    reimb_data = st.session_state.marketplace_data['financial_impact']['reimbursements']
+                    total_reimbursements = reimb_data.get('total_amount', 0)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                files_count = sum(1 for v in st.session_state.marketplace_files.values() if v)
+                st.metric("Files Loaded", files_count)
+            with col2:
+                st.metric("Total Returns", total_returns)
+                if total_returns == 0 and any(st.session_state.marketplace_files.values()):
+                    st.caption("No returns found for this ASIN")
+            with col3:
+                st.metric("Reimbursements", f"${total_reimbursements:.2f}")
+                if total_reimbursements == 0 and st.session_state.marketplace_files.get('reimbursements'):
+                    st.caption("No reimbursements found for this ASIN")
         
         st.session_state.steps_completed['marketplace_files'] = True
 
@@ -977,11 +971,29 @@ def process_marketplace_file(uploaded_file, expected_type: str):
                     'filename': uploaded_file.name
                 }
                 
-                # Process correlations if ASIN available
-                if st.session_state.listing_details.get('asin'):
-                    process_marketplace_correlations()
+                # Always process correlations after file upload
+                process_marketplace_correlations()
                 
-                st.success(f"✅ Processed successfully: {result['summary']['row_count']} rows")
+                # Get ASIN-specific count
+                target_asin = st.session_state.listing_details.get('asin')
+                asin_count = 0
+                
+                if target_asin and st.session_state.marketplace_data:
+                    if expected_type in ['fba_returns', 'fbm_returns']:
+                        if 'return_patterns' in st.session_state.marketplace_data:
+                            if expected_type in st.session_state.marketplace_data['return_patterns']:
+                                asin_count = st.session_state.marketplace_data['return_patterns'][expected_type].get('count', 0)
+                    elif expected_type == 'reimbursements':
+                        if 'financial_impact' in st.session_state.marketplace_data:
+                            if 'reimbursements' in st.session_state.marketplace_data['financial_impact']:
+                                asin_count = st.session_state.marketplace_data['financial_impact']['reimbursements'].get('count', 0)
+                
+                # Show success with ASIN-specific info
+                total_rows = result['summary']['row_count']
+                if target_asin:
+                    st.success(f"✅ Processed {total_rows} rows, found {asin_count} records for ASIN {target_asin}")
+                else:
+                    st.success(f"✅ Processed successfully: {total_rows} rows")
                 
             else:
                 st.error(f"❌ {result.get('error', 'Processing failed')}")
@@ -991,25 +1003,43 @@ def process_marketplace_file(uploaded_file, expected_type: str):
         logger.error(f"Marketplace file error: {e}", exc_info=True)
 
 def process_marketplace_correlations():
-    """Process correlations with current ASIN"""
+    """Process correlations with current ASIN - FIXED to properly count returns"""
     target_asin = st.session_state.listing_details.get('asin')
     if not target_asin:
+        logger.info("No ASIN provided for correlation")
         return
     
     # Gather all marketplace dataframes
     marketplace_dfs = {}
     for file_type, data in st.session_state.marketplace_files.items():
-        if data:
+        if data and 'dataframe' in data:
             marketplace_dfs[file_type] = data['dataframe']
     
     if marketplace_dfs:
-        # Get correlations
+        logger.info(f"Processing correlations for ASIN {target_asin} with {len(marketplace_dfs)} files")
+        
+        # Get correlations using the detector
         correlations = AmazonFileDetector.correlate_with_asin(marketplace_dfs, target_asin)
+        
+        # Store the correlation results
         st.session_state.marketplace_data = correlations
         
-        # Show insights if data found
-        if correlations.get('return_patterns') or correlations.get('financial_impact'):
-            st.info(f"🔍 Found data for ASIN {target_asin}")
+        # Log what was found
+        if correlations:
+            logger.info(f"Correlation results: {json.dumps({k: len(v) if isinstance(v, dict) else v for k, v in correlations.items()})}")
+            
+            # Show insights if data found
+            total_returns = 0
+            if 'return_patterns' in correlations:
+                for file_type, return_data in correlations['return_patterns'].items():
+                    if return_data and 'count' in return_data:
+                        total_returns += return_data['count']
+                        logger.info(f"Found {return_data['count']} returns in {file_type}")
+            
+            if total_returns > 0 or correlations.get('financial_impact'):
+                st.info(f"🔍 Found marketplace data for ASIN {target_asin}")
+        else:
+            logger.info(f"No correlations found for ASIN {target_asin}")
 
 def display_step4_analysis():
     """Step 4: Run Analysis with clear options"""
@@ -1087,6 +1117,15 @@ def display_step4_analysis():
         if st.session_state.steps_completed['marketplace_files']:
             files_count = sum(1 for v in st.session_state.marketplace_files.values() if v)
             st.success(f"**Marketplace:** {files_count} files")
+            
+            # Show returns count if available
+            if st.session_state.marketplace_data and 'return_patterns' in st.session_state.marketplace_data:
+                total_returns = sum(
+                    data.get('count', 0) 
+                    for data in st.session_state.marketplace_data['return_patterns'].values()
+                )
+                if total_returns > 0:
+                    st.caption(f"{total_returns} returns found")
         else:
             st.info("**Marketplace:** No files")
 
@@ -1239,7 +1278,7 @@ def get_ai_chat_response(user_input: str) -> str:
 
 # Continue with remaining helper functions from original code...
 # (parse_amazon_date, calculate_basic_stats, analyze_sentiment_patterns, etc.)
-# These remain unchanged but I'll include the key ones for completeness
+# These remain unchanged
 
 def parse_amazon_date(date_string):
     """Parse Amazon review dates"""
@@ -1890,10 +1929,16 @@ Rating Distribution:
                 for data in marketplace['return_patterns'].values()
             )
             report += f"Total Returns: {total_returns}\n"
+            
+            # Break down by type
+            for file_type, data in marketplace['return_patterns'].items():
+                if data and 'count' in data:
+                    report += f"  {file_type.replace('_', ' ').title()}: {data['count']}\n"
         
         if 'financial_impact' in marketplace and 'reimbursements' in marketplace['financial_impact']:
             total_reimb = marketplace['financial_impact']['reimbursements'].get('total_amount', 0)
-            report += f"Total Reimbursements: ${total_reimb:.2f}\n"
+            reimb_count = marketplace['financial_impact']['reimbursements'].get('count', 0)
+            report += f"Total Reimbursements: ${total_reimb:.2f} ({reimb_count} transactions)\n"
     
     report += "\n" + "="*60 + "\n"
     report += f"Report generated by {APP_CONFIG['title']} v{APP_CONFIG['version']}\n"
