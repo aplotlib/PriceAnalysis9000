@@ -410,59 +410,58 @@ def display_tutorial():
                 padding: 20px;
                 background-color: #000;
                 box-shadow: 0 0 10px #0ff;
-            }
-            h3 {
-                color: #0ff;
-            }
-            p {
+                border-radius: 10px;
+                margin-bottom: 20px;
                 color: #fff;
             }
-            li {
-                color: #ddd;
+            .neon-box h3 {
+                color: #0ff;
             }
-            ul {
-                margin-left: 20px;
+            .neon-box ul, .neon-box ol {
+                padding-left: 20px;
             }
             .highlight {
                 color: #ff0;
                 font-weight: bold;
             }
         </style>
+        """, unsafe_allow_html=True)
 
+        st.markdown("""
         <div class="neon-box">
             <h3>🎯 Quick Start Guide</h3>
             <p>Welcome to the Vive Health Review Intelligence Platform! Follow these steps:</p>
-            
+
             <ol>
-                <li><strong class="highlight">Enter Product Details (Optional but Recommended)</strong>
+                <li><span class="highlight">Enter Product Details (Optional but Recommended)</span>
                     <ul>
                         <li>Paste your Amazon product URL for auto-population, OR</li>
                         <li>Manually enter your ASIN and listing details</li>
                     </ul>
                 </li>
-                
-                <li><strong class="highlight">Upload Review Data (Required)</strong>
+
+                <li><span class="highlight">Upload Review Data (Required)</span>
                     <ul>
                         <li>Export reviews from Helium 10 as CSV</li>
                         <li>Upload the file in the Review Data section</li>
                     </ul>
                 </li>
-                
-                <li><strong class="highlight">Add Marketplace Files (Optional)</strong>
+
+                <li><span class="highlight">Add Marketplace Files (Optional)</span>
                     <ul>
                         <li>Upload returns and reimbursement reports</li>
                         <li>Get deeper insights into quality issues</li>
                     </ul>
                 </li>
-                
-                <li><strong class="highlight">Run Analysis</strong>
+
+                <li><span class="highlight">Run Analysis</span>
                     <ul>
                         <li>Choose quick metrics or full AI analysis</li>
                         <li>Export results for action planning</li>
                     </ul>
                 </li>
             </ol>
-            
+
             <p style="color: #ff0; margin-top: 1rem;">
                 💡 <strong>Pro Tip:</strong> Use the AI Assistant at any time for help or to discuss your results!
             </p>
