@@ -404,33 +404,58 @@ def display_tutorial():
     """Display interactive tutorial for first-time users"""
     if st.session_state.show_tutorial:
         st.markdown("""
+        <style>
+            .neon-box {
+                border: 2px solid #0ff;
+                padding: 20px;
+                background-color: #000;
+                box-shadow: 0 0 10px #0ff;
+            }
+            h3 {
+                color: #0ff;
+            }
+            p {
+                color: #fff;
+            }
+            li {
+                color: #ddd;
+            }
+            ul {
+                margin-left: 20px;
+            }
+            .highlight {
+                color: #ff0;
+                font-weight: bold;
+            }
+        </style>
+
         <div class="neon-box">
-            <h3 style="color: var(--primary);">🎯 Quick Start Guide</h3>
+            <h3>🎯 Quick Start Guide</h3>
             <p>Welcome to the Vive Health Review Intelligence Platform! Follow these steps:</p>
             
             <ol>
-                <li><strong>Enter Product Details (Optional but Recommended)</strong>
+                <li><strong class="highlight">Enter Product Details (Optional but Recommended)</strong>
                     <ul>
                         <li>Paste your Amazon product URL for auto-population, OR</li>
                         <li>Manually enter your ASIN and listing details</li>
                     </ul>
                 </li>
                 
-                <li><strong>Upload Review Data (Required)</strong>
+                <li><strong class="highlight">Upload Review Data (Required)</strong>
                     <ul>
                         <li>Export reviews from Helium 10 as CSV</li>
                         <li>Upload the file in the Review Data section</li>
                     </ul>
                 </li>
                 
-                <li><strong>Add Marketplace Files (Optional)</strong>
+                <li><strong class="highlight">Add Marketplace Files (Optional)</strong>
                     <ul>
                         <li>Upload returns and reimbursement reports</li>
                         <li>Get deeper insights into quality issues</li>
                     </ul>
                 </li>
                 
-                <li><strong>Run Analysis</strong>
+                <li><strong class="highlight">Run Analysis</strong>
                     <ul>
                         <li>Choose quick metrics or full AI analysis</li>
                         <li>Export results for action planning</li>
@@ -438,7 +463,7 @@ def display_tutorial():
                 </li>
             </ol>
             
-            <p style="color: var(--accent); margin-top: 1rem;">
+            <p style="color: #ff0; margin-top: 1rem;">
                 💡 <strong>Pro Tip:</strong> Use the AI Assistant at any time for help or to discuss your results!
             </p>
         </div>
