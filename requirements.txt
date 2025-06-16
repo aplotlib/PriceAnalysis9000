@@ -6,3 +6,41 @@ beautifulsoup4
 xlsxwriter
 reportlab
 openai
+# Core Dependencies
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# AI/ML Dependencies
+openai>=1.0.0
+anthropic>=0.7.0
+requests>=2.31.0
+
+# PDF Processing
+pdfplumber>=0.10.0
+PyPDF2>=3.0.0
+
+# Image Processing
+Pillow>=10.0.0
+pytesseract>=0.3.10
+
+# Data Processing
+chardet>=5.2.0
+python-dateutil>=2.8.2
+
+# Excel Support
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# Visualization
+plotly>=5.17.0
+
+# Web Scraping (for existing features)
+beautifulsoup4>=4.12.0
+
+# Optional but recommended
+reportlab>=4.0.0  # For PDF generation
+asyncio>=3.4.3    # For async operations
+
+# Development/Testing
+python-dotenv>=1.0.0  # For environment variables
