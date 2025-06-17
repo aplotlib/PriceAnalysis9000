@@ -1,148 +1,122 @@
 """
-Amazon Returns Quality Analyzer - Enhanced Version
-Version: 7.0 - AI-Powered Medical Device Safety Focus
-Critical: Quality Manager's Tool for Return Analysis
+FDA Medical Device Return Analyzer
+Version: 8.0 - Reportable Event Detection System
+Purpose: Identify potential FDA MDR (Medical Device Reporting) events
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import io
-from typing import Dict, List, Any, Optional, Tuple, Union
-import re
-import json
-from collections import Counter, defaultdict
+from typing import Dict, List, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
 import time
-import os
-import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure page
+# Configure page - MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(
-    page_title="Quality Analysis Tool - Amazon Returns",
-    page_icon="🏥",
+    page_title="FDA Medical Device Return Analyzer",
+    page_icon="🚨",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Import modules with error handling
+# Import enhanced AI analysis module
 try:
     from enhanced_ai_analysis import (
-        EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES, 
-        FBA_REASON_MAP, detect_injury_severity
+        EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES,
+        FDA_MDR_TRIGGERS, detect_fda_reportable_event, FileProcessor
     )
     AI_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     AI_AVAILABLE = False
-    logger.error("enhanced_ai_analysis not available - AI features disabled")
-    # Define categories directly
-    MEDICAL_DEVICE_CATEGORIES = [
-        'Size/Fit Issues',
-        'Comfort Issues',
-        'Product Defects/Quality',
-        'Performance/Effectiveness',
-        'Stability/Positioning Issues',
-        'Equipment Compatibility',
-        'Design/Material Issues',
-        'Wrong Product/Misunderstanding',
-        'Missing Components',
-        'Customer Error/Changed Mind',
-        'Shipping/Fulfillment Issues',
-        'Assembly/Usage Difficulty',
-        'Medical/Health Concerns',
-        'Price/Value',
-        'Other/Miscellaneous'
-    ]
+    logger.error(f"Enhanced AI analysis not available: {e}")
+    st.error("Critical module missing. Please check installation.")
 
-try:
-    from smart_column_mapper import SmartColumnMapper
-    MAPPER_AVAILABLE = True
-except ImportError:
-    MAPPER_AVAILABLE = False
-    logger.warning("smart_column_mapper not available")
+# App styling
+def apply_custom_css():
+    """Apply custom CSS for professional appearance"""
+    st.markdown("""
+    <style>
+    /* Main theme */
+    .stApp {
+        background-color: #f5f5f5;
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        color: #1e3a8a;
+    }
+    
+    /* FDA Alert styling */
+    .fda-alert {
+        background-color: #dc2626;
+        color: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+        font-weight: bold;
+    }
+    
+    /* Reportable event card */
+    .reportable-event {
+        background-color: #fee2e2;
+        border: 2px solid #dc2626;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    
+    /* Metrics */
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+        text-align: center;
+    }
+    
+    .metric-value {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1e3a8a;
+    }
+    
+    .metric-label {
+        color: #6b7280;
+        font-size: 0.875rem;
+        text-transform: uppercase;
+    }
+    
+    /* Critical events */
+    .critical {
+        color: #dc2626;
+        font-weight: bold;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+    """, unsafe_allow_html=True)
 
-try:
-    from pdf_analyzer import PDFAnalyzer
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-    logger.warning("pdf_analyzer not available")
-
-try:
-    from injury_detector import InjuryDetector
-    INJURY_AVAILABLE = True
-except ImportError:
-    INJURY_AVAILABLE = False
-    logger.warning("injury_detector not available")
-
-try:
-    from universal_file_detector import UniversalFileDetector
-    FILE_DETECTOR_AVAILABLE = True
-except ImportError:
-    FILE_DETECTOR_AVAILABLE = False
-    logger.warning("universal_file_detector not available")
-
-# Professional color scheme
-COLORS = {
-    'primary': '#1E88E5',
-    'secondary': '#FFC107',
-    'success': '#4CAF50',
-    'danger': '#F44336',
-    'warning': '#FF9800',
-    'info': '#00BCD4',
-    'critical': '#D32F2F',
-    'dark': '#212529',
-    'light': '#F8F9FA'
-}
-
-# Session state initialization
-def init_session_state():
-    """Initialize all session state variables"""
+def initialize_session_state():
+    """Initialize session state variables"""
     defaults = {
-        # Data storage
-        'raw_data': [],
+        'data': None,
         'processed_data': None,
-        'categorized_data': None,
-        'sales_data': None,
-        'uploaded_files': [],
-        
-        # Analysis results
-        'category_analysis': {},
-        'product_analysis': {},
-        'quality_metrics': {},
-        'injury_analysis': None,
-        'ai_insights': None,
-        'return_rate_analysis': {},
-        
-        # Processing state
+        'fda_report': None,
+        'file_uploaded': False,
         'processing_complete': False,
-        'files_uploaded': False,
-        'analysis_ready': False,
-        'ai_available': AI_AVAILABLE,
-        
-        # AI components
         'ai_analyzer': None,
-        'pdf_analyzer': None,
-        'injury_detector': None,
-        'file_detector': None,
-        'column_mapper': None,
-        
-        # Tracking
-        'total_returns': 0,
-        'total_sales': 0,
-        'quality_issues': 0,
-        'processing_time': 0.0,
-        'api_cost': 0.0,
-        'total_injuries': 0,
-        'unmapped_columns': [],
-        'ai_failures': []
+        'reportable_events': 0,
+        'critical_events': 0
     }
     
     for key, value in defaults.items():
@@ -150,662 +124,329 @@ def init_session_state():
             st.session_state[key] = value
 
 def display_header():
-    """Display professional header"""
-    st.markdown("""
-    <div style="background: linear-gradient(135deg, #1E88E5 0%, #00BCD4 100%); 
-                padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
-        <h1 style="color: white; margin: 0; font-size: 2.5rem;">
-            🏥 Quality Analysis Tool
-        </h1>
-        <p style="color: white; opacity: 0.9; margin: 0.5rem 0;">
-            Medical Device Return Analysis & Quality Management System
-        </p>
-        <p style="color: white; opacity: 0.8; font-size: 0.9rem;">
-            Focus: Amazon Returns Categorization | Injury Detection | Quality Insights
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-def display_ai_status():
-    """Display AI availability status"""
-    col1, col2, col3 = st.columns([1, 1, 1])
+    """Display app header with FDA focus"""
+    col1, col2 = st.columns([3, 1])
     
     with col1:
-        if st.session_state.ai_available:
-            st.success("✅ AI Analysis Available")
-        else:
-            st.error("❌ AI Analysis Not Available")
-            st.info("System will show manual mapping options")
+        st.title("🚨 FDA Medical Device Return Analyzer")
+        st.markdown("""
+        **Purpose**: Identify potential FDA reportable events in product returns
+        
+        **Detects**: Deaths, serious injuries, falls, malfunctions, allergic reactions, and other adverse events
+        """)
     
     with col2:
-        st.info(f"📊 Files Uploaded: {len(st.session_state.uploaded_files)}")
-    
-    with col3:
-        if st.session_state.total_returns > 0:
-            st.metric("Total Returns", st.session_state.total_returns)
+        st.info("""
+        **FDA MDR Requirements**
+        - Report deaths immediately
+        - Report serious injuries within 30 days
+        - Document all adverse events
+        """)
 
-def file_uploader_section():
-    """Enhanced file upload section with multi-file support"""
-    st.markdown("### 📁 Upload Return Data Files")
-    st.markdown("Supports: PDF, Excel, CSV, TSV, TXT files from Amazon Seller Central")
-    
-    uploaded_files = st.file_uploader(
-        "Choose files",
-        type=['pdf', 'xlsx', 'xls', 'csv', 'tsv', 'txt'],
-        accept_multiple_files=True,
-        help="Upload multiple files at once. Supports Amazon PDF returns, FBA reports, and spreadsheets."
-    )
-    
-    # Sales data upload (optional)
-    st.markdown("### 📈 Upload Sales Data (Optional)")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        sales_file = st.file_uploader(
-            "Upload sales data for return rate calculation",
-            type=['xlsx', 'csv', 'tsv'],
-            help="Upload sales data to calculate return rates by product"
-        )
-    
-    with col2:
-        st.markdown("#### Or Enter Manually")
-        manual_sales = st.number_input(
-            "Total Units Sold",
-            min_value=0,
-            value=0,
-            help="Enter total sales for return rate calculation"
-        )
-        if manual_sales > 0:
-            st.session_state.total_sales = manual_sales
-    
-    if uploaded_files:
-        st.session_state.uploaded_files = uploaded_files
-        st.session_state.files_uploaded = True
-        
-        # Process sales file if uploaded
-        if sales_file:
-            process_sales_file(sales_file)
-        
-        return True
-    
-    return False
-
-def process_sales_file(sales_file):
-    """Process sales data file"""
+def process_file(uploaded_file) -> pd.DataFrame:
+    """Process uploaded file of any supported format"""
     try:
-        if sales_file.name.endswith('.csv'):
-            df = pd.read_csv(sales_file)
-        elif sales_file.name.endswith('.tsv'):
-            df = pd.read_csv(sales_file, sep='\\t')
+        file_type = uploaded_file.type.split('/')[-1]
+        
+        # Use FileProcessor for universal file handling
+        if AI_AVAILABLE:
+            df = FileProcessor.read_file(uploaded_file, uploaded_file.type)
         else:
-            df = pd.read_excel(sales_file)
+            # Fallback to basic CSV reading
+            df = pd.read_csv(uploaded_file)
         
-        st.session_state.sales_data = df
-        st.success(f"✅ Sales data loaded: {len(df)} records")
+        # Standardize column names
+        df.columns = df.columns.str.lower().str.strip()
         
-        # Try to auto-detect sales quantity column
-        quantity_cols = [col for col in df.columns if 'quantity' in col.lower() or 'sales' in col.lower()]
-        if quantity_cols:
-            total_sales = df[quantity_cols[0]].sum()
-            st.session_state.total_sales = total_sales
-            st.info(f"Total sales detected: {total_sales:,} units")
-            
-    except Exception as e:
-        st.error(f"Error processing sales file: {str(e)}")
-
-def process_files():
-    """Process all uploaded files"""
-    if not st.session_state.uploaded_files:
-        return
-    
-    all_returns = []
-    processing_errors = []
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for idx, file in enumerate(st.session_state.uploaded_files):
-        status_text.text(f"Processing {file.name}...")
+        # Check for required columns
+        required_cols = ['reason', 'customer-comments']
+        missing_cols = [col for col in required_cols if col not in df.columns]
         
-        try:
-            # Read file content
-            file_content = file.read()
-            file.seek(0)  # Reset for potential re-reading
-            
-            # Detect file type and process accordingly
-            if file.name.endswith('.pdf'):
-                if PDF_AVAILABLE:
-                    returns = process_pdf_file(file_content, file.name)
-                else:
-                    st.error(f"PDF processing not available for {file.name}")
-                    st.info("Please install: pip install pdfplumber PyPDF2")
-                    continue
-            else:
-                # Process structured files (CSV, Excel, etc.)
-                returns = process_structured_file(file, file.name)
-            
-            if returns:
-                all_returns.extend(returns)
-                st.success(f"✅ Processed {file.name}: {len(returns)} returns found")
-            else:
-                st.warning(f"⚠️ No returns found in {file.name}")
-                
-        except Exception as e:
-            error_msg = f"Error processing {file.name}: {str(e)}"
-            processing_errors.append(error_msg)
-            st.error(error_msg)
-            logger.error(f"File processing error: {e}", exc_info=True)
-        
-        progress_bar.progress((idx + 1) / len(st.session_state.uploaded_files))
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Store results
-    if all_returns:
-        st.session_state.raw_data = all_returns
-        st.session_state.total_returns = len(all_returns)
-        
-        # Categorize returns
-        categorize_returns(all_returns)
-        
-        st.success(f"✅ Total returns processed: {len(all_returns)}")
-    else:
-        st.error("No returns found in any uploaded files")
-    
-    if processing_errors:
-        with st.expander("Processing Errors"):
-            for error in processing_errors:
-                st.error(error)
-
-def process_pdf_file(content: bytes, filename: str) -> List[Dict]:
-    """Process PDF file and extract returns"""
-    if not PDF_AVAILABLE or not st.session_state.pdf_analyzer:
-        st.error("PDF analyzer not initialized")
-        return []
-    
-    try:
-        result = st.session_state.pdf_analyzer.extract_returns_from_pdf(content, filename)
-        
-        if 'error' in result:
-            st.error(f"PDF extraction error: {result['error']}")
-            return []
-        
-        returns = result.get('returns', [])
-        
-        # Standardize the data format
-        standardized_returns = []
-        for ret in returns:
-            standardized_returns.append({
-                'order_id': ret.get('order_id', ''),
-                'asin': ret.get('asin', ''),
-                'sku': ret.get('sku', ''),
-                'return_date': ret.get('return_date', ''),
-                'return_reason': ret.get('return_reason', ''),
-                'buyer_comment': ret.get('customer_comment', ret.get('buyer_comment', '')),
-                'source_file': filename,
-                'file_type': 'PDF'
-            })
-        
-        return standardized_returns
-        
-    except Exception as e:
-        st.error(f"Error processing PDF: {str(e)}")
-        return []
-
-def process_structured_file(file, filename: str) -> List[Dict]:
-    """Process CSV, Excel, TSV files"""
-    try:
-        # Read file into dataframe
-        if filename.endswith('.csv'):
-            df = pd.read_csv(file)
-        elif filename.endswith('.tsv') or filename.endswith('.txt'):
-            # Try tab-separated first
-            df = pd.read_csv(file, sep='\\t')
-            # Check if it's actually comma-separated
-            if len(df.columns) == 1 and ',' in str(df.columns[0]):
-                file.seek(0)
-                df = pd.read_csv(file)
-        else:  # Excel
-            df = pd.read_excel(file)
-        
-        # Clean column names
-        df.columns = df.columns.str.strip()
-        
-        # Use AI column mapper if available
-        if MAPPER_AVAILABLE and st.session_state.column_mapper:
-            return process_with_ai_mapper(df, filename)
-        else:
-            return process_with_manual_mapping(df, filename)
-            
-    except Exception as e:
-        st.error(f"Error reading {filename}: {str(e)}")
-        return []
-
-def process_with_ai_mapper(df: pd.DataFrame, filename: str) -> List[Dict]:
-    """Process dataframe using AI column mapping"""
-    st.info("🤖 Using AI to detect column mappings...")
-    
-    try:
-        # Get AI mapping suggestions
-        column_mapping = st.session_state.column_mapper.detect_columns(df)
-        
-        # Validate mapping
-        validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
-        
-        if not validation['is_valid']:
-            st.warning("AI couldn't map all required columns")
-            st.info("Unmapped columns: " + ", ".join(validation['missing_required']))
-            
-            # Show what was detected
-            if column_mapping:
-                st.write("Detected mappings:")
-                for col_type, col_name in column_mapping.items():
-                    st.write(f"- {col_type}: {col_name}")
-            
-            # Allow manual override
-            return process_with_manual_mapping(df, filename, column_mapping)
-        
-        # Apply mapping
-        mapped_df = st.session_state.column_mapper.map_dataframe(df, column_mapping)
-        
-        # Convert to return format
-        returns = dataframe_to_returns(mapped_df, filename)
-        
-        return returns
-        
-    except Exception as e:
-        st.error(f"AI mapping failed: {str(e)}")
-        st.session_state.ai_failures.append(f"Column mapping failed for {filename}")
-        return process_with_manual_mapping(df, filename)
-
-def process_with_manual_mapping(df: pd.DataFrame, filename: str, 
-                               pre_mapping: Dict = None) -> List[Dict]:
-    """Manual column mapping interface"""
-    st.markdown("### 📊 Manual Column Mapping")
-    st.write(f"File: {filename}")
-    st.write(f"Rows: {len(df)}, Columns: {len(df.columns)}")
-    
-    # Show sample data
-    with st.expander("View Sample Data"):
-        st.dataframe(df.head(10))
-    
-    # Column mapping interface
-    st.markdown("#### Map Columns to Return Fields")
-    
-    required_fields = {
-        'order_id': 'Order ID',
-        'asin': 'ASIN',
-        'sku': 'SKU', 
-        'return_date': 'Return Date',
-        'return_reason': 'Return Reason',
-        'buyer_comment': 'Customer Comment'
-    }
-    
-    column_mapping = pre_mapping or {}
-    
-    col1, col2 = st.columns(2)
-    
-    for idx, (field, label) in enumerate(required_fields.items()):
-        if idx % 2 == 0:
-            with col1:
-                default = column_mapping.get(field, 'Not mapped')
-                options = ['Not mapped'] + list(df.columns)
-                
-                selected = st.selectbox(
-                    f"{label}:",
-                    options,
-                    index=options.index(default) if default in options else 0,
-                    key=f"map_{field}_{filename}"
-                )
-                
-                if selected != 'Not mapped':
-                    column_mapping[field] = selected
-        else:
-            with col2:
-                default = column_mapping.get(field, 'Not mapped')
-                options = ['Not mapped'] + list(df.columns)
-                
-                selected = st.selectbox(
-                    f"{label}:",
-                    options,
-                    index=options.index(default) if default in options else 0,
-                    key=f"map_{field}_{filename}"
-                )
-                
-                if selected != 'Not mapped':
-                    column_mapping[field] = selected
-    
-    # Check for unmapped columns
-    unmapped = [col for col in df.columns if col not in column_mapping.values()]
-    if unmapped:
-        st.session_state.unmapped_columns.extend(unmapped)
-        with st.expander(f"⚠️ Unmapped columns ({len(unmapped)})"):
-            st.write(unmapped)
-    
-    # Process with mapping
-    if st.button(f"Process {filename}", key=f"process_{filename}"):
-        returns = []
-        
-        for idx, row in df.iterrows():
-            return_item = {
-                'source_file': filename,
-                'file_type': filename.split('.')[-1].upper()
+        if missing_cols:
+            # Try alternative column names
+            alt_names = {
+                'reason': ['return reason', 'return_reason', 'reason_code'],
+                'customer-comments': ['comments', 'customer comments', 'customer_comments', 'notes']
             }
             
-            for field, column in column_mapping.items():
-                if column in df.columns:
-                    return_item[field] = row.get(column, '')
-            
-            # Ensure required fields exist
-            for field in required_fields:
-                if field not in return_item:
-                    return_item[field] = ''
-            
-            returns.append(return_item)
+            for missing, alternatives in alt_names.items():
+                if missing in missing_cols:
+                    for alt in alternatives:
+                        if alt in df.columns:
+                            df.rename(columns={alt: missing}, inplace=True)
+                            missing_cols.remove(missing)
+                            break
         
-        return returns
-    
-    return []
-
-def dataframe_to_returns(df: pd.DataFrame, filename: str) -> List[Dict]:
-    """Convert mapped dataframe to returns format"""
-    returns = []
-    
-    for idx, row in df.iterrows():
-        return_item = {
-            'order_id': str(row.get('order_id', '')),
-            'asin': str(row.get('asin', '')),
-            'sku': str(row.get('sku', '')),
-            'return_date': str(row.get('return_date', '')),
-            'return_reason': str(row.get('return_reason', '')),
-            'buyer_comment': str(row.get('buyer_comment', row.get('customer_comment', ''))),
-            'source_file': filename,
-            'file_type': filename.split('.')[-1].upper()
-        }
+        return df
         
-        returns.append(return_item)
-    
-    return returns
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        return None
 
-def categorize_returns(returns: List[Dict]):
-    """Categorize all returns using AI or show failure message"""
-    st.markdown("### 🏷️ Categorizing Returns")
+def display_fda_summary(report: Dict[str, Any]):
+    """Display FDA-focused summary with alerts"""
+    if report['summary']['reportable_events'] > 0:
+        st.markdown("""
+        <div class="fda-alert">
+        ⚠️ FDA REPORTABLE EVENTS DETECTED - IMMEDIATE REVIEW REQUIRED
+        </div>
+        """, unsafe_allow_html=True)
     
-    categorized = []
-    ai_failures = 0
-    
-    progress_bar = st.progress(0)
-    
-    for idx, return_item in enumerate(returns):
-        if AI_AVAILABLE and st.session_state.ai_analyzer:
-            try:
-                # Use AI categorization
-                category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
-                    complaint=return_item.get('buyer_comment', ''),
-                    return_reason=return_item.get('return_reason', ''),
-                    fba_reason=return_item.get('fba_reason', '')
-                )
-                
-                return_item['category'] = category
-                return_item['confidence'] = confidence
-                return_item['severity'] = severity
-                return_item['categorization_method'] = 'AI'
-                
-            except Exception as e:
-                ai_failures += 1
-                return_item['category'] = 'UNCATEGORIZED - AI FAILED'
-                return_item['confidence'] = 0.0
-                return_item['severity'] = 'unknown'
-                return_item['categorization_method'] = 'FAILED'
-                return_item['error'] = str(e)
-                
-        else:
-            # No AI available
-            return_item['category'] = 'UNCATEGORIZED - NO AI AVAILABLE'
-            return_item['confidence'] = 0.0
-            return_item['severity'] = 'unknown'
-            return_item['categorization_method'] = 'NONE'
-        
-        categorized.append(return_item)
-        progress_bar.progress((idx + 1) / len(returns))
-    
-    progress_bar.empty()
-    
-    # Store results
-    st.session_state.categorized_data = pd.DataFrame(categorized)
-    st.session_state.processing_complete = True
-    
-    # Show results summary
-    if ai_failures > 0:
-        st.error(f"❌ AI categorization failed for {ai_failures} returns")
-        st.info("These returns are marked as 'UNCATEGORIZED - AI FAILED'")
-    
-    if not AI_AVAILABLE:
-        st.error("❌ AI analysis is not available. All returns marked as 'UNCATEGORIZED - NO AI AVAILABLE'")
-        st.info("To enable AI categorization, ensure enhanced_ai_analysis module is properly installed")
-
-def display_analysis_results():
-    """Display comprehensive analysis results"""
-    if not st.session_state.processing_complete:
-        return
-    
-    df = st.session_state.categorized_data
-    
-    # Calculate metrics
-    total_returns = len(df)
-    categorized_count = len(df[~df['category'].str.contains('UNCATEGORIZED')])
-    
-    # Display key metrics
+    # Key metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Returns", f"{total_returns:,}")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{report['summary']['total_returns']}</div>
+            <div class="metric-label">Total Returns</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.metric("Categorized", f"{categorized_count:,}")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value critical">{report['summary']['reportable_events']}</div>
+            <div class="metric-label">Reportable Events</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col3:
-        if st.session_state.total_sales > 0:
-            return_rate = (total_returns / st.session_state.total_sales) * 100
-            st.metric("Return Rate", f"{return_rate:.2f}%")
-        else:
-            st.metric("Return Rate", "No sales data")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value critical">{report['summary']['critical_events']}</div>
+            <div class="metric-label">Critical Severity</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col4:
-        quality_issues = len(df[df['category'].isin(['Product Defects/Quality', 
-                                                     'Performance/Effectiveness',
-                                                     'Design/Material Issues'])])
-        st.metric("Quality Issues", f"{quality_issues:,}")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{report['summary']['mdr_required']}</div>
+            <div class="metric-label">MDR Required</div>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Category breakdown
-    st.markdown("### 📊 Return Categories")
-    
-    category_counts = df['category'].value_counts()
-    
-    # Create visualization
-    fig = px.pie(
-        values=category_counts.values,
-        names=category_counts.index,
-        title="Return Category Distribution",
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Detailed breakdown table
-    st.markdown("### 📋 Detailed Category Breakdown")
-    
-    category_summary = df.groupby('category').agg({
-        'order_id': 'count',
-        'confidence': 'mean'
-    }).round(2)
-    
-    category_summary.columns = ['Count', 'Avg Confidence']
-    category_summary['Percentage'] = (category_summary['Count'] / total_returns * 100).round(2)
-    
-    st.dataframe(category_summary.sort_values('Count', ascending=False))
-    
-    # Product analysis if ASIN data available
-    if 'asin' in df.columns and df['asin'].notna().any():
-        st.markdown("### 🏷️ Product Analysis")
+    # Event type breakdown
+    if report['by_event_type']:
+        st.subheader("📊 Events by Type")
         
-        product_returns = df.groupby('asin').agg({
-            'order_id': 'count',
-            'category': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Unknown'
-        })
-        
-        product_returns.columns = ['Returns', 'Top Category']
-        product_returns = product_returns.sort_values('Returns', ascending=False).head(20)
-        
-        fig2 = px.bar(
-            product_returns.reset_index(),
-            x='asin',
-            y='Returns',
-            color='Top Category',
-            title="Top 20 Products by Return Count"
+        # Create bar chart
+        event_df = pd.DataFrame(
+            list(report['by_event_type'].items()),
+            columns=['Event Type', 'Count']
         )
         
-        st.plotly_chart(fig2, use_container_width=True)
+        fig = px.bar(
+            event_df, 
+            x='Event Type', 
+            y='Count',
+            title='FDA Reportable Events by Type',
+            color='Count',
+            color_continuous_scale=['#fee2e2', '#dc2626']
+        )
+        st.plotly_chart(fig, use_container_width=True)
     
-    # Show uncategorized items
-    uncategorized = df[df['category'].str.contains('UNCATEGORIZED')]
-    if len(uncategorized) > 0:
-        with st.expander(f"⚠️ Uncategorized Returns ({len(uncategorized)})"):
-            st.dataframe(uncategorized[['order_id', 'return_reason', 'buyer_comment', 'category']])
-
-def export_results():
-    """Export analysis results"""
-    if not st.session_state.processing_complete:
-        return
-    
-    st.markdown("### 💾 Export Results")
-    
-    df = st.session_state.categorized_data
-    
-    # Prepare Excel export with multiple sheets
-    output = io.BytesIO()
-    
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # Main data sheet
-        df.to_excel(writer, sheet_name='All Returns', index=False)
+    # Affected products
+    if report['affected_products']:
+        st.subheader("🏥 Most Affected Products")
         
-        # Category sheets - only for properly categorized items
-        categorized_df = df[~df['category'].str.contains('UNCATEGORIZED')]
+        products_df = pd.DataFrame.from_dict(
+            report['affected_products'], 
+            orient='index'
+        ).reset_index()
+        products_df.columns = ['Product', 'ASIN', 'Events', 'MDR Required']
         
-        for category in MEDICAL_DEVICE_CATEGORIES:
-            category_df = categorized_df[categorized_df['category'] == category]
-            if len(category_df) > 0:
-                category_df.to_excel(writer, sheet_name=category[:30], index=False)
-        
-        # Summary sheet
-        summary_data = {
-            'Metric': ['Total Returns', 'Categorized', 'Uncategorized', 'Quality Issues', 
-                      'Return Rate', 'Processing Time'],
-            'Value': [
-                len(df),
-                len(categorized_df),
-                len(df) - len(categorized_df),
-                len(df[df['category'].isin(['Product Defects/Quality', 
-                                           'Performance/Effectiveness'])]),
-                f"{(len(df) / st.session_state.total_sales * 100):.2f}%" if st.session_state.total_sales > 0 else "N/A",
-                f"{st.session_state.processing_time:.2f} seconds"
-            ]
-        }
-        
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+        st.dataframe(
+            products_df,
+            use_container_width=True,
+            hide_index=True
+        )
     
-    output.seek(0)
-    
-    st.download_button(
-        label="📥 Download Excel Report",
-        data=output,
-        file_name=f"return_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    
-    # CSV export option
-    csv = df.to_csv(index=False)
-    st.download_button(
-        label="📥 Download CSV",
-        data=csv,
-        file_name=f"returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv"
-    )
+    # Recommendations
+    if report['recommendations']:
+        st.subheader("⚡ Immediate Actions Required")
+        for rec in report['recommendations']:
+            st.warning(f"• {rec}")
 
 def main():
     """Main application flow"""
-    init_session_state()
-    
-    # Initialize components if available
-    if AI_AVAILABLE and not st.session_state.ai_analyzer:
-        st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider=AIProvider.FASTEST)
-    
-    if PDF_AVAILABLE and not st.session_state.pdf_analyzer:
-        st.session_state.pdf_analyzer = PDFAnalyzer()
-    
-    if MAPPER_AVAILABLE and not st.session_state.column_mapper:
-        st.session_state.column_mapper = SmartColumnMapper(st.session_state.ai_analyzer)
-    
-    # Display header
+    # Initialize
+    initialize_session_state()
+    apply_custom_css()
     display_header()
-    
-    # Display AI status
-    display_ai_status()
     
     # Sidebar
     with st.sidebar:
-        st.markdown("### ⚙️ Settings")
+        st.header("📁 File Upload")
         
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=['csv', 'xlsx', 'xls', 'tsv', 'txt', 'pdf'],
+            help="Upload returns data from Amazon Seller Central"
+        )
+        
+        if uploaded_file:
+            st.success(f"File uploaded: {uploaded_file.name}")
+            st.session_state.file_uploaded = True
+        
+        st.divider()
+        
+        # AI Provider selection
         if AI_AVAILABLE:
-            ai_provider = st.selectbox(
+            st.subheader("🤖 AI Settings")
+            provider = st.selectbox(
                 "AI Provider",
-                ["Fastest", "OpenAI", "Claude", "Both"],
-                help="Select AI provider for categorization"
+                options=[AIProvider.FASTEST, AIProvider.QUALITY, AIProvider.OPENAI, AIProvider.CLAUDE],
+                help="Select AI provider for analysis"
             )
-            
-            if ai_provider != "Fastest" and st.session_state.ai_analyzer:
-                provider_map = {
-                    "OpenAI": AIProvider.OPENAI,
-                    "Claude": AIProvider.CLAUDE,
-                    "Both": AIProvider.BOTH
-                }
-                st.session_state.ai_analyzer.provider = provider_map.get(ai_provider, AIProvider.FASTEST)
         
-        st.markdown("### 📊 Categories")
-        st.markdown("Returns are categorized into:")
-        for category in MEDICAL_DEVICE_CATEGORIES:
-            st.markdown(f"• {category}")
+        st.divider()
+        
+        # Info
+        st.info("""
+        **Supported Formats:**
+        - CSV, TSV, TXT
+        - Excel (XLSX, XLS)
+        - PDF (with tables)
+        
+        **Required Columns:**
+        - reason / return_reason
+        - customer-comments / comments
+        """)
     
     # Main content
-    tab1, tab2, tab3 = st.tabs(["📤 Upload & Process", "📊 Analysis", "💾 Export"])
+    if st.session_state.file_uploaded and uploaded_file:
+        # Process file
+        if st.button("🔍 Analyze for FDA Reportable Events", type="primary", use_container_width=True):
+            with st.spinner("Processing file and detecting reportable events..."):
+                # Read file
+                df = process_file(uploaded_file)
+                
+                if df is not None:
+                    st.session_state.data = df
+                    
+                    # Initialize AI analyzer
+                    if AI_AVAILABLE and not st.session_state.ai_analyzer:
+                        st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
+                    
+                    # Analyze returns
+                    if st.session_state.ai_analyzer:
+                        processed_df = st.session_state.ai_analyzer.batch_categorize(df)
+                        st.session_state.processed_data = processed_df
+                        
+                        # Generate FDA report
+                        fda_report = st.session_state.ai_analyzer.generate_fda_report(processed_df)
+                        st.session_state.fda_report = fda_report
+                        st.session_state.processing_complete = True
+                    else:
+                        st.error("AI analyzer not available")
     
-    with tab1:
-        if file_uploader_section():
-            if st.button("🚀 Process All Files", type="primary"):
-                start_time = time.time()
-                process_files()
-                st.session_state.processing_time = time.time() - start_time
-                st.success(f"✅ Processing complete in {st.session_state.processing_time:.2f} seconds")
+    # Display results
+    if st.session_state.processing_complete:
+        st.divider()
+        
+        # FDA Summary
+        display_fda_summary(st.session_state.fda_report)
+        
+        # Detailed reportable events
+        if st.session_state.fda_report['summary']['reportable_events'] > 0:
+            st.divider()
+            st.subheader("🚨 Detailed Reportable Events")
+            
+            reportable_df = st.session_state.processed_data[
+                st.session_state.processed_data['fda_reportable'] == True
+            ]
+            
+            # Add severity color coding
+            def severity_color(severity):
+                colors = {
+                    'CRITICAL': '#dc2626',
+                    'HIGH': '#f59e0b',
+                    'MODERATE': '#3b82f6',
+                    'LOW': '#10b981'
+                }
+                return f'background-color: {colors.get(severity, "#e5e7eb")}'
+            
+            # Display with styling
+            st.dataframe(
+                reportable_df[[
+                    'order-id', 'asin', 'product-name', 'reason',
+                    'customer-comments', 'severity', 'event_types', 'requires_mdr'
+                ]].style.applymap(
+                    lambda x: severity_color(x) if isinstance(x, str) and x in ['CRITICAL', 'HIGH', 'MODERATE', 'LOW'] else '',
+                    subset=['severity']
+                ),
+                use_container_width=True,
+                height=400
+            )
+        
+        # Export options
+        st.divider()
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Export FDA summary
+            if st.button("📄 Export FDA Summary", use_container_width=True):
+                if st.session_state.ai_analyzer:
+                    summary_df = st.session_state.ai_analyzer.export_fda_summary(
+                        st.session_state.processed_data
+                    )
+                    
+                    if not summary_df.empty:
+                        csv = summary_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download FDA Summary CSV",
+                            data=csv,
+                            file_name=f"fda_reportable_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+        
+        with col2:
+            # Export full analysis
+            if st.button("📊 Export Full Analysis", use_container_width=True):
+                csv = st.session_state.processed_data.to_csv(index=False)
+                st.download_button(
+                    label="Download Full Analysis CSV",
+                    data=csv,
+                    file_name=f"return_analysis_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        with col3:
+            # Generate MDR template
+            if st.session_state.fda_report['summary']['mdr_required'] > 0:
+                if st.button("📋 Generate MDR Template", use_container_width=True):
+                    st.info("MDR form template generation would be implemented here")
     
-    with tab2:
-        if st.session_state.processing_complete:
-            display_analysis_results()
-        else:
-            st.info("📤 Please upload and process files first")
-    
-    with tab3:
-        if st.session_state.processing_complete:
-            export_results()
-        else:
-            st.info("📤 Please upload and process files first")
-    
-    # Display any AI failures
-    if st.session_state.ai_failures:
-        with st.expander("⚠️ AI Processing Issues"):
-            for failure in st.session_state.ai_failures:
-                st.warning(failure)
+    else:
+        # Instructions
+        st.markdown("""
+        ### 📋 How to Use This Tool
+        
+        1. **Export your returns data** from Amazon Seller Central
+        2. **Upload the file** using the sidebar (supports CSV, Excel, PDF, etc.)
+        3. **Click Analyze** to detect FDA reportable events
+        4. **Review results** and take immediate action on critical events
+        5. **Export summaries** for FDA MDR submission
+        
+        ### 🎯 What We Detect
+        
+        - **Deaths** - Immediate reporting required
+        - **Serious Injuries** - Including hospitalizations, permanent impairments
+        - **Falls** - Any fall, slip, or collapse related to product use
+        - **Malfunctions** - Product failures that could cause harm
+        - **Allergic Reactions** - Rashes, swelling, breathing issues
+        - **Infections** - Contamination or infection risks
+        
+        ### ⚡ Quick Actions
+        
+        For any detected reportable events:
+        1. Document all details immediately
+        2. Initiate FDA MDR process
+        3. Contact legal/regulatory team
+        4. Preserve product samples if available
+        """)
 
 if __name__ == "__main__":
     main()
