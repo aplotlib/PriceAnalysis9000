@@ -446,60 +446,220 @@ class FileProcessor:
     def read_file(file, file_type: str) -> pd.DataFrame:
         """Read various file formats and return DataFrame"""
         try:
-            if file_type in ['csv', 'text/csv']:
+            # Handle PDF
+            if 'pdf' in file_type.lower() or file_type == 'application/pdf':
+                # Check for PDF libraries
+                pdf_library = None
+                try:
+                    import pdfplumber
+                    pdf_library = 'pdfplumber'
+                except ImportError:
+                    try:
+                        import PyPDF2
+                        pdf_library = 'PyPDF2'
+                    except ImportError:
+                        pass
+                
+                if not pdf_library:
+                    raise ValueError(
+                        "PDF processing requires pdfplumber or PyPDF2. "
+                        "Please install with: pip install pdfplumber\n"
+                        "For now, please export your Amazon returns as CSV or Excel format."
+                    )
+                
+                if pdf_library == 'pdfplumber':
+                    import pdfplumber
+                    
+                    all_data = []
+                    text_data = []
+                    
+                    with pdfplumber.open(file) as pdf:
+                        for i, page in enumerate(pdf.pages):
+                            # Try to extract tables first
+                            tables = page.extract_tables()
+                            if tables:
+                                for table in tables:
+                                    if table and len(table) > 1:
+                                        # Use first row as header if it looks like headers
+                                        df = pd.DataFrame(table[1:], columns=table[0])
+                                        all_data.append(df)
+                            else:
+                                # Fall back to text extraction
+                                text = page.extract_text()
+                                if text:
+                                    lines = text.split('\n')
+                                    for line in lines:
+                                        if '\t' in line or '|' in line:
+                                            text_data.append(line)
+                    
+                    # Combine all extracted data
+                    if all_data:
+                        result = pd.concat(all_data, ignore_index=True)
+                    elif text_data:
+                        # Parse text data
+                        if '\t' in text_data[0]:
+                            result = pd.DataFrame([line.split('\t') for line in text_data])
+                        else:
+                            result = pd.DataFrame([line.split('|') for line in text_data])
+                    else:
+                        raise ValueError("No data could be extracted from PDF")
+                    
+                    # Clean up the dataframe
+                    result = result.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+                    return result
+                
+                else:  # PyPDF2
+                    import PyPDF2
+                    reader = PyPDF2.PdfReader(file)
+                    text = ""
+                    for page in reader.pages:
+                        text += page.extract_text() + "\n"
+                    
+                    # Try to parse as structured data
+                    lines = text.split('\n')
+                    data = []
+                    headers = None
+                    
+                    for line in lines:
+                        if line.strip():
+                            # Try tab-separated first
+                            if '\t' in line:
+                                parts = line.split('\t')
+                            else:
+                                # Try multiple spaces as separator
+                                parts = [p.strip() for p in line.split('  ') if p.strip()]
+                            
+                            if parts:
+                                if not headers and len(parts) > 3:
+                                    headers = parts
+                                else:
+                                    data.append(parts)
+                    
+                    if data:
+                        if headers:
+                            # Ensure all rows have same number of columns as headers
+                            max_cols = len(headers)
+                            cleaned_data = []
+                            for row in data:
+                                if len(row) < max_cols:
+                                    row.extend([''] * (max_cols - len(row)))
+                                elif len(row) > max_cols:
+                                    row = row[:max_cols]
+                                cleaned_data.append(row)
+                            return pd.DataFrame(cleaned_data, columns=headers)
+                        else:
+                            return pd.DataFrame(data)
+                    else:
+                        raise ValueError("Could not extract structured data from PDF")
+            
+            # CSV handling
+            elif file_type in ['csv', 'text/csv']:
                 # Try different encodings
-                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16']
+                last_error = None
+                
                 for encoding in encodings:
                     try:
                         file.seek(0)
-                        return pd.read_csv(file, encoding=encoding)
-                    except:
+                        df = pd.read_csv(file, encoding=encoding, low_memory=False)
+                        if len(df) > 0:
+                            return df
+                    except Exception as e:
+                        last_error = e
                         continue
-                raise ValueError("Could not decode CSV file")
                 
-            elif file_type in ['xlsx', 'xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']:
-                return pd.read_excel(file, engine='openpyxl')
-                
+                raise ValueError(f"Could not decode CSV file. Last error: {last_error}")
+            
+            # Excel handling
+            elif file_type in ['xlsx', 'xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                             'application/vnd.ms-excel']:
+                try:
+                    file.seek(0)
+                    # Try with openpyxl first
+                    try:
+                        import openpyxl
+                        return pd.read_excel(file, engine='openpyxl')
+                    except ImportError:
+                        # Try default engine
+                        return pd.read_excel(file, engine=None)
+                except ImportError:
+                    raise ValueError(
+                        "Excel file processing requires openpyxl or xlrd. "
+                        "Please install with: pip install openpyxl\n"
+                        "For now, please export your Amazon returns as CSV format."
+                    )
+            
+            # TSV handling
             elif file_type in ['tsv', 'text/tab-separated-values']:
-                return pd.read_csv(file, sep='\t')
-                
+                file.seek(0)
+                return pd.read_csv(file, sep='\t', low_memory=False)
+            
+            # TXT handling with delimiter detection
             elif file_type in ['txt', 'text/plain']:
-                # Try to detect delimiter
                 file.seek(0)
-                first_line = file.readline().decode('utf-8', errors='ignore')
+                # Read first few lines to detect delimiter
+                sample_lines = []
+                for _ in range(min(10, 5)):  # Read up to 10 lines
+                    line = file.readline()
+                    if not line:
+                        break
+                    if isinstance(line, bytes):
+                        line = line.decode('utf-8', errors='ignore')
+                    sample_lines.append(line)
                 file.seek(0)
                 
-                if '\t' in first_line:
-                    return pd.read_csv(file, sep='\t')
-                elif '|' in first_line:
-                    return pd.read_csv(file, sep='|')
-                else:
-                    return pd.read_csv(file)
-                    
-            elif file_type == 'pdf' and PDF_AVAILABLE:
-                # Extract tables from PDF
-                import pdfplumber
+                if not sample_lines:
+                    raise ValueError("Empty text file")
                 
-                all_tables = []
-                with pdfplumber.open(file) as pdf:
-                    for page in pdf.pages:
-                        tables = page.extract_tables()
-                        for table in tables:
-                            if table:
-                                df = pd.DataFrame(table[1:], columns=table[0])
-                                all_tables.append(df)
+                # Detect delimiter
+                delimiters = ['\t', '|', ',', ';']
+                delimiter_counts = {}
                 
-                if all_tables:
-                    return pd.concat(all_tables, ignore_index=True)
+                for delim in delimiters:
+                    counts = [line.count(delim) for line in sample_lines]
+                    # Check if delimiter appears consistently
+                    if counts and all(c > 0 for c in counts):
+                        avg_count = sum(counts) / len(counts)
+                        delimiter_counts[delim] = (avg_count, min(counts), max(counts))
+                
+                # Choose delimiter with most consistent count
+                if delimiter_counts:
+                    # Sort by consistency (smallest difference between min and max)
+                    best_delimiter = min(delimiter_counts.items(), 
+                                       key=lambda x: x[1][2] - x[1][1])[0]
                 else:
-                    raise ValueError("No tables found in PDF")
-                    
+                    # Default to comma if no clear delimiter found
+                    best_delimiter = ','
+                
+                try:
+                    return pd.read_csv(file, sep=best_delimiter, low_memory=False)
+                except Exception as e:
+                    # Try with spaces as delimiter
+                    file.seek(0)
+                    return pd.read_csv(file, delim_whitespace=True, low_memory=False)
+            
             else:
-                raise ValueError(f"Unsupported file type: {file_type}")
+                # Try to read as CSV as last resort
+                file.seek(0)
+                return pd.read_csv(file, low_memory=False)
                 
         except Exception as e:
             logger.error(f"Error reading file: {e}")
-            raise
+            error_msg = str(e)
+            
+            # Provide helpful error messages
+            if "PDF" in error_msg:
+                raise Exception(
+                    "PDF file processing failed. Please ensure your PDF contains tabular data, "
+                    "or export your Amazon returns as CSV/Excel format instead."
+                )
+            elif "Excel" in error_msg:
+                raise Exception(
+                    "Excel file processing failed. Try saving as CSV format, "
+                    "or install openpyxl with: pip install openpyxl"
+                )
+            else:
+                raise Exception(f"Failed to read file: {error_msg}")
 
 # Export key components
 __all__ = [
