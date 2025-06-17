@@ -17,6 +17,10 @@ from dataclasses import dataclass
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+# Standard imports
+import pandas as pd
+import numpy as np
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,7 +39,10 @@ anthropic_module, has_anthropic = safe_import('anthropic')
 pdfplumber, has_pdfplumber = safe_import('pdfplumber')
 PIL, has_pil = safe_import('PIL')
 pytesseract, has_tesseract = safe_import('pytesseract')
-pandas, has_pandas = safe_import('pandas')
+
+# Standard imports that should always work
+import pandas as pd
+import numpy as np
 
 # Model configurations
 MODEL_CONFIG = {
