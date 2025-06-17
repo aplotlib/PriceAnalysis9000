@@ -18,11 +18,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 import os
-import chardet
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Optional imports
+try:
+    import chardet
+    CHARDET_AVAILABLE = True
+except ImportError:
+    CHARDET_AVAILABLE = False
+    logger.warning("chardet not available, will use default encoding")
 
 # Import modules with error handling
 try:
@@ -71,6 +78,22 @@ except ImportError:
         'Other/Miscellaneous'
     ]
     FBA_REASON_MAP = {}
+    
+    class AIProvider:
+        FASTEST = "fastest"
+        OPENAI = "openai"
+        CLAUDE = "claude"
+        BOTH = "both"
+    
+    class EnhancedAIAnalyzer:
+        def __init__(self, provider):
+            self.provider = provider
+        
+        def categorize_return(self, complaint, fba_reason=None):
+            return 'Other/Miscellaneous', 0.1, 'none', 'en'
+        
+        def get_cost_summary(self):
+            return {'total_cost': 0.0, 'api_calls': 0}
 
 try:
     from smart_column_mapper import SmartColumnMapper
@@ -78,6 +101,53 @@ try:
 except ImportError:
     MAPPER_AVAILABLE = False
     logger.warning("smart_column_mapper not available")
+    
+    # Define fallback SmartColumnMapper
+    class SmartColumnMapper:
+        def __init__(self, ai_analyzer=None):
+            self.ai_analyzer = ai_analyzer
+        
+        def detect_columns(self, df):
+            # Basic column detection fallback
+            column_mapping = {}
+            for col in df.columns:
+                col_lower = str(col).lower()
+                if 'date' in col_lower:
+                    column_mapping['date'] = col
+                elif 'complaint' in col_lower or 'comment' in col_lower:
+                    column_mapping['complaint'] = col
+                elif 'product' in col_lower or 'sku' in col_lower:
+                    column_mapping['product_id'] = col
+                elif 'asin' in col_lower:
+                    column_mapping['asin'] = col
+                elif 'order' in col_lower:
+                    column_mapping['order_id'] = col
+            return column_mapping
+        
+        def validate_mapping(self, df, mapping):
+            return {
+                'is_valid': True,
+                'missing_required': [],
+                'warnings': []
+            }
+        
+        def map_dataframe(self, df, column_mapping):
+            mapped_df = df.copy()
+            rename_dict = {}
+            if column_mapping.get('date'):
+                rename_dict[column_mapping['date']] = 'return_date'
+            if column_mapping.get('complaint'):
+                rename_dict[column_mapping['complaint']] = 'customer_comment'
+            if column_mapping.get('product_id'):
+                rename_dict[column_mapping['product_id']] = 'sku'
+            if column_mapping.get('asin'):
+                rename_dict[column_mapping['asin']] = 'asin'
+            if column_mapping.get('order_id'):
+                rename_dict[column_mapping['order_id']] = 'order_id'
+            
+            if rename_dict:
+                mapped_df = mapped_df.rename(columns=rename_dict)
+            return mapped_df
 
 MODULES_AVAILABLE = all([PDF_AVAILABLE, AI_AVAILABLE])
     # Define fallbacks
@@ -554,8 +624,20 @@ def process_structured_file(content: bytes, filename: str, file_extension: str):
             try:
                 text = content.decode('utf-8')
             except:
-                encoding = chardet.detect(content)['encoding']
-                text = content.decode(encoding)
+                if CHARDET_AVAILABLE:
+                    encoding = chardet.detect(content)['encoding']
+                    text = content.decode(encoding)
+                else:
+                    # Try common encodings
+                    for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                        try:
+                            text = content.decode(encoding)
+                            break
+                        except:
+                            continue
+                    else:
+                        st.error("Could not decode file. Please ensure it's in UTF-8 format.")
+                        return
             
             # Detect delimiter
             if file_extension == 'tsv' or '\t' in text.split('\n')[0]:
