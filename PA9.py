@@ -353,7 +353,49 @@ def process_uploaded_file(uploaded_file):
             # Process PDF
             if st.session_state.pdf_analyzer:
                 with st.spinner("📄 Extracting data from PDF..."):
-                    data = st.session_state.pdf_analyzer.extract_return_data(uploaded_file)
+                    # Read PDF content
+                    pdf_content = uploaded_file.read()
+                    filename = uploaded_file.name
+                    
+                    # Extract returns from PDF
+                    extracted_data = st.session_state.pdf_analyzer.extract_returns_from_pdf(pdf_content, filename)
+                    
+                    if 'error' in extracted_data:
+                        st.error(f"PDF extraction error: {extracted_data['error']}")
+                        return None
+                    
+                    # Convert returns list to DataFrame
+                    returns_list = extracted_data.get('returns', [])
+                    if not returns_list:
+                        st.warning("No returns found in PDF. Please check the file format.")
+                        return None
+                    
+                    # Create DataFrame with proper column mapping
+                    data = pd.DataFrame(returns_list)
+                    
+                    # Ensure required columns exist
+                    column_mapping = {
+                        'order_id': 'Order ID',
+                        'sku': 'SKU', 
+                        'asin': 'ASIN',
+                        'return_reason': 'Return Reason',
+                        'customer_comment': 'Customer Comments',
+                        'buyer_comment': 'Customer Comments',
+                        'return_date': 'Return Date'
+                    }
+                    
+                    # Rename columns to standard format
+                    data = data.rename(columns=column_mapping)
+                    
+                    # Ensure Customer Comments column exists (use buyer_comment or customer_comment)
+                    if 'Customer Comments' not in data.columns:
+                        if 'buyer_comment' in data.columns:
+                            data['Customer Comments'] = data['buyer_comment']
+                        elif 'customer_comment' in data.columns:
+                            data['Customer Comments'] = data['customer_comment']
+                        else:
+                            data['Customer Comments'] = ''
+                    
                     st.session_state.file_type = 'pdf'
             else:
                 st.error("PDF analyzer not available")
@@ -421,6 +463,18 @@ def process_fba_returns(content: str) -> pd.DataFrame:
 def categorize_returns(df: pd.DataFrame) -> pd.DataFrame:
     """Categorize returns using AI or rule-based logic"""
     try:
+        # Ensure required columns exist
+        if 'Return Reason' not in df.columns:
+            df['Return Reason'] = df.get('return_reason', '')
+        if 'Customer Comments' not in df.columns:
+            df['Customer Comments'] = df.get('customer_comment', df.get('buyer_comment', ''))
+        if 'Order ID' not in df.columns:
+            df['Order ID'] = df.get('order_id', '')
+        if 'SKU' not in df.columns:
+            df['SKU'] = df.get('sku', '') 
+        if 'ASIN' not in df.columns:
+            df['ASIN'] = df.get('asin', '')
+            
         # Add category column
         df['Category'] = ''
         
@@ -510,6 +564,12 @@ def analyze_products(df: pd.DataFrame):
     """Analyze returns by product"""
     product_analysis = {}
     
+    # Check if ASIN column exists
+    if 'ASIN' not in df.columns:
+        st.warning("ASIN column not found in data")
+        st.session_state.product_analysis = {}
+        return
+    
     for asin in df['ASIN'].unique():
         if pd.notna(asin) and asin != '':
             asin_df = df[df['ASIN'] == asin]
@@ -518,7 +578,7 @@ def analyze_products(df: pd.DataFrame):
                 'total_returns': len(asin_df),
                 'quality_issues': len(asin_df[asin_df['Category'].isin(QUALITY_CATEGORIES)]),
                 'categories': asin_df['Category'].value_counts().to_dict(),
-                'sku': asin_df['SKU'].iloc[0] if 'SKU' in asin_df.columns else ''
+                'sku': asin_df['SKU'].iloc[0] if 'SKU' in asin_df.columns and len(asin_df) > 0 else ''
             }
     
     st.session_state.product_analysis = product_analysis
