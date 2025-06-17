@@ -195,8 +195,34 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
                 gc.collect()
                 
         except Exception as e:
-            file_stats[file.name] = {'rows': 0, 'status': f'Error: {str(e)}'}
-            st.warning(f"Error processing {file.name}: {str(e)}")
+            error_msg = str(e)
+            file_stats[file.name] = {'rows': 0, 'status': f'Error: {error_msg}'}
+            
+            # Show specific error messages with solutions
+            if "PDF" in error_msg and "pdfplumber" in error_msg:
+                st.error(f"""
+                ❌ Cannot process PDF file: {file.name}
+                
+                **Solution Options:**
+                1. Export your Amazon returns as CSV format (recommended)
+                2. Export as Excel format (.xlsx)
+                3. Install PDF support: `pip install pdfplumber`
+                
+                **How to export from Amazon Seller Central:**
+                - Go to Reports > Fulfillment > Customer Returns
+                - Click "Download" and select "CSV" format
+                """)
+            elif "Excel" in error_msg and "openpyxl" in error_msg:
+                st.error(f"""
+                ❌ Cannot process Excel file: {file.name}
+                
+                **Solution Options:**
+                1. Export as CSV format instead (recommended)
+                2. Install Excel support: `pip install openpyxl`
+                3. Save as .csv in Excel: File > Save As > CSV
+                """)
+            else:
+                st.warning(f"Error processing {file.name}: {error_msg}")
     
     progress_bar.empty()
     status_text.empty()
@@ -212,13 +238,23 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
         with st.expander("📊 File Processing Summary"):
             for filename, stats in file_stats.items():
                 if stats['status'] == 'Success':
-                    st.write(f"✓ {filename}: {stats['rows']:,} rows")
+                    st.write(f"✅ {filename}: {stats['rows']:,} rows")
                 else:
-                    st.write(f"✗ {filename}: {stats['status']}")
+                    st.write(f"❌ {filename}: {stats['status']}")
         
         return combined_df
     else:
-        st.error("No files could be processed successfully")
+        st.error("""
+        ❌ No files could be processed successfully
+        
+        **Recommended formats:**
+        - CSV (best compatibility)
+        - TXT (tab or comma delimited)
+        - TSV (tab-separated values)
+        
+        **If using PDF or Excel:**
+        Please export your data as CSV from Amazon Seller Central
+        """)
         return None
 
 def display_categorization_analysis(df: pd.DataFrame):
@@ -409,6 +445,32 @@ def main():
         st.header("📁 File Upload")
         st.markdown("Upload up to 7 files (1GB+ supported)")
         
+        # Check for missing dependencies
+        missing_deps = []
+        try:
+            import pdfplumber
+        except ImportError:
+            missing_deps.append("PDF")
+        
+        try:
+            import openpyxl
+        except ImportError:
+            missing_deps.append("Excel")
+        
+        if missing_deps:
+            st.warning(f"""
+            ⚠️ Limited file support detected
+            
+            Missing support for: {', '.join(missing_deps)}
+            
+            **Quick fix:**
+            ```bash
+            pip install pdfplumber openpyxl
+            ```
+            
+            **For now, please use CSV format**
+            """)
+        
         uploaded_files = st.file_uploader(
             "Choose files",
             type=['csv', 'xlsx', 'xls', 'tsv', 'txt', 'pdf'],
@@ -423,7 +485,9 @@ def main():
             
             st.success(f"{len(uploaded_files)} file(s) uploaded")
             for file in uploaded_files:
-                st.write(f"• {file.name}")
+                # Show file info
+                file_size = file.size / (1024 * 1024)  # Convert to MB
+                st.write(f"• {file.name} ({file_size:.1f} MB)")
             
             st.session_state.uploaded_files = uploaded_files
             st.session_state.file_upload_complete = True
@@ -438,6 +502,8 @@ def main():
                 options=[AIProvider.FASTEST, AIProvider.QUALITY, AIProvider.OPENAI, AIProvider.CLAUDE],
                 help="Select AI provider for categorization"
             )
+        else:
+            st.warning("⚠️ AI module not available")
         
         st.divider()
         
@@ -453,19 +519,51 @@ def main():
         
         st.divider()
         
-        # Info
-        st.info("""
-        **Supported Formats:**
-        - CSV, TSV, TXT (auto-delimiter)
-        - Excel (XLSX, XLS)
-        - PDF (with tables)
+        # File format guide
+        with st.expander("📄 File Format Guide"):
+            st.markdown("""
+            **Best Compatibility:**
+            - ✅ CSV - Always works
+            - ✅ TXT - Tab/comma delimited
+            - ✅ TSV - Tab-separated
+            
+            **Requires Libraries:**
+            - ⚠️ Excel - Needs openpyxl
+            - ⚠️ PDF - Needs pdfplumber
+            
+            **From Amazon Seller Central:**
+            1. Go to Reports > Fulfillment
+            2. Select "Customer Returns"
+            3. Download as CSV (recommended)
+            
+            **Required Columns:**
+            - reason / return-reason
+            - customer-comments
+            - product-name (optional)
+            - asin (optional)
+            """)
         
-        **Detects:**
-        - All return categories
-        - FDA reportable events
-        - Falls & injuries
-        - Product defects
-        """)
+        st.divider()
+        
+        # FDA event types
+        with st.expander("🚨 FDA Events Detected"):
+            st.markdown("""
+            **Deaths & Injuries:**
+            - Falls (fall, fell, fallen)
+            - Injuries requiring medical care
+            - Hospitalizations
+            
+            **Product Issues:**
+            - Malfunctions causing harm
+            - Sharp edges/exposed parts
+            - Electrical hazards
+            
+            **Medical Reactions:**
+            - Allergic reactions
+            - Infections
+            - Skin reactions
+            """)
+    
     
     # Main content area
     if st.session_state.file_upload_complete and uploaded_files:
