@@ -106,10 +106,10 @@ class UniversalFileDetector:
                 return UniversalFileDetector._process_image(file_content, filename)
             elif format_type in ['csv', 'tsv', 'txt']:
                 return UniversalFileDetector._process_text_file(
-                    file_content, filename, format_type
+                    file_content, filename, format_type, target_asin
                 )
             elif format_type == 'excel':
-                return UniversalFileDetector._process_excel(file_content, filename)
+                return UniversalFileDetector._process_excel(file_content, filename, target_asin)
             else:
                 return ProcessedFile(
                     file_type='unknown',
@@ -156,7 +156,7 @@ class UniversalFileDetector:
     
     @staticmethod
     def _process_text_file(content: bytes, filename: str, 
-                          format_type: str) -> ProcessedFile:
+                          format_type: str, target_asin: str = None) -> ProcessedFile:
         """Process text-based files (CSV, TSV, TXT)"""
         
         # Detect encoding
@@ -178,11 +178,15 @@ class UniversalFileDetector:
             try:
                 df = pd.read_csv(StringIO(text), delimiter=delimiter)
                 
+                # Clean column names (remove any BOM or special characters)
+                df.columns = [col.strip().replace('\ufeff', '') for col in df.columns]
+                
                 # Detect content type
                 content_category = UniversalFileDetector._detect_content_type(df)
                 
-                # Clean column names
-                df.columns = [col.strip() for col in df.columns]
+                # Filter by ASIN if provided
+                if target_asin:
+                    df = UniversalFileDetector.filter_by_asin(df, target_asin)
                 
                 return ProcessedFile(
                     file_type=content_category,
@@ -226,7 +230,7 @@ class UniversalFileDetector:
             )
     
     @staticmethod
-    def _process_excel(content: bytes, filename: str) -> ProcessedFile:
+    def _process_excel(content: bytes, filename: str, target_asin: str = None) -> ProcessedFile:
         """Process Excel files"""
         try:
             # Read all sheets
@@ -235,7 +239,15 @@ class UniversalFileDetector:
             # If single sheet, process directly
             if len(excel_file.sheet_names) == 1:
                 df = pd.read_excel(BytesIO(content))
+                
+                # Clean column names
+                df.columns = [col.strip() for col in df.columns]
+                
                 content_category = UniversalFileDetector._detect_content_type(df)
+                
+                # Filter by ASIN if provided
+                if target_asin:
+                    df = UniversalFileDetector.filter_by_asin(df, target_asin)
                 
                 return ProcessedFile(
                     file_type=content_category,
@@ -252,20 +264,63 @@ class UniversalFileDetector:
                     extraction_method='excel_parsing'
                 )
             else:
-                # Multiple sheets - need user guidance
-                return ProcessedFile(
-                    file_type='multi_sheet_excel',
-                    format='excel',
-                    content_category='needs_clarification',
-                    raw_content=content,
-                    metadata={
-                        'filename': filename,
-                        'sheet_names': excel_file.sheet_names,
-                        'sheet_count': len(excel_file.sheet_names)
-                    },
-                    extraction_method='needs_user_input',
-                    warnings=['Multiple sheets detected. Please specify which sheet to analyze.']
-                )
+                # Multiple sheets - process all and combine if they're similar
+                all_data = []
+                sheet_info = []
+                
+                for sheet_name in excel_file.sheet_names:
+                    try:
+                        df = pd.read_excel(BytesIO(content), sheet_name=sheet_name)
+                        content_type = UniversalFileDetector._detect_content_type(df)
+                        
+                        if target_asin:
+                            df = UniversalFileDetector.filter_by_asin(df, target_asin)
+                        
+                        if len(df) > 0:
+                            all_data.append(df)
+                            sheet_info.append({
+                                'name': sheet_name,
+                                'type': content_type,
+                                'rows': len(df)
+                            })
+                    except Exception as e:
+                        logger.warning(f"Error processing sheet {sheet_name}: {e}")
+                
+                # Combine similar sheets
+                if all_data:
+                    combined_df = pd.concat(all_data, ignore_index=True)
+                    content_category = UniversalFileDetector._detect_content_type(combined_df)
+                    
+                    return ProcessedFile(
+                        file_type=content_category,
+                        format='excel',
+                        content_category=content_category,
+                        data=combined_df,
+                        metadata={
+                            'filename': filename,
+                            'sheet_names': excel_file.sheet_names,
+                            'sheet_count': len(excel_file.sheet_names),
+                            'sheet_info': sheet_info,
+                            'columns': combined_df.columns.tolist(),
+                            'row_count': len(combined_df)
+                        },
+                        extraction_method='excel_multi_sheet',
+                        warnings=[f'Combined {len(all_data)} sheets']
+                    )
+                else:
+                    return ProcessedFile(
+                        file_type='multi_sheet_excel',
+                        format='excel',
+                        content_category='needs_clarification',
+                        raw_content=content,
+                        metadata={
+                            'filename': filename,
+                            'sheet_names': excel_file.sheet_names,
+                            'sheet_count': len(excel_file.sheet_names)
+                        },
+                        extraction_method='needs_user_input',
+                        warnings=['No data found after filtering']
+                    )
                 
         except Exception as e:
             logger.error(f"Excel processing error: {e}")
@@ -289,7 +344,7 @@ class UniversalFileDetector:
         # Fallback for low confidence
         if confidence < 0.7:
             # Try common encodings
-            for enc in ['utf-8', 'cp1252', 'latin-1']:
+            for enc in ['utf-8', 'cp1252', 'latin-1', 'iso-8859-1']:
                 try:
                     content.decode(enc)
                     return enc
@@ -319,26 +374,33 @@ class UniversalFileDetector:
     @staticmethod
     def _detect_content_type(df: pd.DataFrame) -> str:
         """Detect type of content in DataFrame"""
-        columns_lower = [col.lower() for col in df.columns]
+        if df.empty:
+            return 'empty'
+            
+        columns_lower = [str(col).lower() for col in df.columns]
         
-        # Check for return data patterns
-        return_indicators = ['return', 'reason', 'refund', 'rma', 'defect']
+        # Check for return data patterns - FBA specific
+        fba_indicators = ['return-date', 'order-id', 'sku', 'asin', 'reason', 'customer-comments']
+        fba_score = sum(1 for ind in fba_indicators if ind in columns_lower)
+        if fba_score >= 4:
+            return 'fba_returns'
+        
+        # Check for general return data patterns
+        return_indicators = ['return', 'reason', 'refund', 'rma', 'defect', 'booking']
         return_score = sum(1 for ind in return_indicators 
                          if any(ind in col for col in columns_lower))
         
         # Check for review data patterns
-        review_indicators = ['rating', 'review', 'title', 'body', 'comment', 'feedback']
+        review_indicators = ['rating', 'review', 'title', 'body', 'comment', 'feedback', 'stars']
         review_score = sum(1 for ind in review_indicators 
                          if any(ind in col for col in columns_lower))
         
         # Check specific patterns
-        if UniversalFileDetector._is_fba_return_report(df):
-            return 'fba_returns'
-        elif UniversalFileDetector._is_helium10_reviews(df):
+        if UniversalFileDetector._is_helium10_reviews(df):
             return 'helium10_reviews'
-        elif return_score > review_score:
+        elif return_score > review_score and return_score > 0:
             return 'returns'
-        elif review_score > return_score:
+        elif review_score > return_score and review_score > 0:
             return 'reviews'
         else:
             return 'data'
@@ -361,10 +423,10 @@ class UniversalFileDetector:
     @staticmethod
     def filter_by_asin(df: pd.DataFrame, target_asin: str) -> pd.DataFrame:
         """Filter DataFrame by ASIN"""
-        if not target_asin:
+        if not target_asin or df.empty:
             return df
         
-        # Find ASIN column
+        # Find ASIN column (case-insensitive)
         asin_columns = [col for col in df.columns 
                        if 'asin' in col.lower()]
         
@@ -373,7 +435,20 @@ class UniversalFileDetector:
         
         # Filter by ASIN
         asin_col = asin_columns[0]
-        return df[df[asin_col].str.upper() == target_asin.upper()]
+        
+        # Handle different data types
+        try:
+            # Convert both to string for comparison
+            df_filtered = df[df[asin_col].astype(str).str.upper() == target_asin.upper()]
+            
+            if df_filtered.empty:
+                # Try without converting to uppercase
+                df_filtered = df[df[asin_col].astype(str) == target_asin]
+            
+            return df_filtered
+        except Exception as e:
+            logger.warning(f"Error filtering by ASIN: {e}")
+            return df
     
     @staticmethod
     def extract_return_metrics(df: pd.DataFrame, 
@@ -401,13 +476,20 @@ class UniversalFileDetector:
             metrics['by_sku'] = df[sku_col].value_counts().head(10).to_dict()
         
         # Date analysis
+        date_cols = [col for col in df.columns 
+                    if 'date' in col.lower()]
+        if date_cols and not date_column:
+            date_column = date_cols[0]
+            
         if date_column and date_column in df.columns:
             try:
-                df['parsed_date'] = pd.to_datetime(df[date_column])
-                df['month'] = df['parsed_date'].dt.to_period('M')
-                metrics['by_date'] = df.groupby('month').size().to_dict()
-            except:
-                pass
+                df['parsed_date'] = pd.to_datetime(df[date_column], errors='coerce')
+                df_with_dates = df.dropna(subset=['parsed_date'])
+                if not df_with_dates.empty:
+                    df_with_dates['month'] = df_with_dates['parsed_date'].dt.to_period('M')
+                    metrics['by_date'] = df_with_dates.groupby('month').size().to_dict()
+            except Exception as e:
+                logger.warning(f"Date parsing error: {e}")
         
         return metrics
     
@@ -455,6 +537,35 @@ class UniversalFileDetector:
             confidence=0.95,
             extraction_method='file_merge'
         )
+    
+    @staticmethod
+    def validate_file(file: ProcessedFile) -> Tuple[bool, List[str]]:
+        """Validate processed file and return validation status and messages"""
+        messages = []
+        is_valid = True
+        
+        # Check if file was processed successfully
+        if file.content_category == 'error':
+            is_valid = False
+            messages.append("File processing failed")
+            return is_valid, messages
+        
+        # Check if data was extracted
+        if file.data is None and file.raw_content is None:
+            messages.append("No data extracted from file")
+        
+        # Check for empty dataframes
+        if file.data is not None and file.data.empty:
+            messages.append("File contains no data rows")
+        
+        # Validate based on content type
+        if file.content_category == 'fba_returns' and file.data is not None:
+            required_cols = ['return-date', 'order-id', 'asin', 'reason']
+            missing_cols = [col for col in required_cols if col not in file.data.columns]
+            if missing_cols:
+                messages.append(f"Missing required columns: {', '.join(missing_cols)}")
+        
+        return is_valid, messages
 
 # Export
 __all__ = ['UniversalFileDetector', 'ProcessedFile']
