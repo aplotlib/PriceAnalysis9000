@@ -27,16 +27,59 @@ logger = logging.getLogger(__name__)
 # Import modules with error handling
 try:
     from pdf_analyzer import PDFAnalyzer
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    logger.warning("pdf_analyzer not available")
+
+try:
     from injury_detector import InjuryDetector
+    INJURY_AVAILABLE = True
+except ImportError:
+    INJURY_AVAILABLE = False
+    logger.warning("injury_detector not available")
+
+try:
     from universal_file_detector import UniversalFileDetector
+    FILE_DETECTOR_AVAILABLE = True
+except ImportError:
+    FILE_DETECTOR_AVAILABLE = False
+    logger.warning("universal_file_detector not available")
+
+try:
     from enhanced_ai_analysis import EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES, FBA_REASON_MAP
-    from smart_column_mapper import SmartColumnMapper
-    MODULES_AVAILABLE = True
     AI_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Some modules not found: {e}")
-    MODULES_AVAILABLE = False
+except ImportError:
     AI_AVAILABLE = False
+    logger.warning("enhanced_ai_analysis not available")
+    # Define fallbacks
+    MEDICAL_DEVICE_CATEGORIES = [
+        'Size/Fit Issues',
+        'Comfort Issues',
+        'Product Defects/Quality',
+        'Performance/Effectiveness',
+        'Stability/Positioning Issues',
+        'Equipment Compatibility',
+        'Design/Material Issues',
+        'Wrong Product/Misunderstanding',
+        'Missing Components',
+        'Customer Error/Changed Mind',
+        'Shipping/Fulfillment Issues',
+        'Assembly/Usage Difficulty',
+        'Medical/Health Concerns',
+        'Price/Value',
+        'Other/Miscellaneous'
+    ]
+    FBA_REASON_MAP = {}
+
+try:
+    from smart_column_mapper import SmartColumnMapper
+    MAPPER_AVAILABLE = True
+except ImportError:
+    MAPPER_AVAILABLE = False
+    logger.warning("smart_column_mapper not available")
+
+MODULES_AVAILABLE = all([PDF_AVAILABLE, AI_AVAILABLE])
     # Define fallbacks
     MEDICAL_DEVICE_CATEGORIES = [
         'Size/Fit Issues',
@@ -284,16 +327,16 @@ def initialize_analyzers():
         except Exception as e:
             logger.error(f"Failed to initialize AI: {e}")
     
-    if not st.session_state.pdf_analyzer:
+    if not st.session_state.pdf_analyzer and PDF_AVAILABLE:
         st.session_state.pdf_analyzer = PDFAnalyzer()
     
-    if not st.session_state.injury_detector:
+    if not st.session_state.injury_detector and INJURY_AVAILABLE:
         st.session_state.injury_detector = InjuryDetector()
     
-    if not st.session_state.file_detector:
+    if not st.session_state.file_detector and FILE_DETECTOR_AVAILABLE:
         st.session_state.file_detector = UniversalFileDetector()
     
-    if not st.session_state.get('column_mapper'):
+    if not st.session_state.get('column_mapper') and MAPPER_AVAILABLE:
         st.session_state.column_mapper = SmartColumnMapper(st.session_state.ai_analyzer)
 
 def display_header():
@@ -511,7 +554,6 @@ def process_structured_file(content: bytes, filename: str, file_extension: str):
             try:
                 text = content.decode('utf-8')
             except:
-                import chardet
                 encoding = chardet.detect(content)['encoding']
                 text = content.decode(encoding)
             
@@ -541,16 +583,25 @@ def process_structured_file(content: bytes, filename: str, file_extension: str):
         # Show column mapping interface
         st.markdown("### 🔍 Column Detection & Mapping")
         
-        # Use smart column mapper
-        with st.spinner("Using AI to detect column types..."):
-            column_mapping = st.session_state.column_mapper.detect_columns(df)
+        # Use smart column mapper if available
+        if MAPPER_AVAILABLE and st.session_state.column_mapper:
+            with st.spinner("Using AI to detect column types..."):
+                column_mapping = st.session_state.column_mapper.detect_columns(df)
+        else:
+            # Fallback to manual mapping
+            st.warning("Smart column mapper not available. Please map columns manually.")
+            column_mapping = {}
         
         # Display detected mappings
-        st.success("✅ Columns detected automatically!")
+        if column_mapping:
+            st.success("✅ Columns detected automatically!")
         
         # Show mapping in expandable section
         with st.expander("View/Edit Column Mappings", expanded=True):
-            st.markdown("**Detected Mappings:**")
+            if column_mapping:
+                st.markdown("**Detected Mappings:**")
+            else:
+                st.markdown("**Please map your columns:**")
             
             # Create editable mapping interface
             edited_mapping = {}
@@ -593,17 +644,37 @@ def process_structured_file(content: bytes, filename: str, file_extension: str):
                 column_mapping = edited_mapping
         
         # Validate mapping
-        validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
-        
-        if validation['missing_required']:
-            st.warning(f"⚠️ Missing required columns: {', '.join(validation['missing_required'])}")
-            st.info("The tool will still process available data, but results may be limited.")
+        if MAPPER_AVAILABLE and st.session_state.column_mapper:
+            validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
+            
+            if validation['missing_required']:
+                st.warning(f"⚠️ Missing required columns: {', '.join(validation['missing_required'])}")
+                st.info("The tool will still process available data, but results may be limited.")
         
         # Show data preview with mapped columns
         st.markdown("### 📋 Data Preview")
         
         # Map to standardized format
-        mapped_df = st.session_state.column_mapper.map_dataframe(df, column_mapping)
+        if MAPPER_AVAILABLE and st.session_state.column_mapper:
+            mapped_df = st.session_state.column_mapper.map_dataframe(df, column_mapping)
+        else:
+            # Manual mapping fallback
+            mapped_df = df.copy()
+            # Rename columns based on mapping
+            rename_dict = {}
+            if column_mapping.get('date'):
+                rename_dict[column_mapping['date']] = 'return_date'
+            if column_mapping.get('complaint'):
+                rename_dict[column_mapping['complaint']] = 'customer_comment'
+            if column_mapping.get('product_id'):
+                rename_dict[column_mapping['product_id']] = 'sku'
+            if column_mapping.get('asin'):
+                rename_dict[column_mapping['asin']] = 'asin'
+            if column_mapping.get('order_id'):
+                rename_dict[column_mapping['order_id']] = 'order_id'
+            
+            if rename_dict:
+                mapped_df = mapped_df.rename(columns=rename_dict)
         
         # Show preview of mapped data
         preview_cols = ['return_date', 'sku', 'asin', 'order_id', 'customer_comment']
@@ -672,9 +743,9 @@ def process_structured_file(content: bytes, filename: str, file_extension: str):
         with col1:
             st.metric("Columns Mapped", len(column_mapping))
         with col2:
-            st.metric("Data Quality", f"{100 - len(validation['warnings']) * 10}%")
-        with col3:
             st.metric("Rows Processed", len(categorized_data))
+        with col3:
+            st.metric("Categories Found", len(set(item['category'] for item in categorized_data)))
         
     except Exception as e:
         st.error(f"Error processing file: {str(e)}")
