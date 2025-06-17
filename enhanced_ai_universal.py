@@ -1,6 +1,13 @@
 """
-Enhanced AI Analysis Module - Universal File Understanding
-Version: 10.0 - Dual AI (OpenAI + Claude) with Universal Import
+Enhanced AI Analysis Module - Universal File Understanding with Medical Device Focus
+Version: 11.0 - Dual AI with Medical Device Return Categories and Injury Detection
+
+Key Features:
+- Medical device return categorization per Amazon standards
+- Critical injury/safety detection
+- Dual AI support (OpenAI + Claude) with speed optimization
+- Universal file understanding (PDF, FBA returns, reviews)
+- Pattern matching + AI for accuracy and speed
 """
 
 import logging
@@ -9,13 +16,14 @@ import json
 import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
-from collections import Counter
+from collections import Counter, defaultdict
 import time
 import base64
 from io import BytesIO
 from dataclasses import dataclass
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
 
 # Standard imports
 import pandas as pd
@@ -40,62 +48,151 @@ pdfplumber, has_pdfplumber = safe_import('pdfplumber')
 PIL, has_pil = safe_import('PIL')
 pytesseract, has_tesseract = safe_import('pytesseract')
 
-# Model configurations
+# API Configuration
+API_TIMEOUT = 30
+MAX_RETRIES = 2
+BATCH_SIZE = 50  # Optimized for speed
+MAX_WORKERS = 5
+
+# Model configurations - optimized for speed and accuracy
 MODEL_CONFIG = {
     'openai': {
-        'primary': 'gpt-4o-mini',
-        'vision': 'gpt-4-vision-preview',
-        'fallback': 'gpt-3.5-turbo'
+        'fast': 'gpt-3.5-turbo',
+        'accurate': 'gpt-4o-mini',
+        'vision': 'gpt-4o-mini',
+        'chat': 'gpt-3.5-turbo'
     },
     'claude': {
-        'primary': 'claude-3-haiku-20240307',
+        'fast': 'claude-3-haiku-20240307',
+        'accurate': 'claude-3-sonnet-20240229',
         'vision': 'claude-3-haiku-20240307',
-        'advanced': 'claude-3-sonnet-20240229'
+        'chat': 'claude-3-haiku-20240307'
     }
 }
 
-# Return reason categories - Universal
-RETURN_CATEGORIES = {
-    'QUALITY_DEFECTS': {
-        'keywords': ['defective', 'broken', 'damaged', 'doesn\'t work', 'poor quality', 'fell apart', 
-                    'stopped working', 'malfunction', 'structural failure', 'collapsed'],
-        'priority': 'critical'
+# Medical Device Return Categories - MUST match Amazon standards exactly
+MEDICAL_DEVICE_CATEGORIES = {
+    'Size/Fit Issues': {
+        'keywords': ['too large', 'too small', 'doesn\'t fit', 'wrong size', 'too tight', 
+                    'too loose', 'too tall', 'too short', 'too wide', 'sizing issues', 
+                    'bad fit', 'didn\'t fit', 'doesn\'t fit well'],
+        'priority': 'medium',
+        'patterns': [r'too (large|big|small|tight|loose|tall|short|wide)', r'doesn[\']?t fit', 
+                    r'wrong size', r'siz(e|ing) issue']
     },
-    'SIZE_FIT_ISSUES': {
-        'keywords': ['too small', 'too large', 'doesn\'t fit', 'wrong size', 'tight', 'loose',
-                    'small seat', 'dimension'],
-        'priority': 'high'
+    'Comfort Issues': {
+        'keywords': ['uncomfortable', 'hurts', 'hurts customer', 'too firm', 'too hard', 
+                    'too stiff', 'too soft', 'not enough padding', 'not enough cushion'],
+        'priority': 'high',
+        'patterns': [r'uncomfort', r'hurt', r'too (firm|hard|stiff|soft)', r'pain']
     },
-    'FUNCTIONALITY_ISSUES': {
-        'keywords': ['not comfortable', 'hard to use', 'unstable', 'difficult', 'complicated',
-                    'brake issues', 'wheel problems', 'locking mechanism'],
-        'priority': 'high'
+    'Product Defects/Quality': {
+        'keywords': ['defective', 'does not work properly', 'poor quality', 'ripped', 'torn',
+                    'bad velcro', 'velcro doesn\'t stick', 'defective handles', 'defective suction cups',
+                    'won\'t inflate', 'inflation issues', 'not working', 'broken', 'damaged'],
+        'priority': 'critical',
+        'patterns': [r'defect', r'broken', r'ripped', r'torn', r'doesn[\']?t work', 
+                    r'poor quality', r'damaged', r'malfunction']
     },
-    'WRONG_PRODUCT': {
-        'keywords': ['wrong item', 'not as described', 'different', 'not what ordered'],
-        'priority': 'medium'
+    'Performance/Effectiveness': {
+        'keywords': ['ineffective', 'not as expected', 'does not meet expectations', 
+                    'not enough support', 'poor support', 'not enough compression', 
+                    'not cold enough', 'not hot enough', 'inaccurate'],
+        'priority': 'high',
+        'patterns': [r'ineffective', r'not (as )?expected', r'poor support', r'doesn[\']?t help']
     },
-    'BUYER_MISTAKE': {
-        'keywords': ['bought by mistake', 'accidentally ordered', 'ordered wrong', 'my fault'],
-        'priority': 'low'
+    'Stability/Positioning Issues': {
+        'keywords': ['doesn\'t stay in place', 'doesn\'t stay fastened', 'slides around',
+                    'slides off', 'slides up', 'slippery', 'unstable', 'flattens'],
+        'priority': 'high',
+        'patterns': [r'slides? (around|off|up)', r'doesn[\']?t stay', r'unstable', r'slippery']
     },
-    'NO_LONGER_NEEDED': {
-        'keywords': ['no longer needed', 'changed mind', 'don\'t need', 'found alternative'],
-        'priority': 'low'
+    'Equipment Compatibility': {
+        'keywords': ['doesn\'t fit walker', 'doesn\'t fit bariatric walker', 'doesn\'t fit knee walker',
+                    'doesn\'t fit wheelchair', 'doesn\'t fit toilet', 'doesn\'t fit shower',
+                    'doesn\'t fit bed', 'doesn\'t fit machine', 'doesn\'t fit handle',
+                    'doesn\'t fit finger', 'not compatible', 'does not work with compression stockings'],
+        'priority': 'medium',
+        'patterns': [r'doesn[\']?t fit (walker|wheelchair|toilet|shower|bed|machine)', 
+                    r'not compatible', r'incompatible']
     },
-    'COMPATIBILITY_ISSUES': {
-        'keywords': ['doesn\'t fit', 'not compatible', 'incompatible', 'won\'t work with'],
-        'priority': 'medium'
+    'Design/Material Issues': {
+        'keywords': ['too bulky', 'too thick', 'too heavy', 'too thin', 'flimsy', 
+                    'small pulley', 'grip too small', 'fingers too long', 'fingers too short'],
+        'priority': 'medium',
+        'patterns': [r'too (bulky|thick|heavy|thin)', r'flimsy', r'poor design']
     },
-    'MISSING_PARTS': {
-        'keywords': ['missing', 'incomplete', 'parts missing', 'not included'],
-        'priority': 'high'
+    'Wrong Product/Misunderstanding': {
+        'keywords': ['wrong item', 'wrong color', 'not as advertised', 'different from website description',
+                    'thought it was something else', 'thought it was scooter', 'thought it was crutches',
+                    'thought pump was included', 'brace for wrong hand', 'immobilizer for wrong hand',
+                    'style not as expected'],
+        'priority': 'low',
+        'patterns': [r'wrong (item|product|color)', r'not as advertised', r'thought it was']
     },
-    'SHIPPING_DAMAGE': {
-        'keywords': ['damaged in shipping', 'arrived damaged', 'package damaged'],
-        'priority': 'medium'
+    'Missing Components': {
+        'keywords': ['missing pieces', 'missing parts', 'missing accessories', 'no instructions',
+                    'thought pump was included'],
+        'priority': 'medium',
+        'patterns': [r'missing (pieces?|parts?|accessories)', r'no instructions']
+    },
+    'Customer Error/Changed Mind': {
+        'keywords': ['ordered wrong item', 'bought by mistake', 'changed mind', 'no longer needed',
+                    'unauthorized purchase', 'no issue', 'customer error'],
+        'priority': 'low',
+        'patterns': [r'ordered wrong', r'bought by mistake', r'changed mind', r'no longer need']
+    },
+    'Shipping/Fulfillment Issues': {
+        'keywords': ['arrived too late', 'received used item', 'received damaged item', 'item never arrived'],
+        'priority': 'medium',
+        'patterns': [r'arrived (too )?late', r'received (used|damaged)', r'never arrived']
+    },
+    'Assembly/Usage Difficulty': {
+        'keywords': ['difficult to use', 'difficult to adjust', 'difficult to assemble',
+                    'difficult to open valve', 'installation issues'],
+        'priority': 'medium',
+        'patterns': [r'difficult to (use|adjust|assemble)', r'hard to', r'complicated']
+    },
+    'Medical/Health Concerns': {
+        'keywords': ['doctor did not approve', 'allergic reaction', 'bad smell', 'bad odor',
+                    'injury', 'injured', 'hospital', 'emergency', 'pain', 'swelling'],
+        'priority': 'critical',
+        'patterns': [r'doctor', r'allerg', r'injury', r'injured', r'hospital', r'emergency']
+    },
+    'Price/Value': {
+        'keywords': ['better price available', 'found better price', 'too expensive'],
+        'priority': 'low',
+        'patterns': [r'better price', r'too expensive', r'overpriced']
+    },
+    'Other/Miscellaneous': {
+        'keywords': ['other', 'incompatible or not useful'],
+        'priority': 'low',
+        'patterns': []
     }
 }
+
+# Compile patterns for speed
+COMPILED_PATTERNS = {}
+for category, info in MEDICAL_DEVICE_CATEGORIES.items():
+    COMPILED_PATTERNS[category] = [re.compile(pattern, re.IGNORECASE) 
+                                  for pattern in info.get('patterns', [])]
+
+# Critical keywords that require immediate attention
+CRITICAL_KEYWORDS = {
+    'injury': ['injury', 'injured', 'hurt myself', 'caused injury', 'got hurt', 'wound'],
+    'medical_emergency': ['hospital', 'emergency', 'emergency room', 'ER', 'ambulance', 
+                         'doctor visit', 'medical attention'],
+    'safety': ['dangerous', 'unsafe', 'hazard', 'risk', 'accident', 'fall', 'fell'],
+    'severe_pain': ['severe pain', 'extreme pain', 'unbearable', 'excruciating'],
+    'allergic': ['allergic', 'reaction', 'rash', 'hives', 'swelling', 'breathing']
+}
+
+class AIProvider(Enum):
+    OPENAI = "openai"
+    CLAUDE = "claude"
+    BOTH = "both"
+    FASTEST = "fastest"
+    ACCURATE = "accurate"
 
 @dataclass
 class FileAnalysis:
@@ -105,16 +202,28 @@ class FileAnalysis:
     extracted_data: Dict[str, Any]
     confidence: float
     ai_provider: str
+    critical_issues: List[Dict[str, Any]] = None
     needs_clarification: bool = False
     clarification_questions: List[str] = None
 
+@dataclass
+class ReturnCategorization:
+    """Return categorization result"""
+    category: str
+    confidence: float
+    severity: str  # 'critical', 'high', 'medium', 'low'
+    critical_flags: List[str]  # injury, medical_emergency, safety
+    ai_provider: str
+    processing_time: float
+
 class UniversalAIAnalyzer:
-    """Universal AI analyzer with dual AI support and file understanding"""
+    """Universal AI analyzer with medical device focus"""
     
-    def __init__(self):
+    def __init__(self, provider: AIProvider = AIProvider.FASTEST):
+        self.provider = provider
         self.openai_key = self._get_api_key('openai')
         self.claude_key = self._get_api_key('claude')
-        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
         
         # Initialize Claude client if available
         self.claude_client = None
@@ -126,10 +235,16 @@ class UniversalAIAnalyzer:
             except Exception as e:
                 logger.error(f"Failed to initialize Claude: {e}")
         
-        # Track API usage
+        # Track API usage and costs
         self.api_calls = {'openai': 0, 'claude': 0}
-        self.last_call_time = {'openai': 0, 'claude': 0}
+        self.total_cost = 0.0
+        self.categorization_cache = {}  # Cache for repeated returns
         
+        # Session for connection pooling
+        self.session = None
+        if has_requests:
+            self.session = requests.Session()
+    
     def _get_api_key(self, provider: str) -> Optional[str]:
         """Get API key from Streamlit secrets or environment"""
         try:
@@ -168,6 +283,303 @@ class UniversalAIAnalyzer:
             providers.append('claude')
         return providers
     
+    def detect_critical_issues(self, text: str) -> List[str]:
+        """Detect critical safety/injury issues in text"""
+        critical_flags = []
+        text_lower = text.lower()
+        
+        for flag_type, keywords in CRITICAL_KEYWORDS.items():
+            if any(keyword in text_lower for keyword in keywords):
+                critical_flags.append(flag_type)
+        
+        return critical_flags
+    
+    def quick_categorize(self, complaint: str, comment: str = "") -> Optional[Tuple[str, float]]:
+        """Quick pattern-based categorization for speed"""
+        if not complaint and not comment:
+            return None
+        
+        full_text = f"{complaint} {comment}".lower()
+        
+        # Check each category's patterns
+        best_match = None
+        best_score = 0
+        
+        for category, patterns in COMPILED_PATTERNS.items():
+            score = 0
+            # Check patterns
+            for pattern in patterns:
+                if pattern.search(full_text):
+                    score += 2
+            
+            # Check keywords
+            keywords = MEDICAL_DEVICE_CATEGORIES[category].get('keywords', [])
+            for keyword in keywords:
+                if keyword.lower() in full_text:
+                    score += 1
+            
+            if score > best_score:
+                best_score = score
+                best_match = category
+        
+        if best_match and best_score >= 2:
+            confidence = min(0.9, 0.7 + (best_score * 0.05))
+            return best_match, confidence
+        
+        return None
+    
+    async def categorize_return(self, reason: str, comment: str = "", 
+                              order_id: str = "", sku: str = "") -> ReturnCategorization:
+        """Categorize a return with medical device categories"""
+        start_time = time.time()
+        
+        # Check cache first
+        cache_key = f"{reason}|{comment}"
+        if cache_key in self.categorization_cache:
+            cached = self.categorization_cache[cache_key]
+            return ReturnCategorization(
+                category=cached['category'],
+                confidence=cached['confidence'],
+                severity=cached['severity'],
+                critical_flags=self.detect_critical_issues(f"{reason} {comment}"),
+                ai_provider='cache',
+                processing_time=0.001
+            )
+        
+        # Detect critical issues
+        critical_flags = self.detect_critical_issues(f"{reason} {comment}")
+        
+        # Try quick categorization first
+        quick_result = self.quick_categorize(reason, comment)
+        if quick_result:
+            category, confidence = quick_result
+            severity = self._determine_severity(category, critical_flags)
+            
+            # Cache result
+            self.categorization_cache[cache_key] = {
+                'category': category,
+                'confidence': confidence,
+                'severity': severity
+            }
+            
+            return ReturnCategorization(
+                category=category,
+                confidence=confidence,
+                severity=severity,
+                critical_flags=critical_flags,
+                ai_provider='pattern',
+                processing_time=time.time() - start_time
+            )
+        
+        # Use AI for complex cases
+        result = await self._ai_categorize(reason, comment)
+        
+        # Cache result
+        self.categorization_cache[cache_key] = {
+            'category': result.category,
+            'confidence': result.confidence,
+            'severity': result.severity
+        }
+        
+        result.critical_flags = critical_flags
+        result.processing_time = time.time() - start_time
+        
+        return result
+    
+    async def _ai_categorize(self, reason: str, comment: str) -> ReturnCategorization:
+        """Use AI to categorize return"""
+        # Build prompt
+        categories_list = '\n'.join([f"- {cat}" for cat in MEDICAL_DEVICE_CATEGORIES.keys()])
+        
+        system_prompt = """You are a medical device quality expert. Categorize this return into exactly one category.
+Focus on identifying quality defects, safety issues, and medical concerns.
+Respond with ONLY the category name, nothing else."""
+        
+        user_prompt = f"""Return Reason: {reason}
+Customer Comment: {comment}
+
+Categories:
+{categories_list}
+
+Category:"""
+        
+        # Choose AI based on provider setting
+        if self.provider == AIProvider.FASTEST:
+            # Use Claude Haiku for speed
+            if self.claude_client:
+                result = await self._call_claude(user_prompt, system_prompt, 'fast')
+                if result:
+                    category = self._clean_category_response(result)
+                    critical_flags = self.detect_critical_issues(f"{reason} {comment}")
+                    severity = self._determine_severity(category, critical_flags)
+                    return ReturnCategorization(
+                        category=category,
+                        confidence=0.85,
+                        severity=severity,
+                        critical_flags=[],
+                        ai_provider='claude_haiku',
+                        processing_time=0
+                    )
+            
+            # Fallback to OpenAI
+            if self.openai_key:
+                result = await self._call_openai(user_prompt, system_prompt, 'fast')
+                if result:
+                    category = self._clean_category_response(result)
+                    critical_flags = self.detect_critical_issues(f"{reason} {comment}")
+                    severity = self._determine_severity(category, critical_flags)
+                    return ReturnCategorization(
+                        category=category,
+                        confidence=0.85,
+                        severity=severity,
+                        critical_flags=[],
+                        ai_provider='openai_fast',
+                        processing_time=0
+                    )
+        
+        elif self.provider == AIProvider.ACCURATE:
+            # Use better models for accuracy
+            tasks = []
+            if self.openai_key:
+                tasks.append(self._call_openai(user_prompt, system_prompt, 'accurate'))
+            if self.claude_client:
+                tasks.append(self._call_claude(user_prompt, system_prompt, 'accurate'))
+            
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                valid_results = [r for r in results if r and not isinstance(r, Exception)]
+                
+                if valid_results:
+                    # Use consensus if multiple results
+                    categories = [self._clean_category_response(r) for r in valid_results]
+                    category = Counter(categories).most_common(1)[0][0]
+                    confidence = 0.95 if len(set(categories)) == 1 else 0.85
+                    
+                    critical_flags = self.detect_critical_issues(f"{reason} {comment}")
+                    severity = self._determine_severity(category, critical_flags)
+                    
+                    return ReturnCategorization(
+                        category=category,
+                        confidence=confidence,
+                        severity=severity,
+                        critical_flags=[],
+                        ai_provider='consensus',
+                        processing_time=0
+                    )
+        
+        # Default fallback
+        return ReturnCategorization(
+            category='Other/Miscellaneous',
+            confidence=0.3,
+            severity='low',
+            critical_flags=self.detect_critical_issues(f"{reason} {comment}"),
+            ai_provider='fallback',
+            processing_time=0
+        )
+    
+    async def _call_openai(self, prompt: str, system_prompt: str, mode: str = 'fast') -> Optional[str]:
+        """Call OpenAI API"""
+        if not self.openai_key:
+            return None
+        
+        model = MODEL_CONFIG['openai'][mode]
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.openai_key}"
+        }
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 100
+        }
+        
+        try:
+            response = (self.session or requests).post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=API_TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                self.api_calls['openai'] += 1
+                return response.json()["choices"][0]["message"]["content"].strip()
+            else:
+                logger.error(f"OpenAI API error {response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"OpenAI call error: {e}")
+            return None
+    
+    async def _call_claude(self, prompt: str, system_prompt: str, mode: str = 'fast') -> Optional[str]:
+        """Call Claude API"""
+        if not self.claude_client:
+            return None
+        
+        try:
+            message = self.claude_client.messages.create(
+                model=MODEL_CONFIG['claude'][mode],
+                max_tokens=100,
+                temperature=0.1,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            self.api_calls['claude'] += 1
+            return message.content[0].text.strip()
+            
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            return None
+    
+    def _clean_category_response(self, response: str) -> str:
+        """Clean AI response to extract category"""
+        response = response.strip().strip('"').strip("'").strip()
+        
+        # Remove common prefixes
+        prefixes = ['Category:', 'The category is:', 'Answer:']
+        for prefix in prefixes:
+            if response.startswith(prefix):
+                response = response[len(prefix):].strip()
+        
+        # Try exact match first
+        for category in MEDICAL_DEVICE_CATEGORIES.keys():
+            if response == category or response.lower() == category.lower():
+                return category
+        
+        # Try partial match
+        response_lower = response.lower()
+        for category in MEDICAL_DEVICE_CATEGORIES.keys():
+            if category.lower() in response_lower or response_lower in category.lower():
+                return category
+        
+        return 'Other/Miscellaneous'
+    
+    def _determine_severity(self, category: str, critical_flags: List[str]) -> str:
+        """Determine severity level"""
+        # Critical flags override
+        if critical_flags:
+            return 'critical'
+        
+        # Category-based severity
+        priority = MEDICAL_DEVICE_CATEGORIES.get(category, {}).get('priority', 'low')
+        
+        severity_map = {
+            'critical': 'critical',
+            'high': 'high',
+            'medium': 'medium',
+            'low': 'low'
+        }
+        
+        return severity_map.get(priority, 'low')
+    
     async def analyze_file(self, file_content: bytes, filename: str, 
                           file_type: str = None) -> FileAnalysis:
         """Analyze any file type and extract relevant data"""
@@ -186,7 +598,6 @@ class UniversalAIAnalyzer:
         elif file_type in ['xlsx', 'xls']:
             return await self._analyze_excel(file_content, filename)
         else:
-            # Use AI to understand unknown file
             return await self._analyze_unknown(file_content, filename)
     
     def _detect_file_type(self, filename: str) -> str:
@@ -206,42 +617,59 @@ class UniversalAIAnalyzer:
             )
         
         try:
-            extracted_text = []
             extracted_data = {
                 'returns': [],
                 'summary': {},
-                'raw_text': ''
+                'raw_text': '',
+                'critical_issues': []
             }
             
             with pdfplumber.open(BytesIO(content)) as pdf:
                 for page_num, page in enumerate(pdf.pages):
-                    text = page.extract_text()
-                    extracted_text.append(text)
+                    text = page.extract_text() or ""
+                    extracted_data['raw_text'] += f"\n--- Page {page_num + 1} ---\n{text}"
                     
-                    # Look for Amazon return patterns
-                    if self._is_amazon_return_page(text):
-                        returns = self._extract_amazon_returns(text)
-                        extracted_data['returns'].extend(returns)
+                    # Extract Amazon return data
+                    returns = self._extract_amazon_returns_from_text(text)
+                    extracted_data['returns'].extend(returns)
+                    
+                    # Check for critical issues
+                    critical_flags = self.detect_critical_issues(text)
+                    if critical_flags:
+                        extracted_data['critical_issues'].append({
+                            'page': page_num + 1,
+                            'flags': critical_flags,
+                            'context': text[:200]
+                        })
             
-            extracted_data['raw_text'] = '\n'.join(extracted_text)
-            
-            # Use AI to understand the content if patterns not found
-            if not extracted_data['returns'] and extracted_data['raw_text']:
-                ai_analysis = await self._ai_analyze_text(
-                    extracted_data['raw_text'],
-                    "Analyze this PDF content and extract any return information, product issues, or quality concerns."
-                )
-                extracted_data['ai_analysis'] = ai_analysis
-            
-            # Determine content type
-            content_type = 'returns' if extracted_data['returns'] else 'other'
+            # Categorize all returns
+            if extracted_data['returns']:
+                categorized_returns = []
+                for return_data in extracted_data['returns']:
+                    categorization = await self.categorize_return(
+                        return_data.get('return_reason', ''),
+                        return_data.get('customer_comment', ''),
+                        return_data.get('order_id', ''),
+                        return_data.get('sku', '')
+                    )
+                    
+                    return_data['category'] = categorization.category
+                    return_data['severity'] = categorization.severity
+                    return_data['critical_flags'] = categorization.critical_flags
+                    return_data['confidence'] = categorization.confidence
+                    
+                    categorized_returns.append(return_data)
+                
+                extracted_data['returns'] = categorized_returns
+                extracted_data['summary'] = self._generate_return_summary(categorized_returns)
             
             return FileAnalysis(
                 file_type='pdf',
-                content_type=content_type,
+                content_type='returns',
                 extracted_data=extracted_data,
-                confidence=0.9 if extracted_data['returns'] else 0.7,
-                ai_provider='pattern_matching' if extracted_data['returns'] else 'ai'
+                confidence=0.9 if extracted_data['returns'] else 0.5,
+                ai_provider='hybrid',
+                critical_issues=extracted_data.get('critical_issues', [])
             )
             
         except Exception as e:
@@ -254,31 +682,18 @@ class UniversalAIAnalyzer:
                 ai_provider='none'
             )
     
-    def _is_amazon_return_page(self, text: str) -> bool:
-        """Check if text appears to be from Amazon return page"""
-        indicators = [
-            'manage returns', 'return request', 'order id', 'asin', 
-            'return reason', 'customer comments', 'refund', 'rma'
-        ]
-        text_lower = text.lower()
-        matches = sum(1 for ind in indicators if ind in text_lower)
-        return matches >= 3
-    
-    def _extract_amazon_returns(self, text: str) -> List[Dict]:
-        """Extract return information from Amazon format"""
+    def _extract_amazon_returns_from_text(self, text: str) -> List[Dict]:
+        """Extract return information from Amazon PDF text"""
         returns = []
         
-        # Pattern for order IDs (format: 123-1234567-1234567)
+        # Pattern for order IDs
         order_pattern = r'\b\d{3}-\d{7}-\d{7}\b'
         
-        # Pattern for ASINs (10 alphanumeric characters)
-        asin_pattern = r'\b[A-Z0-9]{10}\b'
-        
-        # Extract sections that look like return entries
+        # Split text into potential return blocks
         lines = text.split('\n')
         current_return = {}
         
-        for line in lines:
+        for i, line in enumerate(lines):
             # Check for order ID
             order_match = re.search(order_pattern, line)
             if order_match:
@@ -286,165 +701,103 @@ class UniversalAIAnalyzer:
                     returns.append(current_return)
                 current_return = {'order_id': order_match.group()}
             
-            # Check for ASIN
-            asin_match = re.search(asin_pattern, line)
+            # Extract ASIN (10 alphanumeric)
+            asin_match = re.search(r'\b[A-Z0-9]{10}\b', line)
             if asin_match and current_return:
                 current_return['asin'] = asin_match.group()
             
-            # Look for return reasons
-            if 'reason' in line.lower() and current_return:
-                # Extract text after "reason"
-                reason_text = line.split('reason', 1)[-1].strip(': ')
-                current_return['return_reason'] = reason_text
+            # Look for return reason indicators
+            if any(indicator in line.lower() for indicator in ['reason:', 'return reason', 'defect']):
+                # Get the rest of the line and potentially next line
+                reason_text = line.split(':', 1)[-1].strip()
+                if i + 1 < len(lines) and not re.search(order_pattern, lines[i + 1]):
+                    reason_text += ' ' + lines[i + 1].strip()
+                if current_return:
+                    current_return['return_reason'] = reason_text
             
             # Look for customer comments
-            if 'comment' in line.lower() and current_return:
-                comment_text = line.split('comment', 1)[-1].strip(': ')
-                current_return['customer_comment'] = comment_text
+            if any(indicator in line.lower() for indicator in ['comment:', 'customer comment', 'notes:']):
+                comment_text = line.split(':', 1)[-1].strip()
+                if i + 1 < len(lines) and not re.search(order_pattern, lines[i + 1]):
+                    comment_text += ' ' + lines[i + 1].strip()
+                if current_return:
+                    current_return['customer_comment'] = comment_text
         
         if current_return:
             returns.append(current_return)
         
         return returns
     
-    async def _analyze_image(self, content: bytes, filename: str) -> FileAnalysis:
-        """Analyze image files using OCR and vision AI"""
-        if not has_pil:
-            return FileAnalysis(
-                file_type='image',
-                content_type='error',
-                extracted_data={'error': 'Image processing not available'},
-                confidence=0.0,
-                ai_provider='none'
-            )
+    def _generate_return_summary(self, returns: List[Dict]) -> Dict[str, Any]:
+        """Generate summary statistics from categorized returns"""
+        if not returns:
+            return {}
         
-        try:
-            # Perform OCR if available
-            extracted_text = ""
-            if has_tesseract:
-                from PIL import Image
-                image = Image.open(BytesIO(content))
-                extracted_text = pytesseract.image_to_string(image)
-            
-            # Use vision AI for better understanding
-            vision_analysis = await self._analyze_with_vision_ai(content, filename)
-            
-            return FileAnalysis(
-                file_type='image',
-                content_type='returns' if 'return' in extracted_text.lower() else 'other',
-                extracted_data={
-                    'ocr_text': extracted_text,
-                    'vision_analysis': vision_analysis
-                },
-                confidence=0.8,
-                ai_provider='vision_ai'
-            )
-            
-        except Exception as e:
-            logger.error(f"Image analysis error: {e}")
-            return FileAnalysis(
-                file_type='image',
-                content_type='error',
-                extracted_data={'error': str(e)},
-                confidence=0.0,
-                ai_provider='none'
-            )
+        summary = {
+            'total_returns': len(returns),
+            'by_category': Counter(r.get('category', 'Unknown') for r in returns),
+            'by_severity': Counter(r.get('severity', 'unknown') for r in returns),
+            'critical_returns': [r for r in returns if r.get('critical_flags')],
+            'injury_related': [r for r in returns if 'injury' in r.get('critical_flags', [])],
+            'quality_defects': [r for r in returns if r.get('category') == 'Product Defects/Quality'],
+            'top_categories': []
+        }
+        
+        # Calculate percentages
+        total = summary['total_returns']
+        summary['category_percentages'] = {
+            cat: (count / total * 100) for cat, count in summary['by_category'].items()
+        }
+        
+        # Top categories
+        summary['top_categories'] = summary['by_category'].most_common(5)
+        
+        # Quality metrics
+        quality_categories = ['Product Defects/Quality', 'Performance/Effectiveness', 
+                            'Design/Material Issues', 'Assembly/Usage Difficulty']
+        quality_returns = sum(summary['by_category'].get(cat, 0) for cat in quality_categories)
+        summary['quality_issue_rate'] = (quality_returns / total * 100) if total > 0 else 0
+        
+        return summary
     
-    async def _analyze_text_file(self, content: bytes, filename: str, 
-                                file_type: str) -> FileAnalysis:
-        """Analyze text-based files (CSV, TSV, TXT)"""
+    async def analyze_fba_returns(self, df: pd.DataFrame) -> FileAnalysis:
+        """Analyze FBA return report with medical device categories"""
         try:
-            # Detect encoding
-            import chardet
-            detection = chardet.detect(content[:10000])
-            encoding = detection['encoding'] or 'utf-8'
-            
-            text = content.decode(encoding)
-            
-            # Parse based on file type
-            if file_type in ['csv', 'tsv']:
-                delimiter = '\t' if file_type == 'tsv' else ','
-                df = pd.read_csv(BytesIO(content), delimiter=delimiter, encoding=encoding)
-                
-                # Check if it's an FBA return report
-                if self._is_fba_return_report(df):
-                    return self._analyze_fba_returns(df)
-                else:
-                    # General CSV/TSV analysis
-                    return FileAnalysis(
-                        file_type=file_type,
-                        content_type='data',
-                        extracted_data={
-                            'columns': df.columns.tolist(),
-                            'row_count': len(df),
-                            'sample': df.head(10).to_dict('records')
-                        },
-                        confidence=0.9,
-                        ai_provider='pandas'
-                    )
-            else:
-                # Plain text analysis
-                ai_analysis = await self._ai_analyze_text(
-                    text,
-                    "Analyze this text file and identify if it contains return data, reviews, or other e-commerce information."
-                )
-                
-                return FileAnalysis(
-                    file_type='txt',
-                    content_type='text',
-                    extracted_data={
-                        'text': text[:5000],  # First 5000 chars
-                        'ai_analysis': ai_analysis
-                    },
-                    confidence=0.7,
-                    ai_provider='ai'
-                )
-                
-        except Exception as e:
-            logger.error(f"Text file analysis error: {e}")
-            return FileAnalysis(
-                file_type=file_type,
-                content_type='error',
-                extracted_data={'error': str(e)},
-                confidence=0.0,
-                ai_provider='none'
-            )
-    
-    def _is_fba_return_report(self, df: pd.DataFrame) -> bool:
-        """Check if DataFrame is an FBA return report"""
-        expected_columns = ['return-date', 'order-id', 'sku', 'asin', 'reason', 'quantity']
-        df_columns = [col.lower() for col in df.columns]
-        matches = sum(1 for col in expected_columns if col in df_columns)
-        return matches >= 4
-    
-    def _analyze_fba_returns(self, df: pd.DataFrame) -> FileAnalysis:
-        """Analyze FBA return report"""
-        try:
-            # Categorize returns
             categorized_returns = []
             
+            # Process each return
             for _, row in df.iterrows():
-                return_entry = {
+                return_data = {
                     'order_id': row.get('order-id', ''),
                     'asin': row.get('asin', ''),
                     'sku': row.get('sku', ''),
                     'return_date': row.get('return-date', ''),
                     'reason': row.get('reason', ''),
                     'customer_comments': row.get('customer-comments', ''),
-                    'quantity': row.get('quantity', 1)
+                    'quantity': row.get('quantity', 1),
+                    'product_name': row.get('product-name', '')
                 }
                 
                 # Categorize the return
-                category = self._categorize_return(
-                    return_entry['reason'],
-                    return_entry['customer_comments']
+                categorization = await self.categorize_return(
+                    return_data['reason'],
+                    return_data['customer_comments'],
+                    return_data['order_id'],
+                    return_data['sku']
                 )
-                return_entry['category'] = category
                 
-                categorized_returns.append(return_entry)
+                return_data['category'] = categorization.category
+                return_data['severity'] = categorization.severity
+                return_data['critical_flags'] = categorization.critical_flags
+                return_data['confidence'] = categorization.confidence
+                
+                categorized_returns.append(return_data)
             
-            # Generate summary statistics
+            # Generate summary
             summary = self._generate_return_summary(categorized_returns)
+            
+            # Identify critical issues
+            critical_issues = [r for r in categorized_returns if r.get('critical_flags')]
             
             return FileAnalysis(
                 file_type='fba_returns',
@@ -452,10 +805,12 @@ class UniversalAIAnalyzer:
                 extracted_data={
                     'returns': categorized_returns,
                     'summary': summary,
-                    'total_returns': len(categorized_returns)
+                    'total_returns': len(categorized_returns),
+                    'critical_count': len(critical_issues)
                 },
                 confidence=0.95,
-                ai_provider='rule_based'
+                ai_provider='hybrid',
+                critical_issues=critical_issues
             )
             
         except Exception as e:
@@ -468,452 +823,205 @@ class UniversalAIAnalyzer:
                 ai_provider='none'
             )
     
-    def _categorize_return(self, reason: str, comment: str = "") -> Dict[str, Any]:
-        """Categorize a return based on reason and comment"""
-        text = f"{reason} {comment}".lower()
-        
-        # Check each category
-        scores = {}
-        for category, info in RETURN_CATEGORIES.items():
-            score = sum(1 for keyword in info['keywords'] if keyword in text)
-            if score > 0:
-                scores[category] = score
-        
-        if scores:
-            # Get category with highest score
-            best_category = max(scores, key=scores.get)
-            return {
-                'category': best_category,
-                'confidence': min(scores[best_category] / 3, 1.0),
-                'priority': RETURN_CATEGORIES[best_category]['priority']
-            }
-        else:
-            return {
-                'category': 'OTHER',
-                'confidence': 0.5,
-                'priority': 'low'
-            }
-    
-    def _generate_return_summary(self, returns: List[Dict]) -> Dict[str, Any]:
-        """Generate summary statistics from returns"""
-        summary = {
-            'total_returns': len(returns),
-            'by_category': Counter(r['category']['category'] for r in returns),
-            'by_priority': Counter(r['category']['priority'] for r in returns),
-            'by_asin': Counter(r['asin'] for r in returns if r['asin']),
-            'by_reason': Counter(r['reason'] for r in returns if r['reason'])
-        }
-        
-        # Calculate return rate if we have sales data
-        # This would need to be enhanced with actual sales data
-        
-        return summary
-    
-    async def _ai_analyze_text(self, text: str, prompt: str) -> Dict[str, Any]:
-        """Use AI to analyze text content"""
-        providers = self.get_available_providers()
-        if not providers:
-            return {'error': 'No AI providers available'}
-        
-        # Try Claude first for better understanding
-        if 'claude' in providers:
-            result = await self._call_claude(text, prompt)
-            if result['success']:
-                return result
-        
-        # Fallback to OpenAI
-        if 'openai' in providers:
-            result = await self._call_openai(text, prompt)
-            if result['success']:
-                return result
-        
-        return {'error': 'AI analysis failed'}
-    
-    async def _call_claude(self, text: str, prompt: str) -> Dict[str, Any]:
-        """Call Claude API"""
-        if not self.claude_client:
-            return {'success': False, 'error': 'Claude not configured'}
-        
-        try:
-            message = self.claude_client.messages.create(
-                model=MODEL_CONFIG['claude']['primary'],
-                max_tokens=1000,
-                temperature=0.3,
-                system="You are an expert at analyzing e-commerce data, especially Amazon returns and reviews. Extract structured information and provide insights.",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"{prompt}\n\nContent:\n{text[:4000]}"
-                    }
-                ]
-            )
-            
-            return {
-                'success': True,
-                'response': message.content[0].text,
-                'provider': 'claude'
-            }
-            
-        except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            return {'success': False, 'error': str(e)}
-    
-    async def _call_openai(self, text: str, prompt: str) -> Dict[str, Any]:
-        """Call OpenAI API"""
-        if not self.openai_key:
-            return {'success': False, 'error': 'OpenAI not configured'}
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.openai_key}"
-        }
-        
-        payload = {
-            "model": MODEL_CONFIG['openai']['primary'],
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an expert at analyzing e-commerce data, especially Amazon returns and reviews. Extract structured information and provide insights."
-                },
-                {
-                    "role": "user",
-                    "content": f"{prompt}\n\nContent:\n{text[:4000]}"
-                }
-            ],
-            "temperature": 0.3,
-            "max_tokens": 1000
-        }
-        
-        try:
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return {
-                    'success': True,
-                    'response': result['choices'][0]['message']['content'],
-                    'provider': 'openai'
-                }
-            else:
-                return {'success': False, 'error': f'API error {response.status_code}'}
-                
-        except Exception as e:
-            logger.error(f"OpenAI API error: {e}")
-            return {'success': False, 'error': str(e)}
-    
-    async def _analyze_with_vision_ai(self, image_content: bytes, filename: str) -> Dict[str, Any]:
-        """Analyze image using vision AI"""
-        providers = self.get_available_providers()
-        
-        # Encode image
-        base64_image = base64.b64encode(image_content).decode('utf-8')
-        
-        if 'claude' in providers and self.claude_client:
-            try:
-                message = self.claude_client.messages.create(
-                    model=MODEL_CONFIG['claude']['vision'],
-                    max_tokens=1000,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Analyze this image and extract any return information, order IDs, ASINs, or product issues. If this appears to be from Amazon's return management page, extract all visible return details."
-                                },
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "image/jpeg",
-                                        "data": base64_image
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                )
-                
-                return {
-                    'success': True,
-                    'analysis': message.content[0].text,
-                    'provider': 'claude_vision'
-                }
-            except Exception as e:
-                logger.error(f"Claude vision error: {e}")
-        
-        # Fallback to OpenAI vision
-        if 'openai' in providers:
-            # Implement OpenAI vision API call here
-            pass
-        
-        return {'success': False, 'error': 'Vision analysis not available'}
-    
-    async def interactive_file_clarification(self, file_analysis: FileAnalysis,
-                                           user_response: str = None) -> Dict[str, Any]:
-        """Interactive clarification for unclear files"""
-        if not file_analysis.needs_clarification:
-            return {'status': 'no_clarification_needed'}
-        
-        if not user_response:
-            # Generate clarification questions
-            questions = [
-                "What type of data does this file contain? (returns, reviews, inventory, etc.)",
-                "Is this file from Amazon Seller Central?",
-                "What specific analysis would you like me to perform?"
-            ]
-            
-            return {
-                'status': 'needs_input',
-                'questions': questions
-            }
-        else:
-            # Process user response and re-analyze
-            enhanced_prompt = f"""
-            User clarification: {user_response}
-            
-            Please analyze the file content with this additional context and extract relevant data.
-            """
-            
-            # Re-analyze with context
-            result = await self._ai_analyze_text(
-                file_analysis.extracted_data.get('raw_text', ''),
-                enhanced_prompt
-            )
-            
-            return {
-                'status': 'clarified',
-                'analysis': result
-            }
-    
-    def generate_return_analysis_report(self, asin: str, returns_data: List[Dict],
-                                      reviews_data: List[Dict] = None) -> Dict[str, Any]:
-        """Generate comprehensive return analysis report like the PDF example"""
-        
-        # Filter returns for specific ASIN
-        asin_returns = [r for r in returns_data if r.get('asin') == asin]
-        
-        if not asin_returns and asin != 'ALL':
-            return {'error': f'No returns found for ASIN {asin}'}
-        
-        # Use all returns if ASIN is 'ALL'
-        if asin == 'ALL':
-            asin_returns = returns_data
-        
-        # Calculate metrics
-        total_returns = len(asin_returns)
-        
-        # Categorize returns
-        categorized = {}
-        for return_item in asin_returns:
-            category = return_item.get('category', {}).get('category', 'OTHER')
-            if category not in categorized:
-                categorized[category] = []
-            categorized[category].append(return_item)
-        
-        # Calculate return rate (would need sales data)
-        # For now, we'll use a placeholder
-        
-        # Generate report sections
+    def generate_quality_report(self, analysis_results: List[FileAnalysis]) -> Dict[str, Any]:
+        """Generate comprehensive quality report from multiple analyses"""
         report = {
-            'executive_summary': {
-                'asin': asin,
-                'total_returns': total_returns,
-                'main_issues': self._identify_main_issues(categorized),
-                'trend': self._calculate_trend(asin_returns)
-            },
-            'category_breakdown': {
-                category: {
-                    'count': len(returns),
-                    'percentage': len(returns) / total_returns * 100 if total_returns > 0 else 0,
-                    'priority': RETURN_CATEGORIES.get(category, {}).get('priority', 'low'),
-                    'sample_comments': [r.get('customer_comments', '') for r in returns[:3] if r.get('customer_comments')]
-                }
-                for category, returns in categorized.items()
-            },
-            'business_impact': self._assess_business_impact(categorized, total_returns),
-            'action_items': self._generate_action_items(categorized),
-            'quality_priorities': self._identify_quality_priorities(categorized)
+            'executive_summary': {},
+            'critical_issues': [],
+            'category_analysis': defaultdict(list),
+            'product_analysis': defaultdict(lambda: defaultdict(int)),
+            'recommendations': [],
+            'metrics': {}
         }
         
-        # Add review correlation if available
-        if reviews_data:
-            report['review_correlation'] = self._correlate_reviews_returns(
-                asin_returns, reviews_data
-            )
+        # Aggregate all returns
+        all_returns = []
+        for analysis in analysis_results:
+            if analysis.content_type == 'returns':
+                returns = analysis.extracted_data.get('returns', [])
+                all_returns.extend(returns)
+                
+                # Collect critical issues
+                if analysis.critical_issues:
+                    report['critical_issues'].extend(analysis.critical_issues)
+        
+        if not all_returns:
+            return report
+        
+        # Executive summary
+        total_returns = len(all_returns)
+        critical_returns = [r for r in all_returns if r.get('critical_flags')]
+        quality_defects = [r for r in all_returns if r.get('category') == 'Product Defects/Quality']
+        
+        report['executive_summary'] = {
+            'total_returns': total_returns,
+            'critical_returns': len(critical_returns),
+            'quality_defects': len(quality_defects),
+            'critical_rate': (len(critical_returns) / total_returns * 100) if total_returns > 0 else 0,
+            'quality_defect_rate': (len(quality_defects) / total_returns * 100) if total_returns > 0 else 0
+        }
+        
+        # Category analysis
+        for return_data in all_returns:
+            category = return_data.get('category', 'Unknown')
+            report['category_analysis'][category].append(return_data)
+        
+        # Product analysis (by SKU/ASIN)
+        for return_data in all_returns:
+            sku = return_data.get('sku', 'Unknown')
+            category = return_data.get('category', 'Unknown')
+            report['product_analysis'][sku][category] += 1
+            report['product_analysis'][sku]['total'] += 1
+            
+            if return_data.get('critical_flags'):
+                report['product_analysis'][sku]['critical'] += 1
+        
+        # Generate recommendations
+        report['recommendations'] = self._generate_recommendations(report)
         
         return report
     
-    def _identify_main_issues(self, categorized: Dict) -> List[str]:
-        """Identify main issues from categorized returns"""
-        # Sort by count and priority
-        issues = []
+    def _generate_recommendations(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate actionable recommendations based on analysis"""
+        recommendations = []
         
-        for category, returns in sorted(categorized.items(), 
-                                      key=lambda x: len(x[1]), reverse=True)[:3]:
-            if RETURN_CATEGORIES.get(category, {}).get('priority') in ['critical', 'high']:
-                issues.append(f"{category.replace('_', ' ').title()} ({len(returns)} returns)")
-        
-        return issues
-    
-    def _calculate_trend(self, returns: List[Dict]) -> str:
-        """Calculate return trend"""
-        # This would need date analysis
-        # For now, return a placeholder
-        return "Increasing" if len(returns) > 50 else "Stable"
-    
-    def _assess_business_impact(self, categorized: Dict, total: int) -> Dict[str, Any]:
-        """Assess business impact of returns"""
-        critical_returns = sum(
-            len(returns) for cat, returns in categorized.items()
-            if RETURN_CATEGORIES.get(cat, {}).get('priority') == 'critical'
-        )
-        
-        return {
-            'severity': 'High' if critical_returns / total > 0.3 else 'Medium',
-            'critical_return_percentage': critical_returns / total * 100 if total > 0 else 0,
-            'estimated_cost_impact': 'Significant' if critical_returns > 20 else 'Moderate',
-            'risk_assessment': self._assess_risk(categorized)
-        }
-    
-    def _assess_risk(self, categorized: Dict) -> str:
-        """Assess risk level based on return categories"""
-        if 'QUALITY_DEFECTS' in categorized and len(categorized['QUALITY_DEFECTS']) > 10:
-            return "High - Potential safety/liability issues"
-        elif any(cat in categorized for cat in ['FUNCTIONALITY_ISSUES', 'MISSING_PARTS']):
-            return "Medium - Customer satisfaction at risk"
-        else:
-            return "Low - Mostly user-related issues"
-    
-    def _generate_action_items(self, categorized: Dict) -> List[Dict[str, str]]:
-        """Generate prioritized action items"""
-        actions = []
-        
-        # Quality defects - highest priority
-        if 'QUALITY_DEFECTS' in categorized:
-            actions.append({
+        # Critical issues recommendation
+        if report['critical_issues']:
+            recommendations.append({
                 'priority': 'IMMEDIATE',
-                'action': 'Conduct quality audit with manufacturer',
-                'reason': f"{len(categorized['QUALITY_DEFECTS'])} quality-related returns"
+                'category': 'Safety',
+                'recommendation': 'Investigate all injury/safety reports immediately',
+                'details': f"Found {len(report['critical_issues'])} critical safety issues requiring immediate attention",
+                'action_items': [
+                    'Contact affected customers',
+                    'Document incidents for FDA reporting',
+                    'Review product design for safety improvements'
+                ]
             })
         
-        # Size/fit issues
-        if 'SIZE_FIT_ISSUES' in categorized:
-            actions.append({
+        # Quality defect recommendations
+        quality_rate = report['executive_summary'].get('quality_defect_rate', 0)
+        if quality_rate > 10:
+            recommendations.append({
                 'priority': 'HIGH',
-                'action': 'Update product dimensions and sizing guide',
-                'reason': 'Size-related returns impacting customer satisfaction'
+                'category': 'Quality',
+                'recommendation': 'Implement quality improvement program',
+                'details': f"Quality defect rate of {quality_rate:.1f}% exceeds acceptable threshold",
+                'action_items': [
+                    'Audit manufacturing processes',
+                    'Increase quality control inspections',
+                    'Review supplier quality agreements'
+                ]
             })
         
-        # Functionality issues
-        if 'FUNCTIONALITY_ISSUES' in categorized:
-            actions.append({
-                'priority': 'HIGH',
-                'action': 'Improve product instructions and add video guides',
-                'reason': 'Customers struggling with product usage'
-            })
+        # Category-specific recommendations
+        for category, returns in report['category_analysis'].items():
+            if len(returns) > 10:
+                if category == 'Size/Fit Issues':
+                    recommendations.append({
+                        'priority': 'MEDIUM',
+                        'category': 'Product Information',
+                        'recommendation': 'Improve sizing information and guides',
+                        'details': f"{len(returns)} returns due to sizing issues",
+                        'action_items': [
+                            'Create detailed sizing charts',
+                            'Add measurement instructions to listings',
+                            'Include size comparison images'
+                        ]
+                    })
+                elif category == 'Assembly/Usage Difficulty':
+                    recommendations.append({
+                        'priority': 'MEDIUM',
+                        'category': 'Documentation',
+                        'recommendation': 'Enhance product instructions',
+                        'details': f"{len(returns)} returns due to usage difficulties",
+                        'action_items': [
+                            'Create video tutorials',
+                            'Redesign instruction manuals',
+                            'Add QR codes for online help'
+                        ]
+                    })
         
-        return actions[:5]  # Top 5 actions
+        return recommendations
     
-    def _identify_quality_priorities(self, categorized: Dict) -> List[str]:
-        """Identify quality improvement priorities"""
-        priorities = []
+    async def process_batch_returns(self, returns: List[Dict], batch_size: int = 50) -> List[Dict]:
+        """Process returns in batches for efficiency"""
+        results = []
         
-        if 'QUALITY_DEFECTS' in categorized:
-            # Analyze specific defects mentioned
-            defect_keywords = ['broken', 'cracked', 'damaged', 'defective']
-            defect_counts = Counter()
+        for i in range(0, len(returns), batch_size):
+            batch = returns[i:i + batch_size]
             
-            for return_item in categorized['QUALITY_DEFECTS']:
-                comment = return_item.get('customer_comments', '').lower()
-                reason = return_item.get('reason', '').lower()
-                text = f"{comment} {reason}"
-                
-                for keyword in defect_keywords:
-                    if keyword in text:
-                        defect_counts[keyword] += 1
+            # Process batch in parallel
+            tasks = []
+            for return_data in batch:
+                task = self.categorize_return(
+                    return_data.get('reason', ''),
+                    return_data.get('customer_comments', ''),
+                    return_data.get('order_id', ''),
+                    return_data.get('sku', '')
+                )
+                tasks.append(task)
             
-            for defect, count in defect_counts.most_common(3):
-                priorities.append(f"Address {defect} issues ({count} occurrences)")
+            # Wait for all categorizations
+            categorizations = await asyncio.gather(*tasks)
+            
+            # Combine results
+            for return_data, categorization in zip(batch, categorizations):
+                return_data['category'] = categorization.category
+                return_data['severity'] = categorization.severity
+                return_data['critical_flags'] = categorization.critical_flags
+                return_data['confidence'] = categorization.confidence
+                results.append(return_data)
         
-        return priorities
+        return results
     
-    def _correlate_reviews_returns(self, returns: List[Dict], 
-                                  reviews: List[Dict]) -> Dict[str, Any]:
-        """Correlate return data with review feedback"""
-        # Extract themes from negative reviews
-        negative_reviews = [r for r in reviews if r.get('rating', 5) <= 2]
-        
-        # Find common themes
+    def get_api_usage_summary(self) -> Dict[str, Any]:
+        """Get API usage and cost summary"""
         return {
-            'matching_complaints': "Analysis of review-return correlation",
-            'predicted_future_returns': "Based on recent reviews",
-            'preventable_returns': "Returns that could be avoided with better product info"
+            'api_calls': self.api_calls,
+            'total_cost': self.total_cost,
+            'cache_size': len(self.categorization_cache),
+            'available_providers': self.get_available_providers()
         }
     
-    def generate_chat_response(self, user_message: str, context: Dict[str, Any] = None) -> str:
-        """Generate contextual chat responses for the AI assistant"""
+    async def generate_chat_response(self, user_message: str, context: Dict[str, Any] = None) -> str:
+        """Generate contextual chat responses for quality analysis"""
         if context is None:
             context = {}
-            
+        
         providers = self.get_available_providers()
-        
         if not providers:
-            return "AI chat is not available. Please configure your OpenAI or Claude API key to enable this feature."
+            return "AI chat is not available. Please configure your OpenAI or Claude API key."
         
-        try:
-            # Build context-aware system prompt
-            system_prompt = """You are a helpful Amazon quality analysis assistant specializing in return analysis and product quality improvement. 
-            Provide clear, actionable advice based on the user's question and the analysis context.
-            Be concise but thorough. Focus on practical implementation steps for quality improvement."""
-            
-            # Add relevant context to the prompt
-            context_info = []
-            if context.get('has_analysis'):
-                context_info.append("The user has completed an analysis of their Amazon returns and reviews.")
-            
-            if context.get('current_asin'):
-                context_info.append(f"Currently analyzing ASIN: {context['current_asin']}")
-            
-            if context.get('file_count', 0) > 0:
-                context_info.append(f"Files loaded: {context['file_count']}")
-            
-            if context_info:
-                system_prompt += "\n\nContext:\n" + "\n".join(context_info)
-            
-            # Prepare the full prompt
-            full_prompt = f"{system_prompt}\n\nUser question: {user_message}"
-            
-            # Try Claude first if available (often better for analysis)
-            if 'claude' in providers:
-                import asyncio
-                result = asyncio.run(self._call_claude(
-                    user_message,
-                    "You are a quality analysis expert. " + full_prompt
-                ))
-                if result['success']:
-                    return result['response']
-            
-            # Fallback to OpenAI
-            if 'openai' in providers:
-                import asyncio
-                result = asyncio.run(self._call_openai(
-                    user_message,
-                    full_prompt
-                ))
-                if result['success']:
-                    return result['response']
-            
-            return "I encountered an error processing your request. Please try again or rephrase your question."
-            
-        except Exception as e:
-            logger.error(f"Chat error: {e}")
-            return f"I'm having trouble processing your request: {str(e)}. Please try again."
+        # Build quality-focused system prompt
+        system_prompt = """You are an expert medical device quality analyst and regulatory compliance specialist.
+        Help users understand return patterns, identify quality issues, and provide actionable recommendations.
+        Focus on safety, FDA compliance, and quality improvement strategies."""
+        
+        # Add context
+        if context.get('current_analysis'):
+            analysis = context['current_analysis']
+            system_prompt += f"\n\nCurrent analysis shows {analysis.get('total_returns', 0)} returns with {analysis.get('critical_returns', 0)} critical issues."
+        
+        # Use appropriate AI
+        if 'claude' in providers:
+            result = await self._call_claude(user_message, system_prompt, 'chat')
+            if result:
+                return result
+        
+        if 'openai' in providers:
+            result = await self._call_openai(user_message, system_prompt, 'chat')
+            if result:
+                return result
+        
+        return "Unable to process your request. Please try again."
 
-# Export the enhanced analyzer
-__all__ = ['UniversalAIAnalyzer', 'FileAnalysis', 'RETURN_CATEGORIES']
+# Export all components
+__all__ = [
+    'UniversalAIAnalyzer',
+    'FileAnalysis',
+    'ReturnCategorization',
+    'AIProvider',
+    'MEDICAL_DEVICE_CATEGORIES',
+    'CRITICAL_KEYWORDS'
+]
