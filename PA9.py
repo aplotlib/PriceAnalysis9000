@@ -17,6 +17,8 @@ import json
 from collections import Counter, defaultdict
 import plotly.express as px
 import plotly.graph_objects as go
+import importlib
+import sys
 
 # Import our modules
 from enhanced_ai_universal import UniversalAIAnalyzer, FileAnalysis
@@ -217,7 +219,10 @@ def initialize_session_state():
         'combine_sources': True,
         
         # Cache
-        'analysis_cache': {}
+        'analysis_cache': {},
+        
+        # Track initialization
+        'ai_initialized': False
     }
     
     for key, value in defaults.items():
@@ -255,16 +260,21 @@ def display_header():
             st.metric("AI Status", ai_status)
 
 def get_ai_status():
-    """Check AI availability"""
-    if st.session_state.ai_analyzer is None:
-        try:
-            st.session_state.ai_analyzer = UniversalAIAnalyzer()
-        except Exception as e:
-            logger.error(f"AI initialization error: {e}")
-            return False
-    
-    providers = st.session_state.ai_analyzer.get_available_providers()
-    return len(providers) > 0
+    """Check AI availability with proper initialization"""
+    try:
+        if not st.session_state.ai_initialized or st.session_state.ai_analyzer is None:
+            # Force module reload to ensure latest version
+            import enhanced_ai_universal
+            importlib.reload(enhanced_ai_universal)
+            
+            st.session_state.ai_analyzer = enhanced_ai_universal.UniversalAIAnalyzer()
+            st.session_state.ai_initialized = True
+            
+        providers = st.session_state.ai_analyzer.get_available_providers()
+        return len(providers) > 0
+    except Exception as e:
+        logger.error(f"AI initialization error: {e}")
+        return False
 
 def display_file_upload():
     """Simplified file upload interface"""
@@ -288,6 +298,7 @@ def display_file_upload():
             st.session_state.uploaded_files = []
             st.session_state.processed_files = []
             st.session_state.current_analysis = None
+            st.session_state.chat_messages = []
             st.rerun()
     
     # File upload area
@@ -650,8 +661,27 @@ def display_analysis_results():
             """, unsafe_allow_html=True)
 
 def display_ai_chat():
-    """AI chat interface"""
+    """AI chat interface with error handling"""
     st.markdown("### 💬 AI Assistant")
+    
+    # Check if AI is properly initialized
+    if not get_ai_status():
+        st.warning("AI is not configured. Please add API keys to enable chat.")
+        return
+    
+    # Verify the method exists
+    if not hasattr(st.session_state.ai_analyzer, 'generate_chat_response'):
+        st.error("AI chat method not available. Please check the AI module.")
+        
+        # Try to reload the module
+        try:
+            import enhanced_ai_universal
+            importlib.reload(enhanced_ai_universal)
+            st.session_state.ai_analyzer = enhanced_ai_universal.UniversalAIAnalyzer()
+            st.session_state.ai_initialized = True
+        except Exception as e:
+            logger.error(f"Failed to reload AI module: {e}")
+            return
     
     # Chat container
     chat_container = st.container()
@@ -668,7 +698,7 @@ def display_ai_chat():
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         
         # Get AI response
-        if get_ai_status():
+        try:
             with st.spinner("Thinking..."):
                 # Build context
                 context = {
@@ -682,10 +712,17 @@ def display_ai_chat():
                 )
                 
                 st.session_state.chat_messages.append({"role": "assistant", "content": response})
-        else:
+        except AttributeError as e:
+            logger.error(f"Chat method error: {e}")
             st.session_state.chat_messages.append({
                 "role": "assistant", 
-                "content": "AI is not configured. Please add API keys to enable chat."
+                "content": "I'm having trouble with the chat function. Please try reloading the app."
+            })
+        except Exception as e:
+            logger.error(f"Chat error: {e}")
+            st.session_state.chat_messages.append({
+                "role": "assistant", 
+                "content": f"An error occurred: {str(e)}"
             })
         
         st.rerun()
@@ -748,6 +785,17 @@ def export_to_excel():
 
 def main():
     """Main application"""
+    # Force reload modules if needed
+    if 'modules_reloaded' not in st.session_state:
+        try:
+            import enhanced_ai_universal
+            import universal_file_detector
+            importlib.reload(enhanced_ai_universal)
+            importlib.reload(universal_file_detector)
+            st.session_state.modules_reloaded = True
+        except Exception as e:
+            logger.error(f"Module reload error: {e}")
+    
     initialize_session_state()
     inject_professional_css()
     
@@ -832,8 +880,7 @@ def main():
             st.info("Upload files and run analysis to see results here.")
     
     with tab4:
-        if st.session_state.show_ai_chat or True:  # Always show
-            display_ai_chat()
+        display_ai_chat()
 
 if __name__ == "__main__":
     main()
