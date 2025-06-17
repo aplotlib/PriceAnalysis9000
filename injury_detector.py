@@ -1,596 +1,470 @@
 """
-Enhanced Injury Detection Module - Identify Potential Injury Cases and Quality Issues
-Critical for medical device safety, liability prevention, and quality management
+Injury Detector Module - Critical Safety Analysis for Medical Device Returns
+Identifies potential injuries and safety issues in return comments
 """
 
-import logging
 import re
+import logging
 from typing import Dict, List, Any, Optional, Tuple
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Injury-related keywords by severity
-INJURY_KEYWORDS = {
-    'critical': [
-        'hospital', 'emergency', 'emergency room', 'er visit', 'urgent care',
-        'ambulance', 'died', 'death', 'fatal', 'life threatening',
-        'severe injury', 'serious injury', 'surgery', 'operation',
-        'permanent damage', 'disability', 'paralyzed', 'unconscious',
-        'bleeding profusely', 'severe bleeding', 'hemorrhage',
-        'anaphylactic', 'seizure', 'cardiac', 'heart attack'
-    ],
-    'high': [
-        'injured', 'hurt badly', 'hurt seriously', 'broken bone', 'fracture',
-        'bleeding', 'blood', 'wound', 'laceration', 'cut deep', 'stitches',
-        'concussion', 'head injury', 'knocked out', 'passed out', 'fainted',
-        'burn', 'burned', 'severe pain', 'excruciating', 'unbearable pain',
-        'infection', 'infected', 'swollen badly', 'allergic reaction',
-        'can\'t walk', 'can\'t move', 'immobilized', 'nerve damage',
-        'hospitalized', 'medical attention', 'doctor visit'
-    ],
-    'medium': [
-        'hurt', 'pain', 'painful', 'ache', 'sore', 'bruise', 'bruised',
-        'swelling', 'swollen', 'inflammation', 'rash', 'irritation',
-        'cut', 'scrape', 'scratch', 'minor bleeding', 'discomfort',
-        'sprain', 'strain', 'pulled muscle', 'dizzy', 'nausea',
-        'fell', 'fall', 'dropped', 'slipped', 'tripped', 'stumbled',
-        'pinched', 'squeezed', 'pressure', 'numbness', 'tingling'
-    ],
-    'low': [
-        'uncomfortable', 'slight pain', 'minor discomfort', 'tender',
-        'small cut', 'minor scratch', 'slight swelling', 'red mark',
-        'minor rash', 'slight irritation', 'soreness', 'stiffness'
-    ]
-}
-
-# Medical device specific risk patterns
-DEVICE_RISK_PATTERNS = {
-    'mobility_aids': {
-        'keywords': ['walker', 'wheelchair', 'cane', 'crutch', 'scooter', 'rollator', 'mobility'],
-        'risks': ['fall', 'fell', 'collapsed', 'tipped', 'unstable', 'broke while using', 'gave way']
-    },
-    'support_devices': {
-        'keywords': ['brace', 'support', 'compression', 'immobilizer', 'sling', 'splint', 'orthotic'],
-        'risks': ['circulation', 'numbness', 'nerve damage', 'pressure sore', 'cut off blood', 'too tight']
-    },
-    'bathroom_safety': {
-        'keywords': ['toilet', 'shower', 'bath', 'commode', 'grab bar', 'rail', 'seat'],
-        'risks': ['slipped', 'fell in bathroom', 'broke loose', 'came off wall', 'not secure']
-    },
-    'beds_mattresses': {
-        'keywords': ['bed', 'mattress', 'rail', 'hospital bed', 'pressure pad', 'overlay'],
-        'risks': ['bed sore', 'pressure ulcer', 'fell out', 'trapped', 'entrapment', 'suffocation']
-    },
-    'respiratory': {
-        'keywords': ['cpap', 'oxygen', 'nebulizer', 'inhaler', 'respirator', 'breathing'],
-        'risks': ['breathing difficulty', 'suffocation', 'oxygen cut off', 'respiratory distress']
-    },
-    'monitoring': {
-        'keywords': ['monitor', 'sensor', 'alarm', 'alert', 'glucose', 'blood pressure'],
-        'risks': ['failed to alert', 'wrong reading', 'missed emergency', 'false alarm']
-    }
-}
-
-# Quality issue patterns (non-injury)
-QUALITY_PATTERNS = {
-    'defective': ['defect', 'broken', 'damaged', 'doesn\'t work', 'not working', 'malfunction', 'failed'],
-    'missing_parts': ['missing', 'incomplete', 'not included', 'parts missing', 'no instructions'],
-    'wrong_item': ['wrong', 'different', 'not what ordered', 'incorrect'],
-    'size_issues': ['too small', 'too large', 'doesn\'t fit', 'wrong size', 'sizing'],
-    'performance': ['ineffective', 'doesn\'t help', 'not strong enough', 'weak', 'poor quality']
-}
-
-# Severity scoring weights
-SEVERITY_WEIGHTS = {
-    'critical': 1.0,
-    'high': 0.8,
-    'medium': 0.5,
-    'low': 0.3
-}
-
-SEVERITY_LEVELS = ['critical', 'high', 'medium', 'low']
-
 class InjuryDetector:
-    """Detect and analyze potential injury cases and quality issues in return data"""
+    """Detect and analyze potential injuries in medical device returns"""
     
-    def __init__(self):
-        # Compile regex patterns for efficiency
-        self.injury_patterns = {}
-        for severity, keywords in INJURY_KEYWORDS.items():
-            # Create pattern that matches whole words
-            pattern = r'\b(' + '|'.join(re.escape(kw) for kw in keywords) + r')\b'
-            self.injury_patterns[severity] = re.compile(pattern, re.IGNORECASE)
+    def __init__(self, ai_analyzer=None):
+        """Initialize injury detector with optional AI enhancement"""
+        self.ai_analyzer = ai_analyzer
         
-        # Compile device patterns
-        self.device_patterns = {}
-        for device_type, info in DEVICE_RISK_PATTERNS.items():
-            device_pattern = r'\b(' + '|'.join(re.escape(kw) for kw in info['keywords']) + r')\b'
-            self.device_patterns[device_type] = {
-                'device': re.compile(device_pattern, re.IGNORECASE),
-                'risks': info['risks']
-            }
-        
-        # Compile quality patterns
-        self.quality_patterns = {}
-        for issue_type, keywords in QUALITY_PATTERNS.items():
-            pattern = r'\b(' + '|'.join(re.escape(kw) for kw in keywords) + r')\b'
-            self.quality_patterns[issue_type] = re.compile(pattern, re.IGNORECASE)
-    
-    def analyze_returns_for_injuries(self, returns: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze returns for potential injury cases and quality issues"""
-        
-        injury_cases = []
-        quality_issues = []
-        all_categorized = []
-        
-        severity_counts = Counter()
-        injury_type_counts = Counter()
-        quality_type_counts = Counter()
-        
-        for return_data in returns:
-            # Get customer comment
-            comment = self._get_comment_text(return_data)
-            
-            if not comment:
-                # Still categorize even without comment
-                categorized = self._categorize_return(return_data, '')
-                all_categorized.append(categorized)
-                continue
-            
-            # Analyze for injuries
-            injury_info = self._detect_injuries(comment)
-            
-            # Analyze for quality issues
-            quality_info = self._detect_quality_issues(comment)
-            
-            # Combine analysis
-            return_analysis = {
-                **return_data,
-                'has_injury': injury_info['has_injury'],
-                'has_quality_issue': quality_info['has_issue'],
-                'analysis_timestamp': datetime.now().isoformat()
-            }
-            
-            if injury_info['has_injury']:
-                # Add injury information
-                return_analysis.update({
-                    'injury_severity': injury_info['severity'],
-                    'injury_keywords': injury_info['keywords_found'],
-                    'injury_risk_score': injury_info['risk_score'],
-                    'device_risk': injury_info.get('device_risk', None)
-                })
-                
-                injury_cases.append(return_analysis)
-                severity_counts[injury_info['severity']] += 1
-                
-                # Count injury types
-                for keyword in injury_info['keywords_found']:
-                    injury_type_counts[keyword] += 1
-            
-            if quality_info['has_issue']:
-                # Add quality information
-                return_analysis.update({
-                    'quality_issue_type': quality_info['issue_type'],
-                    'quality_keywords': quality_info['keywords_found']
-                })
-                
-                quality_issues.append(return_analysis)
-                quality_type_counts[quality_info['issue_type']] += 1
-            
-            # Categorize for general analysis
-            categorized = self._categorize_return(return_analysis, comment)
-            all_categorized.append(categorized)
-        
-        # Separate critical cases
-        critical_cases = [case for case in injury_cases if case.get('injury_severity') == 'critical']
-        
-        # Calculate risk assessment
-        risk_assessment = self._calculate_risk_assessment(
-            len(injury_cases), 
-            len(returns),
-            severity_counts
-        )
-        
-        # Generate regulatory compliance check
-        regulatory_info = self.check_regulatory_reporting({
-            'injury_cases': injury_cases,
-            'severity_breakdown': dict(severity_counts),
-            'total_injuries': len(injury_cases)
-        })
-        
-        return {
-            'total_returns': len(returns),
-            'total_injuries': len(injury_cases),
-            'injury_cases': injury_cases,
-            'critical_cases': critical_cases,
-            'quality_issues': quality_issues,
-            'all_categorized': all_categorized,
-            'severity_breakdown': {
-                'critical': severity_counts.get('critical', 0),
-                'high': severity_counts.get('high', 0),
-                'medium': severity_counts.get('medium', 0),
-                'low': severity_counts.get('low', 0)
+        # Critical injury keywords by severity
+        self.INJURY_KEYWORDS = {
+            'critical': {
+                'keywords': [
+                    'death', 'died', 'fatal', 'emergency room', 'ER visit', 'hospitalized',
+                    'ambulance', 'surgery', 'surgical', 'severe injury', 'serious injury',
+                    'broken bone', 'fracture', 'concussion', 'unconscious', 'coma'
+                ],
+                'patterns': [
+                    r'went to (the )?hospital',
+                    r'rushed to (the )?ER',
+                    r'called 911',
+                    r'permanent (damage|injury)',
+                    r'life[- ]threatening'
+                ]
             },
-            'injury_types': injury_type_counts,
-            'quality_types': quality_type_counts,
-            'risk_assessment': risk_assessment,
-            'injury_rate': (len(injury_cases) / len(returns) * 100) if returns else 0,
-            'quality_rate': (len(quality_issues) / len(returns) * 100) if returns else 0,
-            'regulatory_info': regulatory_info
+            'high': {
+                'keywords': [
+                    'injured', 'hurt', 'wound', 'bleeding', 'blood', 'cut', 'laceration',
+                    'burn', 'burned', 'bruise', 'bruised', 'swelling', 'swollen',
+                    'infection', 'infected', 'rash', 'allergic reaction', 'pain',
+                    'painful', 'doctor', 'medical attention', 'clinic'
+                ],
+                'patterns': [
+                    r'(severe|extreme|unbearable) pain',
+                    r'couldn\'t (walk|move|sleep)',
+                    r'had to see (a|my) doctor',
+                    r'went to urgent care',
+                    r'caused an? (injury|wound)',
+                    r'drew blood'
+                ]
+            },
+            'medium': {
+                'keywords': [
+                    'discomfort', 'uncomfortable', 'sore', 'ache', 'aching',
+                    'irritation', 'irritated', 'red', 'redness', 'mark', 'marks'
+                ],
+                'patterns': [
+                    r'left (a )?mark',
+                    r'caused discomfort',
+                    r'minor (injury|pain)',
+                    r'slight(ly)? (hurt|injured)'
+                ]
+            }
         }
-    
-    def _get_comment_text(self, return_data: Dict[str, Any]) -> str:
-        """Extract comment text from various possible fields"""
-        # Try multiple field names
-        comment_fields = [
-            'customer_comment', 'customer_comments', 'return_reason', 
-            'reason', 'comment', 'feedback', 'issue', 'raw_content'
+        
+        # Body parts often mentioned in injury reports
+        self.BODY_PARTS = [
+            'head', 'face', 'eye', 'ear', 'nose', 'mouth', 'teeth', 'neck',
+            'shoulder', 'arm', 'elbow', 'wrist', 'hand', 'finger', 'chest',
+            'back', 'spine', 'hip', 'leg', 'knee', 'ankle', 'foot', 'toe',
+            'skin', 'bone', 'muscle'
         ]
         
-        for field in comment_fields:
-            if field in return_data and return_data[field]:
-                return str(return_data[field])
-        
-        return ''
+        # Medical device failure modes that could cause injury
+        self.FAILURE_MODES = {
+            'mechanical': ['broke', 'snapped', 'collapsed', 'fell apart', 'shattered', 'cracked'],
+            'stability': ['tipped over', 'fell', 'unstable', 'wobbled', 'gave way'],
+            'sharp': ['sharp edge', 'pointed', 'cut myself', 'sliced'],
+            'pinch': ['pinched', 'caught', 'trapped', 'crushed'],
+            'chemical': ['burned', 'reaction', 'irritation', 'rash']
+        }
     
-    def _detect_injuries(self, text: str) -> Dict[str, Any]:
-        """Detect injuries in text and determine severity"""
+    def analyze_returns_for_injuries(self, returns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Analyze returns for potential injuries
         
-        if not text:
-            return {
-                'has_injury': False,
-                'severity': None,
-                'keywords_found': [],
-                'risk_score': 0
+        Args:
+            returns: List of return dictionaries
+            
+        Returns:
+            Dictionary with injury analysis results
+        """
+        injury_cases = []
+        severity_counts = Counter()
+        injury_types = Counter()
+        affected_products = Counter()
+        
+        for return_item in returns:
+            # Combine all text fields for analysis
+            text_to_analyze = ' '.join([
+                str(return_item.get('buyer_comment', '')),
+                str(return_item.get('return_reason', '')),
+                str(return_item.get('customer_comment', ''))
+            ]).lower()
+            
+            if not text_to_analyze.strip():
+                continue
+            
+            # Detect injury
+            injury_result = self._detect_injury(text_to_analyze, return_item)
+            
+            if injury_result['has_injury']:
+                injury_case = {
+                    'order_id': return_item.get('order_id', 'Unknown'),
+                    'asin': return_item.get('asin', 'Unknown'),
+                    'sku': return_item.get('sku', 'Unknown'),
+                    'severity': injury_result['severity'],
+                    'injury_type': injury_result['injury_type'],
+                    'description': injury_result['description'],
+                    'keywords_found': injury_result['keywords_found'],
+                    'body_parts': injury_result['body_parts'],
+                    'failure_mode': injury_result['failure_mode'],
+                    'original_comment': return_item.get('buyer_comment', ''),
+                    'return_date': return_item.get('return_date', ''),
+                    'confidence': injury_result['confidence']
+                }
+                
+                injury_cases.append(injury_case)
+                severity_counts[injury_result['severity']] += 1
+                injury_types[injury_result['injury_type']] += 1
+                
+                # Track by product
+                product_key = f"{injury_case['asin']}_{injury_case['sku']}"
+                affected_products[product_key] += 1
+        
+        # Calculate risk metrics
+        total_returns = len(returns)
+        total_injuries = len(injury_cases)
+        injury_rate = (total_injuries / total_returns * 100) if total_returns > 0 else 0
+        
+        # Sort injury cases by severity
+        injury_cases.sort(key=lambda x: {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}.get(x['severity'], 4))
+        
+        # Identify high-risk products
+        high_risk_products = [
+            {
+                'product': prod.split('_')[0],  # ASIN
+                'sku': prod.split('_')[1] if '_' in prod else '',
+                'injury_count': count
             }
+            for prod, count in affected_products.most_common(10)
+            if count >= 2  # Multiple injuries from same product
+        ]
         
-        keywords_found = []
-        severity_scores = defaultdict(float)
+        return {
+            'total_returns': total_returns,
+            'total_injuries': total_injuries,
+            'injury_rate': injury_rate,
+            'severity_breakdown': dict(severity_counts),
+            'injury_types': dict(injury_types),
+            'high_risk_products': high_risk_products,
+            'injury_cases': injury_cases,
+            'critical_cases': [c for c in injury_cases if c['severity'] == 'critical'],
+            'risk_assessment': self._calculate_risk_assessment(injury_cases, total_returns)
+        }
+    
+    def _detect_injury(self, text: str, return_item: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect if text contains injury indicators"""
+        result = {
+            'has_injury': False,
+            'severity': 'none',
+            'injury_type': 'none',
+            'description': '',
+            'keywords_found': [],
+            'body_parts': [],
+            'failure_mode': '',
+            'confidence': 0.0
+        }
         
         # Check for injury keywords by severity
-        for severity, pattern in self.injury_patterns.items():
-            matches = pattern.findall(text)
-            if matches:
-                # Store unique keywords found
-                unique_matches = list(set(match.lower() for match in matches))
-                keywords_found.extend(unique_matches)
-                
-                # Calculate severity score based on number and weight
-                severity_scores[severity] += len(matches) * SEVERITY_WEIGHTS[severity]
-        
-        if not keywords_found:
-            return {
-                'has_injury': False,
-                'severity': None,
-                'keywords_found': [],
-                'risk_score': 0
-            }
-        
-        # Determine overall severity (highest level found)
-        final_severity = None
-        for severity in SEVERITY_LEVELS:
-            if severity_scores[severity] > 0:
-                final_severity = severity
+        for severity, data in self.INJURY_KEYWORDS.items():
+            keywords_found = []
+            
+            # Check keywords
+            for keyword in data['keywords']:
+                if keyword in text:
+                    keywords_found.append(keyword)
+            
+            # Check patterns
+            for pattern in data.get('patterns', []):
+                if re.search(pattern, text):
+                    keywords_found.append(f"pattern: {pattern}")
+            
+            if keywords_found:
+                result['has_injury'] = True
+                result['severity'] = severity
+                result['keywords_found'] = keywords_found
                 break
         
-        # Check for device-specific risks
-        device_risk = self._check_device_risks(text)
+        if not result['has_injury']:
+            return result
         
-        # Calculate risk score (0-1)
-        risk_score = min(sum(severity_scores.values()), 1.0)
+        # Identify body parts mentioned
+        body_parts = []
+        for part in self.BODY_PARTS:
+            if part in text:
+                body_parts.append(part)
+        result['body_parts'] = body_parts
         
-        # Boost risk score for certain combinations
-        if device_risk and final_severity in ['critical', 'high']:
-            risk_score = min(risk_score * 1.2, 1.0)
+        # Identify failure mode
+        for mode, indicators in self.FAILURE_MODES.items():
+            if any(indicator in text for indicator in indicators):
+                result['failure_mode'] = mode
+                break
         
-        # Check for multiple injury indicators
-        if len(keywords_found) > 3:
-            risk_score = min(risk_score * 1.1, 1.0)
+        # Classify injury type
+        result['injury_type'] = self._classify_injury_type(text, result['keywords_found'])
         
-        return {
-            'has_injury': True,
-            'severity': final_severity,
-            'keywords_found': keywords_found,
-            'risk_score': risk_score,
-            'device_risk': device_risk
-        }
+        # Extract description
+        result['description'] = self._extract_injury_description(text, result['keywords_found'])
+        
+        # Calculate confidence
+        result['confidence'] = self._calculate_confidence(result)
+        
+        # Use AI for enhanced analysis if available
+        if self.ai_analyzer and result['confidence'] < 0.7:
+            ai_result = self._enhance_with_ai(text, return_item)
+            if ai_result:
+                result.update(ai_result)
+        
+        return result
     
-    def _detect_quality_issues(self, text: str) -> Dict[str, Any]:
-        """Detect non-injury quality issues"""
-        
-        if not text:
-            return {
-                'has_issue': False,
-                'issue_type': None,
-                'keywords_found': []
-            }
-        
-        issues_found = {}
-        all_keywords = []
-        
-        # Check for quality issue patterns
-        for issue_type, pattern in self.quality_patterns.items():
-            matches = pattern.findall(text)
-            if matches:
-                issues_found[issue_type] = len(matches)
-                all_keywords.extend([match.lower() for match in matches])
-        
-        if not issues_found:
-            return {
-                'has_issue': False,
-                'issue_type': None,
-                'keywords_found': []
-            }
-        
-        # Determine primary issue type
-        primary_issue = max(issues_found.items(), key=lambda x: x[1])[0]
-        
-        return {
-            'has_issue': True,
-            'issue_type': primary_issue,
-            'keywords_found': list(set(all_keywords)),
-            'all_issues': issues_found
-        }
-    
-    def _check_device_risks(self, text: str) -> Optional[Dict[str, Any]]:
-        """Check for device-specific injury risks"""
-        
-        for device_type, patterns in self.device_patterns.items():
-            if patterns['device'].search(text):
-                # Check if any risk patterns are present
-                risks_found = []
-                for risk_keyword in patterns['risks']:
-                    if risk_keyword.lower() in text.lower():
-                        risks_found.append(risk_keyword)
-                
-                if risks_found:
-                    return {
-                        'device_type': device_type,
-                        'risks_found': risks_found,
-                        'risk_level': 'high' if len(risks_found) > 1 else 'medium'
-                    }
-        
-        return None
-    
-    def _categorize_return(self, return_data: Dict[str, Any], comment: str) -> Dict[str, Any]:
-        """Categorize return into standard categories"""
-        
-        # Start with return data
-        categorized = return_data.copy()
-        
-        # Determine category based on analysis
-        if return_data.get('has_injury'):
-            if return_data.get('injury_severity') in ['critical', 'high']:
-                categorized['category'] = 'Medical/Health Concerns'
-            else:
-                categorized['category'] = 'Product Defects/Quality'
-        elif return_data.get('has_quality_issue'):
-            issue_type = return_data.get('quality_issue_type')
-            category_map = {
-                'defective': 'Product Defects/Quality',
-                'missing_parts': 'Missing Components',
-                'wrong_item': 'Wrong Product/Misunderstanding',
-                'size_issues': 'Size/Fit Issues',
-                'performance': 'Performance/Effectiveness'
-            }
-            categorized['category'] = category_map.get(issue_type, 'Other/Miscellaneous')
+    def _classify_injury_type(self, text: str, keywords: List[str]) -> str:
+        """Classify the type of injury"""
+        # Check for specific injury types
+        if any(word in text for word in ['cut', 'laceration', 'slice', 'sharp']):
+            return 'laceration'
+        elif any(word in text for word in ['burn', 'burned', 'burning']):
+            return 'burn'
+        elif any(word in text for word in ['bruise', 'bruised', 'bruising']):
+            return 'contusion'
+        elif any(word in text for word in ['fracture', 'broken', 'break']):
+            return 'fracture'
+        elif any(word in text for word in ['sprain', 'strain', 'pulled']):
+            return 'sprain/strain'
+        elif any(word in text for word in ['allergic', 'reaction', 'rash', 'hives']):
+            return 'allergic_reaction'
+        elif any(word in text for word in ['infection', 'infected']):
+            return 'infection'
+        elif any(word in text for word in ['fall', 'fell', 'dropped']):
+            return 'fall_injury'
         else:
-            # Use FBA reason if available
-            fba_reason = return_data.get('fba_reason', '')
-            if fba_reason:
-                from enhanced_ai_analysis import FBA_REASON_MAP
-                categorized['category'] = FBA_REASON_MAP.get(fba_reason, 'Other/Miscellaneous')
-            else:
-                categorized['category'] = 'Other/Miscellaneous'
-        
-        return categorized
+            return 'unspecified_injury'
     
-    def _calculate_risk_assessment(self, injury_count: int, total_returns: int, 
-                                 severity_counts: Counter) -> str:
+    def _extract_injury_description(self, text: str, keywords: List[str]) -> str:
+        """Extract relevant injury description from text"""
+        # Find sentences containing injury keywords
+        sentences = re.split(r'[.!?]', text)
+        relevant_sentences = []
+        
+        for sentence in sentences:
+            if any(keyword in sentence.lower() for keyword in keywords if not keyword.startswith('pattern:')):
+                relevant_sentences.append(sentence.strip())
+        
+        # Return first 2 most relevant sentences
+        description = '. '.join(relevant_sentences[:2])
+        return description[:300] if description else "Injury mentioned but details unclear"
+    
+    def _calculate_confidence(self, result: Dict[str, Any]) -> float:
+        """Calculate confidence score for injury detection"""
+        confidence = 0.0
+        
+        # Base confidence on severity
+        severity_scores = {'critical': 0.9, 'high': 0.7, 'medium': 0.5}
+        confidence = severity_scores.get(result['severity'], 0.3)
+        
+        # Adjust based on keywords found
+        keyword_count = len(result['keywords_found'])
+        if keyword_count > 3:
+            confidence += 0.2
+        elif keyword_count > 1:
+            confidence += 0.1
+        
+        # Adjust based on body parts mentioned
+        if result['body_parts']:
+            confidence += 0.1
+        
+        # Adjust based on failure mode
+        if result['failure_mode']:
+            confidence += 0.1
+        
+        return min(confidence, 1.0)
+    
+    def _enhance_with_ai(self, text: str, return_item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Use AI to enhance injury detection"""
+        if not self.ai_analyzer:
+            return None
+        
+        try:
+            # This would call the AI analyzer for injury detection
+            # For now, return None as placeholder
+            return None
+        except Exception as e:
+            logger.error(f"AI injury enhancement failed: {e}")
+            return None
+    
+    def _calculate_risk_assessment(self, injury_cases: List[Dict[str, Any]], 
+                                  total_returns: int) -> Dict[str, Any]:
         """Calculate overall risk assessment"""
-        
         if total_returns == 0:
-            return "No data"
+            return {
+                'risk_level': 'UNKNOWN',
+                'description': 'No return data to analyze',
+                'recommendations': []
+            }
         
-        injury_rate = (injury_count / total_returns) * 100
-        critical_count = severity_counts.get('critical', 0)
-        high_count = severity_counts.get('high', 0)
+        injury_rate = (len(injury_cases) / total_returns) * 100
+        critical_count = sum(1 for case in injury_cases if case['severity'] == 'critical')
+        high_count = sum(1 for case in injury_cases if case['severity'] == 'high')
         
-        # Risk assessment logic
+        # Determine risk level
         if critical_count > 0:
-            return "CRITICAL - Immediate action required"
+            risk_level = 'CRITICAL'
+            description = f"IMMEDIATE ACTION REQUIRED: {critical_count} critical injury case(s) detected"
         elif injury_rate > 5 or high_count > 3:
-            return "HIGH - Urgent review needed"
+            risk_level = 'HIGH'
+            description = f"High injury rate ({injury_rate:.1f}%) or multiple serious injuries"
         elif injury_rate > 2 or high_count > 1:
-            return "MEDIUM - Close monitoring required"
-        elif injury_count > 0:
-            return "LOW - Continue standard monitoring"
+            risk_level = 'MEDIUM'
+            description = f"Moderate injury rate ({injury_rate:.1f}%) requiring attention"
+        elif len(injury_cases) > 0:
+            risk_level = 'LOW'
+            description = f"Low injury rate ({injury_rate:.1f}%) but monitoring needed"
         else:
-            return "MINIMAL - No injuries detected"
+            risk_level = 'MINIMAL'
+            description = "No injuries detected"
+        
+        # Generate recommendations
+        recommendations = self._generate_recommendations(
+            risk_level, injury_cases, injury_rate
+        )
+        
+        return {
+            'risk_level': risk_level,
+            'description': description,
+            'injury_rate': injury_rate,
+            'recommendations': recommendations
+        }
+    
+    def _generate_recommendations(self, risk_level: str, injury_cases: List[Dict[str, Any]], 
+                                injury_rate: float) -> List[str]:
+        """Generate actionable recommendations based on injury analysis"""
+        recommendations = []
+        
+        if risk_level == 'CRITICAL':
+            recommendations.extend([
+                "🚨 IMMEDIATE: Report critical injuries to regulatory authorities",
+                "🚨 IMMEDIATE: Consider product recall or safety notice",
+                "🚨 IMMEDIATE: Contact affected customers directly",
+                "📋 Document all injury cases for regulatory compliance",
+                "🔍 Conduct immediate root cause analysis"
+            ])
+        elif risk_level == 'HIGH':
+            recommendations.extend([
+                "⚠️ URGENT: Review product design and safety features",
+                "⚠️ URGENT: Implement additional quality controls",
+                "📊 Analyze injury patterns to identify common failure modes",
+                "📝 Update product warnings and instructions",
+                "🏥 Consider proactive customer safety communications"
+            ])
+        elif risk_level == 'MEDIUM':
+            recommendations.extend([
+                "🔍 Monitor injury trends closely",
+                "📋 Review and update safety documentation",
+                "🛠️ Evaluate design improvements for next revision",
+                "📊 Implement enhanced quality testing for affected products"
+            ])
+        elif risk_level == 'LOW':
+            recommendations.extend([
+                "✓ Continue standard safety monitoring",
+                "📊 Track injury trends over time",
+                "📝 Document cases for future reference"
+            ])
+        
+        # Add specific recommendations based on injury types
+        injury_types = Counter(case['injury_type'] for case in injury_cases)
+        
+        if injury_types.get('laceration', 0) > 0:
+            recommendations.append("🔧 Review product for sharp edges or points")
+        
+        if injury_types.get('fall_injury', 0) > 0:
+            recommendations.append("⚖️ Evaluate product stability and anti-tip features")
+        
+        if injury_types.get('allergic_reaction', 0) > 0:
+            recommendations.append("🧪 Review materials and allergen warnings")
+        
+        return recommendations
     
     def generate_injury_report(self, analysis: Dict[str, Any]) -> str:
-        """Generate a formatted injury report"""
-        
+        """Generate a formatted injury report for quality managers"""
         report = []
-        report.append("INJURY & QUALITY ANALYSIS REPORT")
-        report.append("=" * 50)
+        report.append("=" * 60)
+        report.append("MEDICAL DEVICE INJURY ANALYSIS REPORT")
+        report.append("=" * 60)
         report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"Analysis Period: Return data analysis")
         report.append("")
         
-        # Summary
-        report.append("SUMMARY")
-        report.append("-" * 30)
-        report.append(f"Total Returns Analyzed: {analysis.get('total_returns', 0)}")
-        report.append(f"Injury Cases Found: {analysis['total_injuries']} ({analysis.get('injury_rate', 0):.1f}%)")
-        report.append(f"Quality Issues Found: {len(analysis.get('quality_issues', []))} ({analysis.get('quality_rate', 0):.1f}%)")
-        report.append(f"Risk Assessment: {analysis['risk_assessment']}")
+        # Executive Summary
+        report.append("EXECUTIVE SUMMARY")
+        report.append("-" * 40)
+        report.append(f"Risk Level: {analysis['risk_assessment']['risk_level']}")
+        report.append(f"Total Returns Analyzed: {analysis['total_returns']}")
+        report.append(f"Injury Cases Found: {analysis['total_injuries']}")
+        report.append(f"Injury Rate: {analysis['injury_rate']:.2f}%")
+        report.append(f"Critical Cases: {len(analysis['critical_cases'])}")
         report.append("")
         
-        # Severity breakdown
-        if analysis['total_injuries'] > 0:
-            report.append("INJURY SEVERITY BREAKDOWN")
-            report.append("-" * 30)
-            for severity in SEVERITY_LEVELS:
-                count = analysis['severity_breakdown'][severity]
-                if count > 0:
-                    report.append(f"{severity.upper()}: {count}")
-            report.append("")
-            
-            # Top injury types
-            report.append("TOP INJURY TYPES")
-            report.append("-" * 30)
-            for injury_type, count in analysis.get('injury_types', Counter()).most_common(10):
-                report.append(f"{injury_type}: {count}")
+        # Risk Assessment
+        report.append("RISK ASSESSMENT")
+        report.append("-" * 40)
+        report.append(analysis['risk_assessment']['description'])
+        report.append("")
+        
+        # Severity Breakdown
+        if analysis['severity_breakdown']:
+            report.append("SEVERITY BREAKDOWN")
+            report.append("-" * 40)
+            for severity, count in analysis['severity_breakdown'].items():
+                report.append(f"{severity.upper()}: {count} cases")
             report.append("")
         
-        # Quality issues
-        if analysis.get('quality_types'):
-            report.append("QUALITY ISSUE BREAKDOWN")
-            report.append("-" * 30)
-            for issue_type, count in analysis['quality_types'].most_common():
-                report.append(f"{issue_type}: {count}")
+        # High Risk Products
+        if analysis['high_risk_products']:
+            report.append("HIGH RISK PRODUCTS")
+            report.append("-" * 40)
+            for product in analysis['high_risk_products']:
+                report.append(f"ASIN: {product['product']}, "
+                            f"SKU: {product['sku']}, "
+                            f"Injuries: {product['injury_count']}")
             report.append("")
         
-        # Critical cases
-        if analysis.get('critical_cases'):
-            report.append("CRITICAL CASES REQUIRING IMMEDIATE ATTENTION")
-            report.append("-" * 30)
-            for case in analysis['critical_cases'][:10]:  # Top 10
-                report.append(f"Order: {case.get('order_id', 'Unknown')}")
-                report.append(f"ASIN: {case.get('asin', 'Unknown')}")
-                report.append(f"SKU: {case.get('sku', 'Unknown')}")
-                report.append(f"Date: {case.get('return_date', 'Unknown')}")
-                report.append(f"Injury Keywords: {', '.join(case.get('injury_keywords', []))}")
-                report.append(f"Comment: {case.get('customer_comment', 'No comment')[:200]}...")
+        # Critical Cases Detail
+        if analysis['critical_cases']:
+            report.append("CRITICAL CASES - IMMEDIATE ATTENTION REQUIRED")
+            report.append("-" * 40)
+            for case in analysis['critical_cases']:
+                report.append(f"Order: {case['order_id']}")
+                report.append(f"Product: {case['asin']} / {case['sku']}")
+                report.append(f"Description: {case['description']}")
+                report.append(f"Keywords: {', '.join(case['keywords_found'])}")
                 report.append("-" * 20)
             report.append("")
         
-        # Regulatory compliance
-        if analysis.get('regulatory_info'):
-            report.append("REGULATORY COMPLIANCE")
-            report.append("-" * 30)
-            reg_info = analysis['regulatory_info']
-            report.append(f"Reporting Required: {'YES' if reg_info['reporting_required'] else 'NO'}")
-            if reg_info['reporting_required']:
-                report.append("Reasons:")
-                for reason in reg_info['reasons']:
-                    report.append(f"  - {reason}")
-                report.append(f"Recommendation: {reg_info['recommendation']}")
+        # Recommendations
+        report.append("RECOMMENDATIONS")
+        report.append("-" * 40)
+        for rec in analysis['risk_assessment']['recommendations']:
+            report.append(rec)
+        report.append("")
+        
+        # Footer
+        report.append("=" * 60)
+        report.append("END OF REPORT")
         
         return '\n'.join(report)
-    
-    def check_regulatory_reporting(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """Check if injuries require regulatory reporting"""
-        
-        reporting_required = False
-        reporting_reasons = []
-        reporting_type = []
-        
-        # FDA reporting criteria for medical devices
-        if analysis['severity_breakdown'].get('critical', 0) > 0:
-            reporting_required = True
-            reporting_reasons.append("Critical injuries detected")
-            reporting_type.append("MDR (Medical Device Report)")
-        
-        if analysis['severity_breakdown'].get('high', 0) >= 3:
-            reporting_required = True
-            reporting_reasons.append("Multiple serious injuries")
-            reporting_type.append("MDR (Medical Device Report)")
-        
-        # Check for specific reportable events
-        reportable_keywords = ['death', 'permanent', 'surgery', 'hospitalization', 'life threatening']
-        for case in analysis.get('injury_cases', []):
-            keywords = case.get('injury_keywords', [])
-            if any(kw in ' '.join(keywords).lower() for kw in reportable_keywords):
-                reporting_required = True
-                reporting_reasons.append("Reportable adverse event detected")
-                reporting_type.append("MDR (Medical Device Report)")
-                break
-        
-        # EU MDR requirements (if applicable)
-        if analysis.get('total_injuries', 0) >= 5:
-            reporting_reasons.append("Multiple injuries - trend monitoring required")
-            reporting_type.append("Trend Report")
-        
-        return {
-            'reporting_required': reporting_required,
-            'reasons': reporting_reasons,
-            'reporting_types': list(set(reporting_type)),
-            'recommendation': self._get_regulatory_recommendation(reporting_required, reporting_type),
-            'timeline': self._get_reporting_timeline(reporting_type)
-        }
-    
-    def _get_regulatory_recommendation(self, required: bool, types: List[str]) -> str:
-        """Get specific regulatory recommendation"""
-        
-        if not required:
-            return "Continue routine monitoring. Document all cases for trending."
-        
-        if "MDR (Medical Device Report)" in types:
-            return "IMMEDIATE ACTION: Contact regulatory affairs. Prepare MDR within 30 days (5 days if death/serious injury)."
-        elif "Trend Report" in types:
-            return "Prepare trend analysis report for next regulatory submission."
-        else:
-            return "Review with regulatory affairs team for reporting requirements."
-    
-    def _get_reporting_timeline(self, types: List[str]) -> Dict[str, str]:
-        """Get reporting timeline requirements"""
-        
-        timeline = {}
-        
-        if "MDR (Medical Device Report)" in types:
-            timeline['MDR'] = {
-                'death_serious_injury': '5 calendar days',
-                'malfunction': '30 calendar days',
-                'supplemental': '30 calendar days of becoming aware'
-            }
-        
-        if "Trend Report" in types:
-            timeline['trend'] = 'With periodic regulatory updates'
-        
-        return timeline
-    
-    def export_for_regulatory(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """Export data formatted for regulatory reporting"""
-        
-        regulatory_export = {
-            'report_date': datetime.now().isoformat(),
-            'reporting_entity': 'Quality Management System',
-            'summary': {
-                'total_complaints': analysis.get('total_returns', 0),
-                'injury_complaints': analysis.get('total_injuries', 0),
-                'critical_events': analysis['severity_breakdown'].get('critical', 0),
-                'serious_injuries': analysis['severity_breakdown'].get('high', 0)
-            },
-            'events': []
-        }
-        
-        # Add critical and high severity cases
-        for case in analysis.get('injury_cases', []):
-            if case.get('injury_severity') in ['critical', 'high']:
-                regulatory_export['events'].append({
-                    'event_date': case.get('return_date', 'Unknown'),
-                    'report_date': datetime.now().isoformat(),
-                    'product_identifier': {
-                        'asin': case.get('asin', ''),
-                        'sku': case.get('sku', ''),
-                        'order_id': case.get('order_id', '')
-                    },
-                    'event_description': case.get('customer_comment', ''),
-                    'injury_keywords': case.get('injury_keywords', []),
-                    'severity': case.get('injury_severity', ''),
-                    'device_involvement': case.get('device_risk', {})
-                })
-        
-        return regulatory_export
 
-# Export classes and constants
-__all__ = [
-    'InjuryDetector', 
-    'INJURY_KEYWORDS', 
-    'SEVERITY_LEVELS',
-    'DEVICE_RISK_PATTERNS',
-    'QUALITY_PATTERNS'
-]
+# Export class
+__all__ = ['InjuryDetector']
