@@ -15,3 +15,5 @@ xlsxwriter>=3.1.0
 
 # HTTP (required for API calls)
 requests>=2.31.0
+
+plotly
