@@ -27,6 +27,7 @@ from collections import Counter, defaultdict
 import plotly.express as px
 import plotly.graph_objects as go
 import time
+import gc
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +44,14 @@ try:
 except ImportError as e:
     logger.error(f"Module import error: {e}")
     AI_AVAILABLE = False
+
+# Check optional imports
+try:
+    import xlsxwriter
+    EXCEL_AVAILABLE = True
+except ImportError:
+    EXCEL_AVAILABLE = False
+    logger.warning("xlsxwriter not available - Excel export will use openpyxl")
 
 # Page configuration
 st.set_page_config(
@@ -317,6 +326,7 @@ def initialize_session_state():
         'current_tab': 0,
         'processing_status': 'idle',
         'show_ai_chat': False,
+        'show_mode_info': False,
         
         # Analysis results
         'critical_issues': [],
@@ -332,6 +342,7 @@ def initialize_session_state():
         'batch_size': 50,
         'auto_categorize': True,
         'highlight_critical': True,
+        'chunk_size': 500,
         
         # Cost tracking
         'total_cost': 0.0,
@@ -340,7 +351,16 @@ def initialize_session_state():
         
         # Export data
         'export_ready': False,
-        'export_data': None
+        'export_data': None,
+        
+        # Column K specific state
+        'column_k_data': None,
+        'column_k_categorized': None,
+        'column_k_complete': False,
+        'column_k_export_data': None,
+        'column_k_export_filename': None,
+        'column_k_stats': None,
+        'column_mapping': {}
     }
     
     for key, value in defaults.items():
@@ -462,6 +482,16 @@ def display_sidebar():
             help="Number of items to process at once"
         )
         
+        # Chunk size for large files (used in Column K mode)
+        chunk_sizes = [100, 250, 500, 1000]
+        st.session_state.chunk_size = st.select_slider(
+            "Processing Chunk Size",
+            options=chunk_sizes,
+            value=st.session_state.chunk_size,
+            format_func=lambda x: f"{x:,} rows",
+            help="Process data in chunks to handle large files efficiently"
+        )
+        
         st.session_state.auto_categorize = st.checkbox(
             "Auto-categorize on upload",
             value=True,
@@ -537,9 +567,95 @@ def display_sidebar():
             """)
 
 def display_upload_tab():
-    """File upload interface with drag-and-drop"""
+    """File upload interface with multiple modes"""
     st.markdown("### 📤 Upload Return Data")
     
+    # Mode selection
+    mode_col1, mode_col2 = st.columns([3, 1])
+    
+    with mode_col1:
+        upload_mode = st.radio(
+            "Select Processing Mode",
+            options=[
+                "Universal Analysis (All file types)",
+                "Column K Export (Specific format)"
+            ],
+            index=0,
+            horizontal=True,
+            help="Choose based on your file structure and needs"
+        )
+    
+    with mode_col2:
+        if st.button("ℹ️ Mode Info", use_container_width=True):
+            st.session_state.show_mode_info = not st.session_state.get('show_mode_info', False)
+    
+    # Show mode info if requested
+    if st.session_state.get('show_mode_info', False):
+        st.info("""
+        **Universal Analysis**: Handles PDFs, FBA returns, reviews, and automatically detects format
+        
+        **Column K Export**: For files with complaints in Column I → Categories to Column K (preserves exact structure)
+        """)
+    
+    if upload_mode == "Column K Export (Specific format)":
+        # Column K specific interface
+        display_column_k_upload()
+    else:
+        # Universal interface
+        display_universal_upload()
+
+def display_column_k_upload():
+    """Specific interface for Column K export format"""
+    # Current structure notice
+    st.markdown("""
+    <div style="background: rgba(255, 183, 0, 0.1); border: 1px solid var(--accent); 
+                border-radius: 8px; padding: 1rem; margin-bottom: 1rem; text-align: center;">
+        <strong style="color: var(--accent);">📌 Column K Export Mode:</strong> 
+        Complaints from Column I → AI Categories to Column K
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Instructions
+    with st.expander("📖 File Format Requirements", expanded=True):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            **Required File Structure:**
+            - **Column I**: Complaint/Investigation Text *(required)*
+            - **Column B**: Product Identifier/SKU *(optional)*
+            - **Column K**: Will receive AI categories *(auto-created)*
+            
+            **Supported Formats:**
+            - Excel files (.xlsx, .xls)
+            - CSV files (.csv)
+            - Tab-delimited text (.txt)
+            """)
+        
+        with col2:
+            st.markdown("""
+            **Key Features:**
+            - ✅ Preserves your exact file format
+            - ✅ Only modifies Column K
+            - ✅ Handles 2600+ rows efficiently
+            - ✅ Google Sheets compatible export
+            - ✅ 100% AI categorization
+            - ✅ Real-time progress tracking
+            """)
+    
+    # File upload
+    uploaded_file = st.file_uploader(
+        "Choose file with complaints in Column I",
+        type=['csv', 'xlsx', 'xls', 'txt'],
+        accept_multiple_files=False,
+        key="column_k_uploader"
+    )
+    
+    if uploaded_file:
+        process_column_k_file(uploaded_file)
+
+def display_universal_upload():
+    """Universal file upload interface"""
     # Instructions
     col1, col2 = st.columns([2, 1])
     
@@ -581,7 +697,8 @@ def display_upload_tab():
         "Choose files",
         type=['pdf', 'csv', 'tsv', 'txt', 'xlsx', 'xls', 'jpg', 'jpeg', 'png'],
         accept_multiple_files=True,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="universal_uploader"
     )
     
     if uploaded_files:
@@ -654,6 +771,446 @@ def process_uploaded_files(files):
     # Auto-categorize if enabled
     if st.session_state.auto_categorize and new_files:
         categorize_returns(new_files)
+
+def process_column_k_file(uploaded_file):
+    """Process file for Column K export format"""
+    try:
+        # Read file content
+        file_content = uploaded_file.read()
+        
+        # Process file while preserving structure
+        df, column_mapping = process_file_preserve_structure(file_content, uploaded_file.name)
+        
+        if df is not None and column_mapping:
+            st.session_state['column_k_data'] = df.copy()
+            st.session_state['column_mapping'] = column_mapping
+            
+            # Show file info
+            complaint_col = column_mapping.get('complaint')
+            sku_col = column_mapping.get('sku')
+            valid_complaints = df[df[complaint_col].notna() & 
+                                (df[complaint_col].str.strip() != '')].shape[0]
+            
+            # Success message
+            st.success(f"✅ **File loaded successfully!**")
+            
+            # Show detected structure
+            st.info(f"""
+            📋 **Detected Structure:**
+            - Complaints found in: **Column I** ({complaint_col})
+            - Product SKUs in: **Column B** ({sku_col if sku_col else 'Not found'})
+            - Categories will go in: **Column K**
+            """)
+            
+            # File details
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Rows", f"{len(df):,}")
+            with col2:
+                st.metric("Valid Complaints", f"{valid_complaints:,}")
+            with col3:
+                st.metric("Complaint Column", "I")
+            with col4:
+                st.metric("Category Column", "K")
+            
+            # Data preview
+            with st.expander("📋 Preview Data", expanded=False):
+                preview_cols = []
+                
+                if complaint_col in df.columns:
+                    preview_cols.append(complaint_col)
+                
+                if column_mapping.get('sku') and column_mapping['sku'] in df.columns:
+                    preview_cols.append(column_mapping['sku'])
+                
+                if column_mapping.get('category') in df.columns:
+                    preview_cols.append(column_mapping['category'])
+                
+                if preview_cols:
+                    preview_df = df[preview_cols].head(10).copy()
+                    
+                    col_labels = []
+                    for col in preview_cols:
+                        col_idx = df.columns.tolist().index(col)
+                        col_letter = chr(65 + col_idx)
+                        col_labels.append(f"Column {col_letter}: {col}")
+                    
+                    st.markdown("**Column Preview:**")
+                    for label in col_labels:
+                        st.caption(label)
+                    
+                    st.dataframe(preview_df, use_container_width=True)
+            
+            # Cost estimation
+            est_cost_per_item = 0.002
+            est_total_cost = valid_complaints * est_cost_per_item
+            
+            st.markdown(f"""
+            <div class="info-card" style="background: linear-gradient(135deg, rgba(80, 200, 120, 0.1), rgba(80, 200, 120, 0.2)); 
+                        border-color: #50C878; text-align: center;">
+                <h4 style="color: #50C878; margin: 0;">💰 Estimated Processing Cost</h4>
+                <div style="font-size: 2em; font-weight: 700; color: #50C878; margin: 0.5rem 0;">
+                    ${est_total_cost:.2f}
+                </div>
+                <div style="color: #666680;">
+                    for {valid_complaints:,} returns at ~${est_cost_per_item:.3f} each
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Process button
+            st.markdown("---")
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button(
+                    f"🚀 Categorize {valid_complaints:,} Returns", 
+                    type="primary", 
+                    use_container_width=True,
+                    help="Start AI categorization process"
+                ):
+                    process_column_k_categorization(df, column_mapping, valid_complaints)
+                    
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        logger.error(f"Column K file processing error: {e}", exc_info=True)
+
+def process_file_preserve_structure(file_content, filename):
+    """Process file while preserving original structure for Column K export"""
+    try:
+        # Read file based on extension
+        if filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+        elif filename.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(io.BytesIO(file_content), dtype=str)
+        elif filename.endswith('.txt'):
+            df = pd.read_csv(io.BytesIO(file_content), sep='\t', dtype=str)
+        else:
+            st.error(f"Unsupported file type: {filename}")
+            return None, None
+        
+        # Create column mapping
+        column_mapping = {}
+        cols = df.columns.tolist()
+        
+        # Check if we have enough columns
+        if len(cols) >= 11:  # Need at least columns A through K
+            # Map columns by position (0-indexed)
+            # Column I = index 8, Column B = index 1, Column K = index 10
+            
+            if len(cols) > 8:
+                column_mapping['complaint'] = cols[8]  # Column I
+            else:
+                st.error("File doesn't have enough columns. Expected complaint data in Column I.")
+                return None, None
+            
+            if len(cols) > 1:
+                column_mapping['sku'] = cols[1]  # Column B
+            
+            if len(cols) > 10:
+                column_mapping['category'] = cols[10]  # Column K
+            else:
+                # Add columns if needed to reach K
+                while len(df.columns) < 11:
+                    df[f'Column_{len(df.columns)}'] = ''
+                column_mapping['category'] = df.columns[10]
+        else:
+            st.error("File structure not recognized. Need at least 11 columns (A-K).")
+            return None, None
+        
+        # Ensure column K exists and is empty
+        if column_mapping.get('category'):
+            df[column_mapping['category']] = ''
+        
+        # Validate complaint data exists
+        complaint_col = column_mapping['complaint']
+        valid_complaints = df[df[complaint_col].notna() & (df[complaint_col].str.strip() != '')].copy()
+        
+        logger.info(f"File structure: {len(df)} total rows, {len(valid_complaints)} with complaints")
+        logger.info(f"Column mapping: Complaint={complaint_col} (Col I), SKU={column_mapping.get('sku')} (Col B), Category={column_mapping.get('category')} (Col K)")
+        
+        return df, column_mapping
+        
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        logger.error(f"File processing error: {e}")
+        return None, None
+
+def process_column_k_categorization(df, column_mapping, valid_complaints):
+    """Process categorization for Column K export format"""
+    analyzer = get_ai_analyzer()
+    
+    if not analyzer:
+        st.error("AI analyzer not available")
+        return
+    
+    start_time = time.time()
+    
+    # Process with chunks
+    with st.spinner("Processing returns..."):
+        categorized_df = process_in_chunks(
+            df, 
+            analyzer, 
+            column_mapping,
+            chunk_size=st.session_state.chunk_size
+        )
+        
+        st.session_state['column_k_categorized'] = categorized_df
+        st.session_state['column_k_complete'] = True
+        
+        # Generate statistics
+        generate_column_k_statistics(categorized_df, column_mapping)
+        
+        # Update costs
+        cost_summary = analyzer.get_api_usage_summary()
+        st.session_state.total_cost = cost_summary.get('total_cost', 0)
+        st.session_state.api_calls = cost_summary.get('api_calls', 0)
+        
+        processing_time = time.time() - start_time
+        
+        # Prepare export data
+        export_data = export_with_column_k(categorized_df)
+        st.session_state['column_k_export_data'] = export_data
+        file_extension = '.xlsx' if EXCEL_AVAILABLE else '.csv'
+        st.session_state['column_k_export_filename'] = f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}{file_extension}"
+    
+    st.balloons()
+    
+    # Success summary
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("✅ Processed", f"{valid_complaints:,} returns")
+    with col2:
+        st.metric("⏱️ Time", f"{processing_time:.1f}s")
+    with col3:
+        st.metric("💰 Cost", f"${st.session_state.total_cost:.4f}")
+    
+    st.success("Processing complete! Your results are ready for download.")
+    
+    # Show download section
+    display_column_k_download()
+
+def process_in_chunks(df, analyzer, column_mapping, chunk_size=None):
+    """Process large datasets in chunks with medical device categories"""
+    if chunk_size is None:
+        chunk_size = st.session_state.chunk_size
+    
+    complaint_col = column_mapping['complaint']
+    category_col = column_mapping['category']
+    
+    # Get rows with complaints
+    valid_indices = df[df[complaint_col].notna() & (df[complaint_col].str.strip() != '')].index
+    total_valid = len(valid_indices)
+    
+    if total_valid == 0:
+        st.warning("No valid complaints found in Column I to process")
+        return df
+    
+    # Processing info
+    st.info(f"""
+    📊 **Processing Details:**
+    - Total complaints to categorize: **{total_valid:,}**
+    - Processing chunk size: **{chunk_size}** rows at a time
+    - Using medical device categories
+    """)
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    processed_count = 0
+    start_time = time.time()
+    
+    # Process in chunks
+    for chunk_start in range(0, total_valid, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, total_valid)
+        chunk_indices = valid_indices[chunk_start:chunk_end]
+        
+        # Prepare batch
+        batch_data = []
+        for idx in chunk_indices:
+            complaint = str(df.at[idx, complaint_col]).strip()
+            
+            batch_data.append({
+                'index': idx,
+                'reason': complaint,
+                'comment': '',  # No separate comment field in this format
+                'order_id': str(idx),  # Use index as ID
+                'sku': str(df.at[idx, column_mapping['sku']]) if 'sku' in column_mapping else ''
+            })
+        
+        # Process batch
+        results = asyncio.run(analyzer.process_batch_returns(batch_data, st.session_state.batch_size))
+        
+        # Update dataframe
+        for result in results:
+            idx = result['index']
+            df.at[idx, category_col] = result.get('category', 'Other/Miscellaneous')
+            
+            # Track critical issues
+            if result.get('critical_flags'):
+                st.session_state.critical_issues.append({
+                    'row': idx,
+                    'complaint': result.get('reason'),
+                    'flags': result.get('critical_flags'),
+                    'sku': result.get('sku')
+                })
+            
+            processed_count += 1
+        
+        # Update progress
+        progress = processed_count / total_valid
+        progress_bar.progress(progress)
+        
+        elapsed = time.time() - start_time
+        speed = processed_count / elapsed if elapsed > 0 else 0
+        remaining = (total_valid - processed_count) / speed if speed > 0 else 0
+        
+        status_text.text(f"Processing: {processed_count:,}/{total_valid:,} ({speed:.1f}/sec) - ETA: {int(remaining)}s")
+    
+    progress_bar.progress(1.0)
+    status_text.success(f"✅ Complete! Processed {processed_count:,} returns in {elapsed:.1f} seconds")
+    
+    return df
+
+def generate_column_k_statistics(df, column_mapping):
+    """Generate statistics for Column K categorization"""
+    category_col = column_mapping.get('category')
+    sku_col = column_mapping.get('sku')
+    
+    if not category_col:
+        return
+    
+    # Category statistics
+    categorized_df = df[df[category_col].notna() & (df[category_col] != '')]
+    if len(categorized_df) == 0:
+        return
+    
+    category_counts = categorized_df[category_col].value_counts()
+    st.session_state['column_k_stats'] = {
+        'total_rows': len(df),
+        'categorized': len(categorized_df),
+        'categories': category_counts.to_dict(),
+        'quality_issues': sum(count for cat, count in category_counts.items() 
+                            if 'Quality' in cat or 'Defect' in cat or 'Medical' in cat)
+    }
+
+def export_with_column_k(df):
+    """Export data with categories in column K"""
+    output = io.BytesIO()
+    
+    # Ensure we have at least 11 columns (up to K)
+    while len(df.columns) < 11:
+        df[f'Col_{len(df.columns)}'] = ''
+    
+    # Save as Excel with formatting if available
+    if EXCEL_AVAILABLE:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Returns')
+            
+            workbook = writer.book
+            worksheet = writer.sheets['Returns']
+            
+            # Format column K with categories
+            category_format = workbook.add_format({
+                'bg_color': '#E6F5E6',
+                'font_color': '#006600',
+                'bold': True
+            })
+            
+            # Apply format to column K (index 10)
+            worksheet.set_column(10, 10, 25, category_format)
+            
+            # Add header format
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#4472C4',
+                'font_color': 'white',
+                'border': 1
+            })
+            
+            # Write headers with format
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+    else:
+        # Fallback to CSV
+        df.to_csv(output, index=False)
+    
+    output.seek(0)
+    return output.getvalue()
+
+def display_column_k_download():
+    """Display download section for Column K export"""
+    if st.session_state.get('column_k_export_data') and st.session_state.get('column_k_export_filename'):
+        
+        file_extension = '.xlsx' if EXCEL_AVAILABLE else '.csv'
+        mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if EXCEL_AVAILABLE else 'text/csv'
+        
+        st.markdown("""
+        <div class="info-card" style="background: linear-gradient(135deg, rgba(0, 245, 160, 0.2), rgba(0, 245, 160, 0.3)); 
+                    border-color: #00F5A0; text-align: center; margin: 2rem 0; 
+                    border-width: 2px; box-shadow: 0 0 20px rgba(0, 245, 160, 0.4);">
+            <h2 style="color: #00F5A0; margin: 0;">✅ Analysis Complete - Download Ready!</h2>
+            <p style="margin: 0.5rem 0; font-size: 1.1em;">
+                Your file is ready with AI categories in Column K
+            </p>
+            <p style="margin: 0.3rem 0; color: #FFB700; font-weight: 600;">
+                📄 Filename: {filename}
+            </p>
+        </div>
+        """.format(filename=st.session_state['column_k_export_filename']), unsafe_allow_html=True)
+        
+        # Download button
+        col1, col2, col3 = st.columns([1, 3, 1])
+        
+        with col2:
+            downloaded = st.download_button(
+                label=f"⬇️ DOWNLOAD YOUR RESULTS ({file_extension.upper()})",
+                data=st.session_state['column_k_export_data'],
+                file_name=st.session_state['column_k_export_filename'],
+                mime=mime_type,
+                use_container_width=True,
+                type="primary"
+            )
+            
+            if downloaded:
+                st.success("✅ File downloaded successfully!")
+        
+        # Additional info
+        st.markdown("""
+        <div style="text-align: center; margin-top: 1rem;">
+            <p style="color: #00F5A0; font-weight: 600;">
+                ✅ File is Google Sheets compatible!
+            </p>
+            <p>Import directly - only Column K has been modified with AI categories</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show statistics
+        if st.session_state.get('column_k_stats'):
+            stats = st.session_state['column_k_stats']
+            
+            st.markdown("### 📊 Categorization Summary")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Rows", f"{stats['total_rows']:,}")
+            with col2:
+                st.metric("Categorized", f"{stats['categorized']:,}")
+            with col3:
+                success_rate = (stats['categorized'] / stats['total_rows'] * 100) if stats['total_rows'] > 0 else 0
+                st.metric("Success Rate", f"{success_rate:.1f}%")
+            with col4:
+                quality_rate = (stats['quality_issues'] / stats['categorized'] * 100) if stats['categorized'] > 0 else 0
+                st.metric("Quality Issues", f"{quality_rate:.1f}%")
+            
+            # Top categories
+            if stats.get('categories'):
+                st.markdown("#### Top Return Categories")
+                top_cats = sorted(stats['categories'].items(), key=lambda x: x[1], reverse=True)[:5]
+                
+                for cat, count in top_cats:
+                    pct = (count / stats['categorized'] * 100)
+                    st.markdown(f"- **{cat}**: {count:,} ({pct:.1f}%)")
 
 def categorize_returns(files: List[ProcessedFile] = None):
     """Categorize returns using medical device categories"""
@@ -769,6 +1326,12 @@ def categorize_returns(files: List[ProcessedFile] = None):
 
 def display_analysis_tab():
     """Display comprehensive analysis results"""
+    # Check if we have Column K results
+    if st.session_state.get('column_k_complete') and st.session_state.get('column_k_stats'):
+        display_column_k_analysis()
+        return
+    
+    # Otherwise show universal analysis
     if not st.session_state.categorized_data:
         st.info("No categorized data available. Please upload and process files first.")
         return
@@ -962,6 +1525,97 @@ def display_critical_issues_tab():
         if len(issues) > 10:
             st.info(f"... and {len(issues) - 10} more {issue_type} issues")
 
+def display_column_k_analysis():
+    """Display analysis results for Column K mode"""
+    st.markdown("### 📊 Column K Export Analysis Results")
+    
+    if not st.session_state.get('column_k_stats'):
+        st.info("No analysis data available")
+        return
+    
+    stats = st.session_state['column_k_stats']
+    
+    # Summary metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("Total Rows", f"{stats['total_rows']:,}")
+    
+    with col2:
+        st.metric("Categorized", f"{stats['categorized']:,}")
+    
+    with col3:
+        success_rate = (stats['categorized'] / stats['total_rows'] * 100) if stats['total_rows'] > 0 else 0
+        st.metric("Success Rate", f"{success_rate:.1f}%")
+    
+    with col4:
+        quality_rate = (stats['quality_issues'] / stats['categorized'] * 100) if stats['categorized'] > 0 else 0
+        st.metric("Quality Issues", f"{quality_rate:.1f}%")
+    
+    with col5:
+        critical_count = len(st.session_state.critical_issues)
+        if critical_count > 0:
+            st.metric("⚠️ Critical", critical_count, delta_color="inverse")
+        else:
+            st.metric("Critical", "0 ✅")
+    
+    # Category breakdown
+    if stats.get('categories'):
+        st.markdown("---")
+        st.markdown("### 📈 Category Distribution")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            # Create bar chart
+            categories = list(stats['categories'].keys())
+            counts = list(stats['categories'].values())
+            
+            fig = px.bar(
+                x=counts,
+                y=categories,
+                orientation='h',
+                labels={'x': 'Count', 'y': 'Category'},
+                title='Return Categories',
+                color=counts,
+                color_continuous_scale='Reds'
+            )
+            fig.update_layout(height=500, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Top categories summary
+            st.markdown("#### Top Issues")
+            top_cats = sorted(stats['categories'].items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            for i, (cat, count) in enumerate(top_cats):
+                pct = (count / stats['categorized'] * 100)
+                
+                # Determine priority
+                priority = 'low'
+                if any(keyword in cat.lower() for keyword in ['defect', 'quality', 'medical']):
+                    priority = 'critical'
+                elif any(keyword in cat.lower() for keyword in ['performance', 'missing', 'stability']):
+                    priority = 'high'
+                
+                color = {
+                    'critical': COLORS['danger'],
+                    'high': COLORS['warning'],
+                    'medium': COLORS['secondary'],
+                    'low': COLORS['neutral']
+                }.get(priority, COLORS['neutral'])
+                
+                st.markdown(f"""
+                <div style="margin: 0.5rem 0; padding: 0.5rem; border-left: 3px solid {color};">
+                    <strong>{i+1}. {cat}</strong><br>
+                    <small>{count:,} ({pct:.1f}%)</small>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # Show export readiness
+    st.markdown("---")
+    st.success("✅ Analysis complete! Your categorized file is ready for download in the Export tab.")
+
 def display_recommendations_tab():
     """Display actionable recommendations"""
     st.markdown("### 💡 Quality Improvement Recommendations")
@@ -1041,61 +1695,80 @@ def display_export_tab():
     """Export functionality with multiple formats"""
     st.markdown("### 💾 Export Analysis Results")
     
-    if not st.session_state.categorized_data:
+    # Check what type of data we have
+    has_universal_data = bool(st.session_state.categorized_data)
+    has_column_k_data = st.session_state.get('column_k_complete', False)
+    
+    if not has_universal_data and not has_column_k_data:
         st.info("No data to export. Process files first.")
         return
     
-    # Export options
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("""
-        <div class="info-card">
-            <h3>📊 Excel Export</h3>
-            <p>Comprehensive report with multiple sheets:</p>
-            <ul>
-                <li>Summary statistics</li>
-                <li>Categorized returns</li>
-                <li>Critical issues</li>
-                <li>Product analysis</li>
-                <li>Recommendations</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
+    # If Column K data is ready, show that export
+    if has_column_k_data:
+        st.markdown("#### Column K Export Ready")
+        display_column_k_download()
         
-        if st.button("Generate Excel Report", use_container_width=True):
-            excel_data = generate_excel_report()
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=excel_data,
-                file_name=f"quality_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+        if st.button("📁 Process Another File", use_container_width=True):
+            # Reset Column K specific state
+            for key in ['column_k_data', 'column_k_categorized', 'column_k_complete', 
+                       'column_k_export_data', 'column_k_export_filename', 'column_k_stats']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
     
-    with col2:
-        st.markdown("""
-        <div class="info-card">
-            <h3>📄 CSV Export</h3>
-            <p>Simple categorized data export:</p>
-            <ul>
-                <li>All returns with categories</li>
-                <li>Severity levels</li>
-                <li>Confidence scores</li>
-                <li>Critical flags</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
+    # If universal data is ready, show those exports
+    elif has_universal_data:
+        # Export options
+        col1, col2 = st.columns(2)
         
-        if st.button("Generate CSV Export", use_container_width=True):
-            csv_data = generate_csv_export()
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv_data,
-                file_name=f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        with col1:
+            st.markdown("""
+            <div class="info-card">
+                <h3>📊 Excel Export</h3>
+                <p>Comprehensive report with multiple sheets:</p>
+                <ul>
+                    <li>Summary statistics</li>
+                    <li>Categorized returns</li>
+                    <li>Critical issues</li>
+                    <li>Product analysis</li>
+                    <li>Recommendations</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button("Generate Excel Report", use_container_width=True):
+                excel_data = generate_excel_report()
+                st.download_button(
+                    label="📥 Download Excel Report",
+                    data=excel_data,
+                    file_name=f"quality_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+        
+        with col2:
+            st.markdown("""
+            <div class="info-card">
+                <h3>📄 CSV Export</h3>
+                <p>Simple categorized data export:</p>
+                <ul>
+                    <li>All returns with categories</li>
+                    <li>Severity levels</li>
+                    <li>Confidence scores</li>
+                    <li>Critical flags</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button("Generate CSV Export", use_container_width=True):
+                csv_data = generate_csv_export()
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=csv_data,
+                    file_name=f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
 def generate_excel_report():
     """Generate comprehensive Excel report"""
