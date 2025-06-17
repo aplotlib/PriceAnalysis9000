@@ -855,6 +855,60 @@ class UniversalAIAnalyzer:
             'predicted_future_returns': "Based on recent reviews",
             'preventable_returns': "Returns that could be avoided with better product info"
         }
+    
+    def generate_chat_response(self, user_message: str, context: Dict[str, Any]) -> str:
+        """Generate contextual chat responses for the AI assistant"""
+        providers = self.get_available_providers()
+        
+        if not providers:
+            return "AI chat is not available. Please configure your OpenAI or Claude API key to enable this feature."
+        
+        try:
+            # Build context-aware system prompt
+            system_prompt = """You are a helpful Amazon quality analysis assistant specializing in return analysis and product quality improvement. 
+            Provide clear, actionable advice based on the user's question and the analysis context.
+            Be concise but thorough. Focus on practical implementation steps for quality improvement."""
+            
+            # Add relevant context to the prompt
+            context_info = []
+            if context.get('has_analysis'):
+                context_info.append("The user has completed an analysis of their Amazon returns and reviews.")
+            
+            if context.get('current_asin'):
+                context_info.append(f"Currently analyzing ASIN: {context['current_asin']}")
+            
+            if context.get('file_count', 0) > 0:
+                context_info.append(f"Files loaded: {context['file_count']}")
+            
+            if context_info:
+                system_prompt += "\n\nContext:\n" + "\n".join(context_info)
+            
+            # Prepare the full prompt
+            full_prompt = f"{system_prompt}\n\nUser question: {user_message}"
+            
+            # Try Claude first if available (often better for analysis)
+            if 'claude' in providers:
+                result = asyncio.run(self._call_claude(
+                    user_message,
+                    "You are a quality analysis expert. " + full_prompt
+                ))
+                if result['success']:
+                    return result['response']
+            
+            # Fallback to OpenAI
+            if 'openai' in providers:
+                result = asyncio.run(self._call_openai(
+                    user_message,
+                    full_prompt
+                ))
+                if result['success']:
+                    return result['response']
+            
+            return "I encountered an error processing your request. Please try again or rephrase your question."
+            
+        except Exception as e:
+            logger.error(f"Chat error: {e}")
+            return f"I'm having trouble processing your request: {str(e)}. Please try again."
 
 # Export the enhanced analyzer
 __all__ = ['UniversalAIAnalyzer', 'FileAnalysis', 'RETURN_CATEGORIES']
