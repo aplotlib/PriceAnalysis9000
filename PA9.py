@@ -89,7 +89,7 @@ except ImportError:
         def __init__(self, provider):
             self.provider = provider
         
-        def categorize_return(self, complaint, fba_reason=None):
+        def categorize_return(self, complaint, fba_reason=None, return_reason=None):
             return 'Other/Miscellaneous', 0.1, 'none', 'en'
         
         def get_cost_summary(self):
@@ -528,62 +528,44 @@ def process_pdf_file(content: bytes, filename: str):
     returns_data = extracted_data['returns']
     st.session_state.raw_data = returns_data
     
-    # Convert to DataFrame for column mapping
-    returns_df = pd.DataFrame(returns_data)
-    
-    # If we have a DataFrame, use smart column mapper
-    if not returns_df.empty:
-        st.markdown("### 🔍 Analyzing PDF Structure...")
-        
-        # Use column mapper to detect fields
-        with st.spinner("Detecting data fields in PDF..."):
-            column_mapping = st.session_state.column_mapper.detect_columns(returns_df)
-        
-        # Map to standardized format
-        mapped_df = st.session_state.column_mapper.map_dataframe(returns_df, column_mapping)
-        
-        # Show what was found
-        st.success(f"✅ Extracted {len(mapped_df)} returns from PDF")
-        
-        if column_mapping:
-            with st.expander("Detected fields"):
-                for field_type, col_name in column_mapping.items():
-                    st.write(f"- **{field_type}**: {col_name}")
-    else:
-        # Fallback to list processing
-        mapped_df = pd.DataFrame(returns_data)
-    
     # Process and categorize returns
     categorized_returns = []
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for idx, row in mapped_df.iterrows():
-        # Get complaint text
-        complaint = row.get('customer_comment', '') or row.get('raw_content', '') or ''
+    for idx, return_item in enumerate(returns_data):
+        # Get return reason and buyer comment
+        return_reason = return_item.get('return_reason', '')
+        buyer_comment = return_item.get('buyer_comment', '') or return_item.get('customer_comment', '') or return_item.get('raw_content', '')
         
-        return_item = {
-            'order_id': row.get('order_id', ''),
-            'sku': row.get('sku', ''),
-            'asin': row.get('asin', ''),
-            'return_date': row.get('return_date', ''),
-            'customer_comment': complaint,
-            'page': row.get('page', 0)
+        # Create structured return item
+        categorized_item = {
+            'order_id': return_item.get('order_id', ''),
+            'sku': return_item.get('sku', ''),
+            'asin': return_item.get('asin', ''),
+            'return_date': return_item.get('return_date', ''),
+            'return_reason': return_reason,
+            'buyer_comment': buyer_comment,
+            'customer_comment': buyer_comment,  # Keep both for compatibility
+            'page': return_item.get('page', 0)
         }
         
-        if complaint and st.session_state.ai_analyzer:
-            # Categorize using AI
-            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(complaint)
-            return_item['category'] = category
-            return_item['confidence'] = confidence
+        # Categorize using AI with both return reason and buyer comment
+        if st.session_state.ai_analyzer:
+            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                complaint=buyer_comment,
+                return_reason=return_reason
+            )
+            categorized_item['category'] = category
+            categorized_item['confidence'] = confidence
         else:
-            return_item['category'] = 'Other/Miscellaneous'
-            return_item['confidence'] = 0.1
+            categorized_item['category'] = 'Other/Miscellaneous'
+            categorized_item['confidence'] = 0.1
         
-        categorized_returns.append(return_item)
-        progress_bar.progress((idx + 1) / len(mapped_df))
-        status_text.text(f"Processing return {idx + 1} of {len(mapped_df)}...")
+        categorized_returns.append(categorized_item)
+        progress_bar.progress((idx + 1) / len(returns_data))
+        status_text.text(f"Processing return {idx + 1} of {len(returns_data)}...")
     
     progress_bar.empty()
     status_text.empty()
@@ -644,176 +626,203 @@ def process_structured_file(content: bytes, filename: str, file_extension: str):
         
         st.info(f"📊 Loaded {len(df)} rows with {len(df.columns)} columns")
         
-        # Show column mapping interface
-        st.markdown("### 🔍 Column Detection & Mapping")
+        # Check if it's an FBA return report
+        fba_columns = ['return-date', 'order-id', 'sku', 'asin', 'reason', 'customer-comments']
+        is_fba_report = all(col in df.columns for col in fba_columns)
         
-        # Use smart column mapper if available
-        if MAPPER_AVAILABLE and st.session_state.column_mapper:
-            with st.spinner("Using AI to detect column types..."):
-                column_mapping = st.session_state.column_mapper.detect_columns(df)
+        if is_fba_report:
+            # Process FBA report directly
+            st.success("✅ Detected FBA Return Report format")
+            process_fba_returns(df)
         else:
-            # Fallback to manual mapping
-            st.warning("Smart column mapper not available. Please map columns manually.")
-            column_mapping = {}
-        
-        # Display detected mappings
-        if column_mapping:
-            st.success("✅ Columns detected automatically!")
-        
-        # Show mapping in expandable section
-        with st.expander("View/Edit Column Mappings", expanded=True):
-            if column_mapping:
-                st.markdown("**Detected Mappings:**")
-            else:
-                st.markdown("**Please map your columns:**")
-            
-            # Create editable mapping interface
-            edited_mapping = {}
-            col1, col2 = st.columns(2)
-            
-            # Define expected column types
-            column_types = {
-                'date': 'Date/When complaint was made',
-                'complaint': 'Customer complaint/comment text',
-                'product_id': 'Product SKU/Identifier',
-                'asin': 'Amazon ASIN',
-                'order_id': 'Order number',
-                'source': 'Complaint source',
-                'agent': 'Agent/Investigator name',
-                'ticket_id': 'Ticket/Case number',
-                'udi': 'UDI (Device Identifier)'
-            }
-            
-            # Show current mappings and allow editing
-            for col_type, description in column_types.items():
-                with col1 if list(column_types.keys()).index(col_type) < 5 else col2:
-                    current_mapping = column_mapping.get(col_type, '')
-                    
-                    # Create dropdown with all columns
-                    options = [''] + list(df.columns)
-                    default_index = options.index(current_mapping) if current_mapping in options else 0
-                    
-                    selected = st.selectbox(
-                        f"{description}:",
-                        options,
-                        index=default_index,
-                        key=f"map_{col_type}"
-                    )
-                    
-                    if selected:
-                        edited_mapping[col_type] = selected
-            
-            # Use edited mapping if any changes made
-            if edited_mapping:
-                column_mapping = edited_mapping
-        
-        # Validate mapping
-        if MAPPER_AVAILABLE and st.session_state.column_mapper:
-            validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
-            
-            if validation['missing_required']:
-                st.warning(f"⚠️ Missing required columns: {', '.join(validation['missing_required'])}")
-                st.info("The tool will still process available data, but results may be limited.")
-        
-        # Show data preview with mapped columns
-        st.markdown("### 📋 Data Preview")
-        
-        # Map to standardized format
-        if MAPPER_AVAILABLE and st.session_state.column_mapper:
-            mapped_df = st.session_state.column_mapper.map_dataframe(df, column_mapping)
-        else:
-            # Manual mapping fallback
-            mapped_df = df.copy()
-            # Rename columns based on mapping
-            rename_dict = {}
-            if column_mapping.get('date'):
-                rename_dict[column_mapping['date']] = 'return_date'
-            if column_mapping.get('complaint'):
-                rename_dict[column_mapping['complaint']] = 'customer_comment'
-            if column_mapping.get('product_id'):
-                rename_dict[column_mapping['product_id']] = 'sku'
-            if column_mapping.get('asin'):
-                rename_dict[column_mapping['asin']] = 'asin'
-            if column_mapping.get('order_id'):
-                rename_dict[column_mapping['order_id']] = 'order_id'
-            
-            if rename_dict:
-                mapped_df = mapped_df.rename(columns=rename_dict)
-        
-        # Show preview of mapped data
-        preview_cols = ['return_date', 'sku', 'asin', 'order_id', 'customer_comment']
-        available_preview_cols = [col for col in preview_cols if col in mapped_df.columns and mapped_df[col].notna().any()]
-        
-        if available_preview_cols:
-            preview_df = mapped_df[available_preview_cols].head(5)
-            st.dataframe(preview_df, use_container_width=True)
-        
-        # Process returns
-        st.markdown("### 🤖 Categorizing Returns...")
-        
-        categorized_data = []
-        progress_bar = st.progress(0)
-        
-        for idx, row in mapped_df.iterrows():
-            return_item = {
-                'order_id': row.get('order_id', ''),
-                'sku': row.get('sku', ''),
-                'asin': row.get('asin', ''),
-                'return_date': row.get('return_date', ''),
-                'customer_comment': row.get('customer_comment', ''),
-                'source': row.get('source', ''),
-                'agent': row.get('agent', ''),
-                'original_index': idx
-            }
-            
-            # Check for FBA reason if present
-            fba_reason = row.get('reason', '') or row.get('fba_reason', '')
-            
-            # Categorize using AI
-            if st.session_state.ai_analyzer and return_item['customer_comment']:
-                category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
-                    return_item['customer_comment'],
-                    fba_reason
-                )
-                return_item['category'] = category
-                return_item['confidence'] = confidence
-            else:
-                # Fallback categorization
-                if fba_reason and fba_reason in FBA_REASON_MAP:
-                    return_item['category'] = FBA_REASON_MAP[fba_reason]
-                    return_item['confidence'] = 0.8
-                else:
-                    return_item['category'] = 'Other/Miscellaneous'
-                    return_item['confidence'] = 0.1
-            
-            categorized_data.append(return_item)
-            progress_bar.progress((idx + 1) / len(mapped_df))
-        
-        progress_bar.empty()
-        
-        # Store results
-        st.session_state.categorized_data = pd.DataFrame(categorized_data)
-        st.session_state.raw_data = categorized_data
-        st.session_state.total_returns = len(categorized_data)
-        
-        # Run injury analysis if comments are available
-        if any(item['customer_comment'] for item in categorized_data):
-            if st.session_state.injury_detector:
-                st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_data)
-        
-        # Show column mapping summary
-        st.markdown("### ✅ Processing Complete")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Columns Mapped", len(column_mapping))
-        with col2:
-            st.metric("Rows Processed", len(categorized_data))
-        with col3:
-            st.metric("Categories Found", len(set(item['category'] for item in categorized_data)))
+            # Use smart column mapper for other formats
+            process_with_column_mapper(df, filename)
         
     except Exception as e:
         st.error(f"Error processing file: {str(e)}")
         logger.error(f"Structured file processing error: {e}", exc_info=True)
+
+def process_fba_returns(df: pd.DataFrame):
+    """Process FBA return report"""
+    categorized_data = []
+    progress_bar = st.progress(0)
+    
+    for idx, row in df.iterrows():
+        return_item = {
+            'order_id': row.get('order-id', ''),
+            'sku': row.get('sku', ''),
+            'asin': row.get('asin', ''),
+            'return_date': row.get('return-date', ''),
+            'return_reason': row.get('reason', ''),
+            'buyer_comment': row.get('customer-comments', ''),
+            'customer_comment': row.get('customer-comments', ''),
+            'fba_reason': row.get('reason', ''),
+            'quantity': row.get('quantity', 1),
+            'original_index': idx
+        }
+        
+        # Categorize using AI
+        if st.session_state.ai_analyzer:
+            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                complaint=return_item['buyer_comment'],
+                fba_reason=return_item['fba_reason'],
+                return_reason=return_item['return_reason']
+            )
+            return_item['category'] = category
+            return_item['confidence'] = confidence
+        else:
+            return_item['category'] = 'Other/Miscellaneous'
+            return_item['confidence'] = 0.1
+        
+        categorized_data.append(return_item)
+        progress_bar.progress((idx + 1) / len(df))
+    
+    progress_bar.empty()
+    
+    # Store results
+    st.session_state.categorized_data = pd.DataFrame(categorized_data)
+    st.session_state.raw_data = categorized_data
+    st.session_state.total_returns = len(categorized_data)
+    
+    # Run injury analysis
+    if st.session_state.injury_detector:
+        st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_data)
+
+def process_with_column_mapper(df: pd.DataFrame, filename: str):
+    """Process file using smart column mapper"""
+    st.markdown("### 🔍 Column Detection & Mapping")
+    
+    # Use smart column mapper if available
+    if MAPPER_AVAILABLE and st.session_state.column_mapper:
+        with st.spinner("Using AI to detect column types..."):
+            column_mapping = st.session_state.column_mapper.detect_columns(df)
+    else:
+        # Fallback to manual mapping
+        st.warning("Smart column mapper not available. Please map columns manually.")
+        column_mapping = {}
+    
+    # Display detected mappings
+    if column_mapping:
+        st.success("✅ Columns detected automatically!")
+    
+    # Show mapping in expandable section
+    with st.expander("View/Edit Column Mappings", expanded=True):
+        if column_mapping:
+            st.markdown("**Detected Mappings:**")
+        else:
+            st.markdown("**Please map your columns:**")
+        
+        # Create editable mapping interface
+        edited_mapping = {}
+        col1, col2 = st.columns(2)
+        
+        # Define expected column types
+        column_types = {
+            'date': 'Date/When complaint was made',
+            'complaint': 'Customer complaint/comment text',
+            'product_id': 'Product SKU/Identifier',
+            'asin': 'Amazon ASIN',
+            'order_id': 'Order number',
+            'source': 'Complaint source',
+            'agent': 'Agent/Investigator name',
+            'ticket_id': 'Ticket/Case number',
+            'udi': 'UDI (Device Identifier)'
+        }
+        
+        # Show current mappings and allow editing
+        for col_type, description in column_types.items():
+            with col1 if list(column_types.keys()).index(col_type) < 5 else col2:
+                current_mapping = column_mapping.get(col_type, '')
+                
+                # Create dropdown with all columns
+                options = [''] + list(df.columns)
+                default_index = options.index(current_mapping) if current_mapping in options else 0
+                
+                selected = st.selectbox(
+                    f"{description}:",
+                    options,
+                    index=default_index,
+                    key=f"map_{col_type}"
+                )
+                
+                if selected:
+                    edited_mapping[col_type] = selected
+        
+        # Use edited mapping if any changes made
+        if edited_mapping:
+            column_mapping = edited_mapping
+    
+    # Validate mapping
+    if MAPPER_AVAILABLE and st.session_state.column_mapper:
+        validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
+        
+        if validation['missing_required']:
+            st.warning(f"⚠️ Missing required columns: {', '.join(validation['missing_required'])}")
+            st.info("The tool will still process available data, but results may be limited.")
+    
+    # Process returns
+    st.markdown("### 🤖 Categorizing Returns...")
+    
+    categorized_data = []
+    progress_bar = st.progress(0)
+    
+    for idx, row in df.iterrows():
+        return_item = {
+            'order_id': row.get(column_mapping.get('order_id', ''), ''),
+            'sku': row.get(column_mapping.get('product_id', ''), ''),
+            'asin': row.get(column_mapping.get('asin', ''), ''),
+            'return_date': row.get(column_mapping.get('date', ''), ''),
+            'customer_comment': row.get(column_mapping.get('complaint', ''), ''),
+            'buyer_comment': row.get(column_mapping.get('complaint', ''), ''),
+            'source': row.get(column_mapping.get('source', ''), ''),
+            'agent': row.get(column_mapping.get('agent', ''), ''),
+            'original_index': idx
+        }
+        
+        # Check for return reason if present
+        return_reason = ''
+        for col in df.columns:
+            if 'reason' in col.lower() and col not in column_mapping.values():
+                return_reason = row.get(col, '')
+                break
+        return_item['return_reason'] = return_reason
+        
+        # Categorize using AI
+        if st.session_state.ai_analyzer and return_item['customer_comment']:
+            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                complaint=return_item['customer_comment'],
+                return_reason=return_reason
+            )
+            return_item['category'] = category
+            return_item['confidence'] = confidence
+        else:
+            return_item['category'] = 'Other/Miscellaneous'
+            return_item['confidence'] = 0.1
+        
+        categorized_data.append(return_item)
+        progress_bar.progress((idx + 1) / len(df))
+    
+    progress_bar.empty()
+    
+    # Store results
+    st.session_state.categorized_data = pd.DataFrame(categorized_data)
+    st.session_state.raw_data = categorized_data
+    st.session_state.total_returns = len(categorized_data)
+    
+    # Run injury analysis if comments are available
+    if any(item['customer_comment'] for item in categorized_data):
+        if st.session_state.injury_detector:
+            st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_data)
+    
+    # Show column mapping summary
+    st.markdown("### ✅ Processing Complete")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Columns Mapped", len(column_mapping))
+    with col2:
+        st.metric("Rows Processed", len(categorized_data))
+    with col3:
+        st.metric("Categories Found", len(set(item['category'] for item in categorized_data)))
 
 def generate_quality_insights():
     """Generate quality-focused insights from categorized data"""
