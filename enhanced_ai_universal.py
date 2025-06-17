@@ -698,8 +698,12 @@ class UniversalAIAnalyzer:
         # Filter returns for specific ASIN
         asin_returns = [r for r in returns_data if r.get('asin') == asin]
         
-        if not asin_returns:
+        if not asin_returns and asin != 'ALL':
             return {'error': f'No returns found for ASIN {asin}'}
+        
+        # Use all returns if ASIN is 'ALL'
+        if asin == 'ALL':
+            asin_returns = returns_data
         
         # Calculate metrics
         total_returns = len(asin_returns)
@@ -726,7 +730,7 @@ class UniversalAIAnalyzer:
             'category_breakdown': {
                 category: {
                     'count': len(returns),
-                    'percentage': len(returns) / total_returns * 100,
+                    'percentage': len(returns) / total_returns * 100 if total_returns > 0 else 0,
                     'priority': RETURN_CATEGORIES.get(category, {}).get('priority', 'low'),
                     'sample_comments': [r.get('customer_comments', '') for r in returns[:3] if r.get('customer_comments')]
                 }
@@ -772,7 +776,7 @@ class UniversalAIAnalyzer:
         
         return {
             'severity': 'High' if critical_returns / total > 0.3 else 'Medium',
-            'critical_return_percentage': critical_returns / total * 100,
+            'critical_return_percentage': critical_returns / total * 100 if total > 0 else 0,
             'estimated_cost_impact': 'Significant' if critical_returns > 20 else 'Moderate',
             'risk_assessment': self._assess_risk(categorized)
         }
@@ -887,6 +891,7 @@ class UniversalAIAnalyzer:
             
             # Try Claude first if available (often better for analysis)
             if 'claude' in providers:
+                import asyncio
                 result = asyncio.run(self._call_claude(
                     user_message,
                     "You are a quality analysis expert. " + full_prompt
@@ -896,6 +901,7 @@ class UniversalAIAnalyzer:
             
             # Fallback to OpenAI
             if 'openai' in providers:
+                import asyncio
                 result = asyncio.run(self._call_openai(
                     user_message,
                     full_prompt
