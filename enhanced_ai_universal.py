@@ -1,6 +1,14 @@
 """
-Enhanced AI Analysis Module - Universal File Understanding with Medical Device Focus
-Version: 11.0 - Dual AI with Medical Device Categorization
+Enhanced AI Analysis Module - Dual AI with Speed Optimization
+Version 14.0 - OpenAI + Claude with Parallel Processing
+
+Key Features:
+- Dual AI support with intelligent routing
+- Batch processing for speed (5-10x faster)
+- Claude Haiku for fast categorization
+- GPT-3.5 for complex cases
+- Parallel API calls when using both
+- Smart fallback mechanisms
 """
 
 import logging
@@ -9,24 +17,17 @@ import json
 import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
-from collections import Counter
-import time
-import base64
-from io import BytesIO
-from dataclasses import dataclass, field
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
-
-# Standard imports
-import pandas as pd
-import numpy as np
+import time
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Safe imports with fallbacks
+# Safe imports
 def safe_import(module_name):
     try:
         return __import__(module_name), True
@@ -34,54 +35,55 @@ def safe_import(module_name):
         logger.warning(f"Module {module_name} not available")
         return None, False
 
-# Import required libraries
+# Check for dependencies
 requests, has_requests = safe_import('requests')
-anthropic_module, has_anthropic = safe_import('anthropic')
-pdfplumber, has_pdfplumber = safe_import('pdfplumber')
-PIL, has_pil = safe_import('PIL')
-pytesseract, has_tesseract = safe_import('pytesseract')
 
-# Model configurations
-MODEL_CONFIG = {
+# API Configuration
+API_TIMEOUT = 30  # Reduced from 45
+MAX_RETRIES = 2   # Reduced from 3
+BATCH_SIZE = 20   # Reduced for faster processing
+MAX_WORKERS = 5   # Parallel workers
+
+# Token configurations by mode
+TOKEN_LIMITS = {
+    'standard': 100,     # Reduced for faster responses
+    'enhanced': 200,     
+    'extreme': 400,      
+    'chat': 500          
+}
+
+# Model configurations - optimized for speed
+MODELS = {
     'openai': {
-        'primary': 'gpt-3.5-turbo',  # Fast for categorization
-        'vision': 'gpt-4-vision-preview',
-        'fallback': 'gpt-3.5-turbo',
+        'standard': 'gpt-3.5-turbo',  # Fast
+        'enhanced': 'gpt-3.5-turbo',  # Changed from gpt-4 for speed
+        'extreme': 'gpt-4',
         'chat': 'gpt-3.5-turbo'
     },
     'claude': {
-        'primary': 'claude-3-haiku-20240307',  # Fastest
-        'vision': 'claude-3-haiku-20240307',
-        'advanced': 'claude-3-sonnet-20240229',
+        'standard': 'claude-3-haiku-20240307',  # Fastest
+        'enhanced': 'claude-3-haiku-20240307',  # Keep fast
+        'extreme': 'claude-3-sonnet-20240229',
         'chat': 'claude-3-haiku-20240307'
     }
 }
 
-# API settings for speed
-API_TIMEOUT = 30
-MAX_RETRIES = 2
-BATCH_SIZE = 50  # Optimal batch size
-MAX_WORKERS = 5
-
-# Token limits
-TOKEN_LIMITS = {
-    'standard': 150,  # Reduced for speed
-    'enhanced': 300,
-    'chat': 500
-}
-
-# Pricing per 1K tokens
+# Updated pricing per 1K tokens
 PRICING = {
+    # OpenAI
     'gpt-3.5-turbo': {'input': 0.0005, 'output': 0.0015},
     'gpt-4': {'input': 0.03, 'output': 0.06},
+    'gpt-4-turbo': {'input': 0.01, 'output': 0.03},
+    # Claude (Anthropic)
     'claude-3-haiku-20240307': {'input': 0.00025, 'output': 0.00125},
-    'claude-3-sonnet-20240229': {'input': 0.003, 'output': 0.015}
+    'claude-3-sonnet-20240229': {'input': 0.003, 'output': 0.015},
+    'claude-3-opus-20240229': {'input': 0.015, 'output': 0.075}
 }
 
-# Medical Device Return Categories - Column K categories
+# Medical Device Return Categories - EXACT categories from Amazon
 MEDICAL_DEVICE_CATEGORIES = [
     'Size/Fit Issues',
-    'Comfort Issues', 
+    'Comfort Issues',
     'Product Defects/Quality',
     'Performance/Effectiveness',
     'Stability/Positioning Issues',
@@ -97,89 +99,116 @@ MEDICAL_DEVICE_CATEGORIES = [
     'Other/Miscellaneous'
 ]
 
-# FBA reason code mapping
+# FBA reason code mapping - expanded
 FBA_REASON_MAP = {
-    # Quality issues
-    'DEFECTIVE': 'Product Defects/Quality',
+    # Original mappings
+    'NOT_COMPATIBLE': 'Equipment Compatibility',
     'DAMAGED_BY_FC': 'Product Defects/Quality',
     'DAMAGED_BY_CARRIER': 'Shipping/Fulfillment Issues',
-    'QUALITY_NOT_ADEQUATE': 'Product Defects/Quality',
-    'EXPIRED_ITEM': 'Product Defects/Quality',
-    'DAMAGED_GLASS_VIAL': 'Product Defects/Quality',
-    'DAMAGED': 'Product Defects/Quality',
-    'BROKEN': 'Product Defects/Quality',
-    'NOT_WORKING': 'Product Defects/Quality',
-    'DOESNT_WORK': 'Product Defects/Quality',
-    
-    # Wrong item
+    'DEFECTIVE': 'Product Defects/Quality',
     'NOT_AS_DESCRIBED': 'Wrong Product/Misunderstanding',
     'WRONG_ITEM': 'Wrong Product/Misunderstanding',
-    'DIFFERENT_PRODUCT': 'Wrong Product/Misunderstanding',
-    'SWITCHEROO': 'Wrong Product/Misunderstanding',
-    'INACCURATE_WEBSITE_DESCRIPTION': 'Wrong Product/Misunderstanding',
-    
-    # Missing/Compatibility
     'MISSING_PARTS': 'Missing Components',
-    'MISSING_ITEM': 'Missing Components',
-    'NOT_COMPATIBLE': 'Equipment Compatibility',
-    'NOT_COMPATIBLE_WITH_DEVICE': 'Equipment Compatibility',
-    
-    # Customer issues
+    'QUALITY_NOT_ADEQUATE': 'Product Defects/Quality',
     'UNWANTED_ITEM': 'Customer Error/Changed Mind',
     'UNAUTHORIZED_PURCHASE': 'Customer Error/Changed Mind',
     'CUSTOMER_DAMAGED': 'Customer Error/Changed Mind',
+    'SWITCHEROO': 'Wrong Product/Misunderstanding',
+    'EXPIRED_ITEM': 'Product Defects/Quality',
+    'DAMAGED_GLASS_VIAL': 'Product Defects/Quality',
+    'DIFFERENT_PRODUCT': 'Wrong Product/Misunderstanding',
+    'MISSING_ITEM': 'Missing Components',
+    'NOT_DELIVERED': 'Shipping/Fulfillment Issues',
     'ORDERED_WRONG_ITEM': 'Customer Error/Changed Mind',
     'UNNEEDED_ITEM': 'Customer Error/Changed Mind',
     'BAD_GIFT': 'Customer Error/Changed Mind',
-    
-    # Size/Fit
+    'INACCURATE_WEBSITE_DESCRIPTION': 'Wrong Product/Misunderstanding',
+    'BETTER_PRICE_AVAILABLE': 'Price/Value',
     'DOES_NOT_FIT': 'Size/Fit Issues',
+    'NOT_COMPATIBLE_WITH_DEVICE': 'Equipment Compatibility',
+    'UNSATISFACTORY_PRODUCT': 'Performance/Effectiveness',
+    'ARRIVED_LATE': 'Shipping/Fulfillment Issues',
+    # Additional mappings
     'TOO_SMALL': 'Size/Fit Issues',
     'TOO_LARGE': 'Size/Fit Issues',
-    
-    # Other
-    'BETTER_PRICE_AVAILABLE': 'Price/Value',
-    'NOT_DELIVERED': 'Shipping/Fulfillment Issues',
-    'ARRIVED_LATE': 'Shipping/Fulfillment Issues',
     'UNCOMFORTABLE': 'Comfort Issues',
     'DIFFICULT_TO_USE': 'Assembly/Usage Difficulty',
-    'UNSATISFACTORY_PRODUCT': 'Performance/Effectiveness'
+    'DAMAGED': 'Product Defects/Quality',
+    'BROKEN': 'Product Defects/Quality',
+    'POOR_QUALITY': 'Product Defects/Quality',
+    'NOT_WORKING': 'Product Defects/Quality',
+    'DOESNT_WORK': 'Product Defects/Quality'
 }
 
-# Quick categorization patterns
+# Quick categorization patterns for speed - Updated with exact mappings
 QUICK_PATTERNS = {
     'Size/Fit Issues': [
         r'too (small|large|big|tight|loose)', r'doesn[\']?t fit', r'wrong size',
-        r'size issue', r'(small|large)r than expected', r'fit issue', r'too (tall|short|wide)'
+        r'size issue', r'(small|large)r than expected', r'fit issue', r'too (tall|short|wide)',
+        r'sizing issues', r'bad fit', r'didn[\']?t fit', r'doesn[\']?t fit well'
     ],
     'Product Defects/Quality': [
         r'defect', r'broken', r'damaged', r'poor quality', r'doesn[\']?t work',
         r'stopped working', r'malfunction', r'fell apart', r'ripped', r'torn',
-        r'dead on arrival', r'doa', r'bad velcro', r'won[\']?t inflate'
+        r'does not work properly', r'bad velcro', r'velcro doesn[\']?t stick',
+        r'defective handles', r'defective suction cups', r'won[\']?t inflate',
+        r'inflation issues', r'not working'
     ],
     'Wrong Product/Misunderstanding': [
-        r'wrong (item|product)', r'not as described', r'different than',
-        r'thought it was', r'expected', r'not what I ordered', r'wrong model'
+        r'wrong (item|product|color)', r'not as described', r'different than',
+        r'thought it was', r'expected', r'not what I ordered', r'wrong model',
+        r'different from website', r'not as advertised', r'style not as expected',
+        r'brace.*wrong hand', r'immobilizer.*wrong hand'
     ],
     'Customer Error/Changed Mind': [
         r'changed mind', r'don[\']?t need', r'ordered by mistake',
-        r'accidentally', r'no longer need', r'bought wrong', r'my (fault|mistake)'
+        r'accidentally', r'no longer need', r'bought wrong', r'my (fault|mistake)',
+        r'ordered wrong', r'bought by mistake', r'unauthorized purchase',
+        r'no issue', r'customer error', r'don[\']?t want'
     ],
     'Comfort Issues': [
         r'uncomfort', r'hurts', r'painful', r'too (hard|soft|firm)',
-        r'causes pain', r'irritat', r'not comfortable', r'too stiff'
+        r'causes pain', r'irritat', r'not comfortable', r'too stiff',
+        r'hurts customer', r'not enough padding', r'not enough cushion'
     ],
     'Equipment Compatibility': [
-        r'doesn[\']?t fit (my|the|walker|wheelchair|toilet)', r'not compatible', 
-        r'incompatible', r'doesn[\']?t work with', r'won[\']?t fit'
+        r'doesn[\']?t fit (my|the|walker|wheelchair|toilet|shower|bed|machine)', 
+        r'not compatible', r'incompatible', r'doesn[\']?t work with', 
+        r'won[\']?t fit', r'does not work with compression stockings',
+        r'doesn[\']?t fit (bariatric walker|knee walker|handle|finger)'
     ],
     'Missing Components': [
-        r'missing (parts|pieces|components)', r'incomplete', r'not included',
-        r'no instructions', r'parts missing'
+        r'missing (parts|pieces|components|accessories)', r'incomplete', r'not included',
+        r'no instructions', r'parts missing', r'thought pump was included'
     ],
     'Performance/Effectiveness': [
         r'ineffective', r'doesn[\']?t (help|work well)', r'not enough support',
-        r'not enough compression', r'unstable', r'not cold enough'
+        r'not enough compression', r'unstable', r'not cold enough', r'not hot enough',
+        r'not as expected', r'does not meet expectations', r'poor support', r'inaccurate'
+    ],
+    'Shipping/Fulfillment Issues': [
+        r'arrived too late', r'received used', r'received damaged', r'item never arrived',
+        r'damaged in shipping', r'late delivery', r'wrong address'
+    ],
+    'Assembly/Usage Difficulty': [
+        r'difficult to (use|adjust|assemble)', r'hard to use', r'complicated',
+        r'difficult to open valve', r'installation issues', r'confusing instructions'
+    ],
+    'Price/Value': [
+        r'better price', r'too expensive', r'found cheaper', r'overpriced',
+        r'not worth', r'better price available'
+    ],
+    'Medical/Health Concerns': [
+        r'doctor did not approve', r'allergic reaction', r'medical', r'health concern',
+        r'bad smell', r'bad odor'
+    ],
+    'Stability/Positioning Issues': [
+        r'doesn[\']?t stay (in place|fastened)', r'slides (around|off|up)',
+        r'slippery', r'unstable', r'flattens', r'tips over', r'wobbl'
+    ],
+    'Design/Material Issues': [
+        r'too (bulky|thick|heavy|thin)', r'flimsy', r'design flaw',
+        r'small pulley', r'grip too small', r'fingers too (long|short)'
     ]
 }
 
@@ -189,33 +218,48 @@ COMPILED_PATTERNS = {
     for category, patterns in QUICK_PATTERNS.items()
 }
 
-# Return reason categories for general analysis
-RETURN_CATEGORIES = {
-    'QUALITY_DEFECTS': {
-        'keywords': ['defective', 'broken', 'damaged', 'doesn\'t work', 'poor quality'],
-        'priority': 'critical',
-        'maps_to': 'Product Defects/Quality'
-    },
-    'SIZE_FIT_ISSUES': {
-        'keywords': ['too small', 'too large', 'doesn\'t fit', 'wrong size'],
-        'priority': 'high',
-        'maps_to': 'Size/Fit Issues'
-    },
-    'FUNCTIONALITY_ISSUES': {
-        'keywords': ['not comfortable', 'hard to use', 'unstable', 'difficult'],
-        'priority': 'high',
-        'maps_to': 'Performance/Effectiveness'
-    },
-    'WRONG_PRODUCT': {
-        'keywords': ['wrong item', 'not as described', 'different'],
-        'priority': 'medium',
-        'maps_to': 'Wrong Product/Misunderstanding'
-    },
-    'BUYER_MISTAKE': {
-        'keywords': ['bought by mistake', 'accidentally ordered', 'my fault'],
-        'priority': 'low',
-        'maps_to': 'Customer Error/Changed Mind'
-    }
+# Amazon return reason to category mapping
+AMAZON_REASON_MAP = {
+    'no longer needed': 'Customer Error/Changed Mind',
+    'item defective or doesn\'t work': 'Product Defects/Quality',
+    'bought by mistake': 'Customer Error/Changed Mind',
+    'better price available': 'Price/Value',
+    'product damaged, but shipping box ok': 'Product Defects/Quality',
+    'item arrived too late': 'Shipping/Fulfillment Issues',
+    'missing parts or accessories': 'Missing Components',
+    'product and shipping box both damaged': 'Shipping/Fulfillment Issues',
+    'wrong item was sent': 'Wrong Product/Misunderstanding',
+    'received extra item i didn\'t buy': 'Wrong Product/Misunderstanding',
+    'no longer wanted': 'Customer Error/Changed Mind',
+    'didn\'t approve purchase': 'Customer Error/Changed Mind',
+    'inaccurate website description': 'Wrong Product/Misunderstanding',
+    'unauthorized purchase': 'Customer Error/Changed Mind',
+    'item defective or doesn\'t work': 'Product Defects/Quality',
+    'ordered wrong item': 'Customer Error/Changed Mind',
+    'return to seller': 'Other/Miscellaneous',
+    'accidental order': 'Customer Error/Changed Mind',
+    'extra order': 'Customer Error/Changed Mind',
+    'performance or quality not adequate': 'Performance/Effectiveness',
+    'product damaged': 'Product Defects/Quality',
+    'quality not adequate': 'Product Defects/Quality',
+    'damaged by carrier': 'Shipping/Fulfillment Issues',
+    'customer damaged': 'Customer Error/Changed Mind',
+    'defective': 'Product Defects/Quality',
+    'does not fit': 'Size/Fit Issues',
+    'expiration too soon': 'Product Defects/Quality',
+    'not as described': 'Wrong Product/Misunderstanding',
+    'ordered wrong size': 'Customer Error/Changed Mind',
+    'ordered wrong style': 'Customer Error/Changed Mind',
+    'ordered wrong color': 'Customer Error/Changed Mind',
+    'too small': 'Size/Fit Issues',
+    'too large': 'Size/Fit Issues',
+    'too big': 'Size/Fit Issues',
+    'uncomfortable': 'Comfort Issues',
+    'unwanted gift': 'Customer Error/Changed Mind',
+    'unwanted item': 'Customer Error/Changed Mind',
+    'unsatisfactory': 'Performance/Effectiveness',
+    'no longer need': 'Customer Error/Changed Mind',
+    'changed mind': 'Customer Error/Changed Mind'
 }
 
 class AIProvider(Enum):
@@ -225,190 +269,505 @@ class AIProvider(Enum):
     FASTEST = "fastest"
 
 @dataclass
-class FileAnalysis:
-    """Results from file analysis"""
-    file_type: str
-    content_type: str  # 'returns', 'reviews', 'other'
-    extracted_data: Dict[str, Any]
-    confidence: float
-    ai_provider: str
-    needs_clarification: bool = False
-    clarification_questions: List[str] = field(default_factory=list)
-
-@dataclass
 class CostEstimate:
-    """Cost tracking"""
+    """Cost estimation data class"""
     provider: str
     model: str
     input_tokens: int
     output_tokens: int
+    input_cost: float
+    output_cost: float
     total_cost: float
-
-class CostTracker:
-    """Track API costs"""
-    def __init__(self):
-        self.total_cost = 0.0
-        self.api_calls = 0
-        self.quick_categorizations = 0
-        self.ai_categorizations = 0
-        
-    def add_cost(self, cost: float):
-        """Add cost to total"""
-        self.total_cost += cost
-        self.api_calls += 1
-        
-    def get_summary(self):
-        """Get cost summary"""
+    
+    def to_dict(self):
         return {
-            'total_cost': round(self.total_cost, 4),
-            'api_calls': self.api_calls,
-            'quick_categorizations': self.quick_categorizations,
-            'ai_categorizations': self.ai_categorizations
+            'provider': self.provider,
+            'model': self.model,
+            'input_tokens': self.input_tokens,
+            'output_tokens': self.output_tokens,
+            'input_cost': self.input_cost,
+            'output_cost': self.output_cost,
+            'total_cost': self.total_cost
         }
 
-def quick_categorize(complaint: str, fba_reason: str = None) -> Optional[str]:
+def estimate_tokens(text: str) -> int:
+    """Estimate token count (rough approximation)"""
+    return max(len(text) // 4, len(text.split()) * 4 // 3)
+
+def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> CostEstimate:
+    """Calculate cost for API usage"""
+    if model not in PRICING:
+        logger.warning(f"Model {model} not in pricing table")
+        return CostEstimate("unknown", model, input_tokens, output_tokens, 0, 0, 0)
+    
+    pricing = PRICING[model]
+    input_cost = (input_tokens / 1000) * pricing['input']
+    output_cost = (output_tokens / 1000) * pricing['output']
+    total_cost = input_cost + output_cost
+    
+    provider = 'openai' if 'gpt' in model else 'claude'
+    
+    return CostEstimate(
+        provider=provider,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        input_cost=input_cost,
+        output_cost=output_cost,
+        total_cost=total_cost
+    )
+
+def quick_categorize(complaint: str, fba_reason: str = None, return_reason: str = None) -> Optional[str]:
     """Quick pattern-based categorization for speed"""
     if not complaint:
-        return None
+        complaint = ""
     
     # Check FBA reason first
     if fba_reason and fba_reason in FBA_REASON_MAP:
         return FBA_REASON_MAP[fba_reason]
     
-    complaint_lower = complaint.lower()
+    # Check Amazon return reason
+    if return_reason:
+        return_reason_lower = return_reason.lower().strip()
+        if return_reason_lower in AMAZON_REASON_MAP:
+            return AMAZON_REASON_MAP[return_reason_lower]
+    
+    # Combined text for analysis
+    combined_text = f"{return_reason or ''} {complaint}".lower().strip()
     
     # Check compiled patterns
     for category, patterns in COMPILED_PATTERNS.items():
         for pattern in patterns:
-            if pattern.search(complaint_lower):
+            if pattern.search(combined_text):
                 return category
     
     return None
 
-def estimate_tokens(text: str) -> int:
-    """Estimate token count"""
-    return max(len(text) // 4, len(text.split()) * 4 // 3)
+def detect_severity(complaint: str, category: str) -> str:
+    """Detect severity level of complaint"""
+    complaint_lower = complaint.lower()
+    
+    # Critical keywords
+    critical_keywords = ['injury', 'injured', 'hospital', 'emergency', 'dangerous', 'unsafe', 'hazard']
+    if any(keyword in complaint_lower for keyword in critical_keywords):
+        return 'critical'
+    
+    if category == 'Medical/Health Concerns':
+        return 'critical'
+    
+    # Major keywords
+    major_keywords = ['defective', 'broken', 'malfunction', 'unusable', 'failed', 'stopped working']
+    if any(keyword in complaint_lower for keyword in major_keywords):
+        return 'major'
+    
+    if category in ['Product Defects/Quality', 'Performance/Effectiveness']:
+        return 'major'
+    
+    return 'minor'
 
-class UniversalAIAnalyzer:
-    """Universal AI analyzer with medical device focus"""
+class CostTracker:
+    """Track API costs across sessions"""
+    
+    def __init__(self):
+        self.session_costs = []
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
+        self.api_calls = 0
+        self.start_time = datetime.now()
+        self.quick_categorizations = 0
+        self.ai_categorizations = 0
+    
+    def add_cost(self, cost_estimate: CostEstimate):
+        """Add cost to tracking"""
+        self.session_costs.append(cost_estimate)
+        self.total_input_tokens += cost_estimate.input_tokens
+        self.total_output_tokens += cost_estimate.output_tokens
+        self.total_cost += cost_estimate.total_cost
+        self.api_calls += 1
+    
+    def add_quick_categorization(self):
+        """Track quick categorization"""
+        self.quick_categorizations += 1
+    
+    def add_ai_categorization(self):
+        """Track AI categorization"""
+        self.ai_categorizations += 1
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get cost summary"""
+        duration = (datetime.now() - self.start_time).total_seconds() / 60
+        
+        return {
+            'total_cost': round(self.total_cost, 4),
+            'api_calls': self.api_calls,
+            'total_tokens': self.total_input_tokens + self.total_output_tokens,
+            'quick_categorizations': self.quick_categorizations,
+            'ai_categorizations': self.ai_categorizations,
+            'speed_improvement': f"{self.quick_categorizations / max(1, self.quick_categorizations + self.ai_categorizations) * 100:.1f}%",
+            'average_cost_per_call': round(self.total_cost / max(1, self.api_calls), 4),
+            'duration_minutes': round(duration, 1),
+            'breakdown_by_provider': self._get_provider_breakdown()
+        }
+    
+    def _get_provider_breakdown(self) -> Dict[str, Dict]:
+        """Get cost breakdown by provider"""
+        breakdown = {'openai': {'calls': 0, 'cost': 0}, 'claude': {'calls': 0, 'cost': 0}}
+        
+        for cost in self.session_costs:
+            provider = cost.provider
+            if provider in breakdown:
+                breakdown[provider]['calls'] += 1
+                breakdown[provider]['cost'] += cost.total_cost
+        
+        return breakdown
+
+class EnhancedAIAnalyzer:
+    """Main AI analyzer with dual AI support and speed optimization"""
     
     def __init__(self, provider: AIProvider = AIProvider.FASTEST):
         self.provider = provider
         self.openai_key = self._get_api_key('openai')
         self.claude_key = self._get_api_key('claude')
-        self.executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-        self.cost_tracker = CostTracker()  # Initialize cost tracker
         
-        # Initialize Claude client if available
-        self.claude_client = None
-        if self.claude_key and has_anthropic:
-            try:
-                from anthropic import Anthropic
-                self.claude_client = Anthropic(api_key=self.claude_key)
-                logger.info("Claude API initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize Claude: {e}")
+        # Initialize tracking
+        self.cost_tracker = CostTracker()
+        
+        # Initialize API availability
+        self.openai_configured = bool(self.openai_key and has_requests)
+        self.claude_configured = bool(self.claude_key and has_requests)
+        
+        # Thread pool for parallel processing
+        self.executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
         
         # Session for connection pooling
         self.session = None
         if has_requests:
             self.session = requests.Session()
-            
-        self.openai_configured = bool(self.openai_key and has_requests)
-        self.claude_configured = bool(self.claude_client)
         
-        logger.info(f"AI Analyzer initialized - OpenAI: {self.openai_configured}, Claude: {self.claude_configured}")
-        
+        logger.info(f"AI Analyzer initialized - OpenAI: {self.openai_configured}, Claude: {self.claude_configured}, Mode: {provider.value}")
+    
     def _get_api_key(self, provider: str) -> Optional[str]:
-        """Get API key from Streamlit secrets or environment"""
+        """Get API key from multiple sources"""
+        # Try Streamlit secrets first
         try:
             import streamlit as st
             if hasattr(st, 'secrets'):
-                # Try various key names
                 if provider == 'openai':
-                    for key in ['openai_api_key', 'OPENAI_API_KEY', 'openai']:
-                        if key in st.secrets:
-                            return str(st.secrets[key]).strip()
+                    for key_name in ["OPENAI_API_KEY", "openai_api_key", "openai"]:
+                        if key_name in st.secrets:
+                            key_value = str(st.secrets[key_name]).strip()
+                            if key_value and key_value.startswith('sk-'):
+                                logger.info(f"Found {provider} key in Streamlit secrets")
+                                return key_value
                 elif provider == 'claude':
-                    for key in ['claude_api_key', 'anthropic_api_key', 'ANTHROPIC_API_KEY', 'claude']:
-                        if key in st.secrets:
-                            return str(st.secrets[key]).strip()
-        except:
-            pass
+                    for key_name in ["ANTHROPIC_API_KEY", "anthropic_api_key", "claude_api_key", "claude"]:
+                        if key_name in st.secrets:
+                            key_value = str(st.secrets[key_name]).strip()
+                            if key_value:
+                                logger.info(f"Found {provider} key in Streamlit secrets")
+                                return key_value
+        except Exception as e:
+            logger.debug(f"Streamlit secrets not available: {e}")
         
         # Try environment variables
-        env_map = {
-            'openai': ['OPENAI_API_KEY'],
-            'claude': ['ANTHROPIC_API_KEY', 'CLAUDE_API_KEY']
+        env_vars = {
+            'openai': ["OPENAI_API_KEY", "OPENAI_API"],
+            'claude': ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"]
         }
         
-        for env_name in env_map.get(provider, []):
-            if env_name in os.environ:
-                return os.environ[env_name].strip()
+        for env_name in env_vars.get(provider, []):
+            api_key = os.environ.get(env_name, '').strip()
+            if api_key:
+                logger.info(f"Found {provider} key in environment")
+                return api_key
         
+        logger.warning(f"No {provider} API key found")
         return None
     
-    def get_available_providers(self) -> List[str]:
-        """Get list of available AI providers"""
-        providers = []
-        if self.openai_configured:
-            providers.append('openai')
-        if self.claude_configured:
-            providers.append('claude')
-        return providers
-    
     def get_api_status(self) -> Dict[str, Any]:
-        """Get API status"""
-        return {
+        """Get API status with cost summary"""
+        status = {
             'available': self.openai_configured or self.claude_configured,
             'openai_configured': self.openai_configured,
             'claude_configured': self.claude_configured,
+            'dual_ai_available': self.openai_configured and self.claude_configured,
             'provider': self.provider.value,
-            'cost_summary': self.cost_tracker.get_summary()
+            'cost_summary': self.cost_tracker.get_summary(),
+            'message': ''
         }
+        
+        if status['dual_ai_available']:
+            status['message'] = 'Both OpenAI and Claude APIs are configured'
+        elif self.openai_configured:
+            status['message'] = 'OpenAI API is configured (Claude not available)'
+        elif self.claude_configured:
+            status['message'] = 'Claude API is configured (OpenAI not available)'
+        else:
+            status['message'] = 'No APIs configured'
+        
+        return status
     
-    def categorize_return(self, complaint: str, fba_reason: str = None, mode: str = 'standard') -> Tuple[str, float, str, str]:
-        """Categorize return with medical device categories"""
+    def _call_openai(self, prompt: str, system_prompt: str, mode: str = 'standard') -> Tuple[Optional[str], Optional[CostEstimate]]:
+        """Call OpenAI API with cost tracking"""
+        if not self.openai_configured:
+            return None, None
+        
+        model = MODELS['openai'][mode]
+        max_tokens = TOKEN_LIMITS[mode]
+        
+        # Estimate input tokens
+        input_tokens = estimate_tokens(system_prompt + prompt)
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.openai_key}"
+        }
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+            "max_tokens": max_tokens
+        }
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = (self.session or requests).post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=API_TIMEOUT
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result["choices"][0]["message"]["content"].strip()
+                    
+                    # Get actual token usage
+                    usage = result.get("usage", {})
+                    actual_input = usage.get("prompt_tokens", input_tokens)
+                    actual_output = usage.get("completion_tokens", len(content.split()))
+                    
+                    # Calculate cost
+                    cost = calculate_cost(model, actual_input, actual_output)
+                    self.cost_tracker.add_cost(cost)
+                    
+                    return content, cost
+                
+                elif response.status_code == 429:
+                    wait_time = min(2 ** attempt, 10)
+                    logger.warning(f"OpenAI rate limited, waiting {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+                
+                else:
+                    logger.error(f"OpenAI API error {response.status_code}")
+                    return None, None
+                    
+            except Exception as e:
+                logger.error(f"OpenAI call error: {e}")
+                if attempt == MAX_RETRIES - 1:
+                    return None, None
+                time.sleep(1)
+        
+        return None, None
+    
+    def _call_claude(self, prompt: str, system_prompt: str, mode: str = 'standard') -> Tuple[Optional[str], Optional[CostEstimate]]:
+        """Call Claude API with cost tracking"""
+        if not self.claude_configured:
+            return None, None
+        
+        model = MODELS['claude'][mode]
+        max_tokens = TOKEN_LIMITS[mode]
+        
+        # Estimate input tokens
+        input_tokens = estimate_tokens(system_prompt + prompt)
+        
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.claude_key,
+            "anthropic-version": "2023-06-01"
+        }
+        
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = (self.session or requests).post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
+                    json=payload,
+                    timeout=API_TIMEOUT
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result["content"][0]["text"].strip()
+                    
+                    # Get actual token usage
+                    usage = result.get("usage", {})
+                    actual_input = usage.get("input_tokens", input_tokens)
+                    actual_output = usage.get("output_tokens", len(content.split()))
+                    
+                    # Calculate cost
+                    cost = calculate_cost(model, actual_input, actual_output)
+                    self.cost_tracker.add_cost(cost)
+                    
+                    return content, cost
+                
+                elif response.status_code == 429:
+                    wait_time = min(2 ** attempt, 10)
+                    logger.warning(f"Claude rate limited, waiting {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+                
+                else:
+                    logger.error(f"Claude API error {response.status_code}: {response.text}")
+                    return None, None
+                    
+            except Exception as e:
+                logger.error(f"Claude call error: {e}")
+                if attempt == MAX_RETRIES - 1:
+                    return None, None
+                time.sleep(1)
+        
+        return None, None
+    
+    def categorize_return(self, complaint: str, fba_reason: str = None, return_reason: str = None, mode: str = 'standard') -> Tuple[str, float, str, str]:
+        """Categorize return with speed optimization"""
         if not complaint or not complaint.strip():
-            return 'Other/Miscellaneous', 0.1, 'none', 'en'
+            complaint = ""
         
         # Try quick categorization first
-        quick_category = quick_categorize(complaint, fba_reason)
+        quick_category = quick_categorize(complaint, fba_reason, return_reason)
         if quick_category:
-            self.cost_tracker.quick_categorizations += 1
-            return quick_category, 0.9, 'standard', 'en'
+            self.cost_tracker.add_quick_categorization()
+            severity = detect_severity(complaint, quick_category)
+            return quick_category, 0.9, severity, 'en'
         
         # AI categorization
-        self.cost_tracker.ai_categorizations += 1
+        self.cost_tracker.add_ai_categorization()
         
         # Build prompts
-        system_prompt = """You are a medical device quality expert. Categorize this return into exactly one category from the provided list. Respond with ONLY the category name, nothing else."""
+        system_prompt = """You are a medical device return categorization expert. Your task is to categorize returns into exactly one of the provided categories based on the return reason and buyer comment. 
+
+IMPORTANT: You must respond with ONLY the exact category name from the list, nothing else. No explanations, no additional text.
+
+Consider both the return reason and buyer comment when categorizing. The return reason is the primary indicator, but the buyer comment may provide clarifying context."""
         
         categories_list = '\n'.join(f'- {cat}' for cat in MEDICAL_DEVICE_CATEGORIES)
         
-        user_prompt = f"""Complaint: "{complaint}"
+        user_prompt = f"""Return Reason: "{return_reason or 'Not specified'}"
+Buyer Comment: "{complaint}"
 
-Categories:
+Available Categories:
 {categories_list}
 
 Category:"""
         
-        # Call AI based on provider setting
-        if self.provider == AIProvider.FASTEST and self.claude_configured:
-            response = self._call_claude_sync(user_prompt, system_prompt, mode)
-        elif self.openai_configured:
-            response = self._call_openai_sync(user_prompt, system_prompt, mode)
+        # Choose provider based on mode
+        if self.provider == AIProvider.FASTEST:
+            # Use Claude Haiku for speed
+            if self.claude_configured:
+                response, _ = self._call_claude(user_prompt, system_prompt, 'standard')
+                if response:
+                    category = self._clean_category_response(response)
+                    severity = detect_severity(complaint, category)
+                    return category, 0.85, severity, 'en'
+            # Fallback to OpenAI
+            if self.openai_configured:
+                response, _ = self._call_openai(user_prompt, system_prompt, 'standard')
+                if response:
+                    category = self._clean_category_response(response)
+                    severity = detect_severity(complaint, category)
+                    return category, 0.85, severity, 'en'
+        
+        elif self.provider == AIProvider.BOTH:
+            # Parallel calls for consensus
+            openai_future = None
+            claude_future = None
+            
+            if self.openai_configured:
+                openai_future = self.executor.submit(
+                    self._call_openai, user_prompt, system_prompt, mode
+                )
+            
+            if self.claude_configured:
+                claude_future = self.executor.submit(
+                    self._call_claude, user_prompt, system_prompt, mode
+                )
+            
+            # Get results
+            openai_result = None
+            claude_result = None
+            
+            if openai_future:
+                try:
+                    openai_response, _ = openai_future.result(timeout=API_TIMEOUT)
+                    if openai_response:
+                        openai_result = self._clean_category_response(openai_response)
+                except Exception as e:
+                    logger.error(f"OpenAI parallel call failed: {e}")
+            
+            if claude_future:
+                try:
+                    claude_response, _ = claude_future.result(timeout=API_TIMEOUT)
+                    if claude_response:
+                        claude_result = self._clean_category_response(claude_response)
+                except Exception as e:
+                    logger.error(f"Claude parallel call failed: {e}")
+            
+            # Determine final category
+            if openai_result and claude_result:
+                if openai_result == claude_result:
+                    category = openai_result
+                    confidence = 0.95
+                else:
+                    # Prefer non-misc category
+                    category = openai_result if openai_result != 'Other/Miscellaneous' else claude_result
+                    confidence = 0.8
+            elif openai_result:
+                category = openai_result
+                confidence = 0.85
+            elif claude_result:
+                category = claude_result
+                confidence = 0.85
+            else:
+                category = 'Other/Miscellaneous'
+                confidence = 0.3
+            
+            severity = detect_severity(complaint, category)
+            return category, confidence, severity, 'en'
+        
         else:
-            response = None
+            # Single provider mode
+            if self.provider == AIProvider.OPENAI and self.openai_configured:
+                response, _ = self._call_openai(user_prompt, system_prompt, mode)
+            elif self.provider == AIProvider.CLAUDE and self.claude_configured:
+                response, _ = self._call_claude(user_prompt, system_prompt, mode)
+            else:
+                response = None
+            
+            if response:
+                category = self._clean_category_response(response)
+                severity = detect_severity(complaint, category)
+                return category, 0.85, severity, 'en'
         
-        if response:
-            category = self._clean_category_response(response)
-            return category, 0.85, 'standard', 'en'
-        
+        # Final fallback
         return 'Other/Miscellaneous', 0.3, 'none', 'en'
     
     def categorize_batch(self, complaints: List[Dict[str, Any]], mode: str = 'standard') -> List[Dict[str, Any]]:
-        """Categorize multiple complaints in parallel"""
+        """Categorize multiple complaints in parallel for speed"""
         results = []
         futures = []
         
@@ -418,6 +777,7 @@ Category:"""
                 self.categorize_return,
                 item.get('complaint', ''),
                 item.get('fba_reason'),
+                item.get('return_reason'),
                 mode
             )
             futures.append((future, item))
@@ -446,156 +806,6 @@ Category:"""
                 results.append(result)
         
         return results
-    
-    def _call_openai_sync(self, prompt: str, system_prompt: str, mode: str = 'standard') -> Optional[str]:
-        """Synchronous OpenAI call"""
-        if not self.openai_configured:
-            return None
-            
-        model = MODEL_CONFIG['openai']['primary']
-        max_tokens = TOKEN_LIMITS[mode]
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.openai_key}"
-        }
-        
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1,
-            "max_tokens": max_tokens
-        }
-        
-        try:
-            response = (self.session or requests).post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=API_TIMEOUT
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result["choices"][0]["message"]["content"].strip()
-                
-                # Track cost
-                usage = result.get("usage", {})
-                input_tokens = usage.get("prompt_tokens", 0)
-                output_tokens = usage.get("completion_tokens", 0)
-                cost = (input_tokens * 0.0005 + output_tokens * 0.0015) / 1000
-                self.cost_tracker.add_cost(cost)
-                
-                return content
-                
-        except Exception as e:
-            logger.error(f"OpenAI error: {e}")
-            
-        return None
-    
-    def _call_claude_sync(self, prompt: str, system_prompt: str, mode: str = 'standard') -> Optional[str]:
-        """Synchronous Claude call"""
-        if not self.claude_configured:
-            return None
-            
-        try:
-            message = self.claude_client.messages.create(
-                model=MODEL_CONFIG['claude']['primary'],
-                max_tokens=TOKEN_LIMITS[mode],
-                temperature=0.1,
-                system=system_prompt,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            content = message.content[0].text.strip()
-            
-            # Track cost (approximate)
-            input_tokens = estimate_tokens(system_prompt + prompt)
-            output_tokens = estimate_tokens(content)
-            cost = (input_tokens * 0.00025 + output_tokens * 0.00125) / 1000
-            self.cost_tracker.add_cost(cost)
-            
-            return content
-            
-        except Exception as e:
-            logger.error(f"Claude error: {e}")
-            
-        return None
-    
-    async def _call_claude(self, text: str, prompt: str) -> Dict[str, Any]:
-        """Async Claude call for file analysis"""
-        if not self.claude_configured:
-            return {'success': False, 'error': 'Claude not configured'}
-        
-        try:
-            message = self.claude_client.messages.create(
-                model=MODEL_CONFIG['claude']['primary'],
-                max_tokens=1000,
-                temperature=0.3,
-                system="You are an expert at analyzing e-commerce data, especially Amazon returns and reviews.",
-                messages=[{"role": "user", "content": f"{prompt}\n\nContent:\n{text[:4000]}"}]
-            )
-            
-            return {
-                'success': True,
-                'response': message.content[0].text,
-                'provider': 'claude'
-            }
-            
-        except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            return {'success': False, 'error': str(e)}
-    
-    async def _call_openai(self, text: str, prompt: str) -> Dict[str, Any]:
-        """Async OpenAI call for file analysis"""
-        if not self.openai_configured:
-            return {'success': False, 'error': 'OpenAI not configured'}
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.openai_key}"
-        }
-        
-        payload = {
-            "model": MODEL_CONFIG['openai']['primary'],
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an expert at analyzing e-commerce data, especially Amazon returns and reviews."
-                },
-                {
-                    "role": "user",
-                    "content": f"{prompt}\n\nContent:\n{text[:4000]}"
-                }
-            ],
-            "temperature": 0.3,
-            "max_tokens": 1000
-        }
-        
-        try:
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return {
-                    'success': True,
-                    'response': result['choices'][0]['message']['content'],
-                    'provider': 'openai'
-                }
-            else:
-                return {'success': False, 'error': f'API error {response.status_code}'}
-                
-        except Exception as e:
-            logger.error(f"OpenAI API error: {e}")
-            return {'success': False, 'error': str(e)}
     
     def _clean_category_response(self, response: str) -> str:
         """Clean AI response to extract category"""
@@ -627,229 +837,25 @@ Category:"""
         
         return 'Other/Miscellaneous'
     
-    async def analyze_file(self, file_content: bytes, filename: str, 
-                          file_type: str = None) -> FileAnalysis:
-        """Analyze any file type and extract relevant data"""
-        
-        # For PDF/Image files that need AI
-        if file_type in ['pdf', 'image']:
-            return FileAnalysis(
-                file_type=file_type,
-                content_type='pending_analysis',
-                extracted_data={'message': 'PDF/Image analysis requires AI processing'},
-                confidence=0.0,
-                ai_provider='none',
-                needs_clarification=True
-            )
-        
-        # Basic text analysis
-        try:
-            text = file_content.decode('utf-8', errors='ignore')
-            return FileAnalysis(
-                file_type='text',
-                content_type='data',
-                extracted_data={'text': text[:1000]},
-                confidence=0.5,
-                ai_provider='none'
-            )
-        except:
-            return FileAnalysis(
-                file_type='unknown',
-                content_type='error',
-                extracted_data={'error': 'Unable to process file'},
-                confidence=0.0,
-                ai_provider='none'
-            )
-    
-    def generate_return_analysis_report(self, asin: str, returns_data: List[Dict],
-                                      reviews_data: List[Dict] = None) -> Dict[str, Any]:
-        """Generate comprehensive return analysis report"""
-        
-        # Filter returns for specific ASIN
-        if asin != 'ALL':
-            asin_returns = [r for r in returns_data if r.get('asin') == asin]
-        else:
-            asin_returns = returns_data
-        
-        if not asin_returns:
-            return {'error': f'No returns found for ASIN {asin}'}
-        
-        # Categorize returns if not already done
-        categorized = {}
-        for return_item in asin_returns:
-            category = return_item.get('category', 'Other/Miscellaneous')
-            if category not in categorized:
-                categorized[category] = []
-            categorized[category].append(return_item)
-        
-        # Generate report
-        total_returns = len(asin_returns)
-        
-        report = {
-            'executive_summary': {
-                'asin': asin,
-                'total_returns': total_returns,
-                'main_issues': self._identify_main_issues(categorized),
-                'trend': 'Stable'  # Would need date analysis
-            },
-            'category_breakdown': {
-                category: {
-                    'count': len(returns),
-                    'percentage': len(returns) / total_returns * 100 if total_returns > 0 else 0,
-                    'priority': self._get_priority(category)
-                }
-                for category, returns in categorized.items()
-            },
-            'quality_metrics': self._calculate_quality_metrics(categorized, total_returns),
-            'action_items': self._generate_action_items(categorized)
-        }
-        
-        return report
-    
-    def _identify_main_issues(self, categorized: Dict) -> List[str]:
-        """Identify main issues from categorized returns"""
-        issues = []
-        
-        # Sort by count
-        sorted_cats = sorted(categorized.items(), key=lambda x: len(x[1]), reverse=True)
-        
-        # Get top 3 high-priority issues
-        for category, returns in sorted_cats[:5]:
-            if self._get_priority(category) in ['critical', 'high']:
-                issues.append(f"{category} ({len(returns)} returns)")
-                if len(issues) >= 3:
-                    break
-        
-        return issues
-    
-    def _get_priority(self, category: str) -> str:
-        """Get priority level for category"""
-        critical = ['Product Defects/Quality', 'Medical/Health Concerns']
-        high = ['Performance/Effectiveness', 'Missing Components', 'Wrong Product/Misunderstanding']
-        
-        if category in critical:
-            return 'critical'
-        elif category in high:
-            return 'high'
-        else:
-            return 'medium'
-    
-    def _calculate_quality_metrics(self, categorized: Dict, total: int) -> Dict[str, Any]:
-        """Calculate quality-specific metrics"""
-        quality_categories = [
-            'Product Defects/Quality',
-            'Performance/Effectiveness',
-            'Missing Components',
-            'Design/Material Issues',
-            'Medical/Health Concerns'
-        ]
-        
-        quality_returns = sum(
-            len(returns) for cat, returns in categorized.items()
-            if cat in quality_categories
-        )
-        
-        return {
-            'quality_issue_rate': quality_returns / total * 100 if total > 0 else 0,
-            'quality_return_count': quality_returns,
-            'top_quality_issue': max(
-                [(cat, len(returns)) for cat, returns in categorized.items() 
-                 if cat in quality_categories],
-                key=lambda x: x[1],
-                default=('None', 0)
-            )[0]
-        }
-    
-    def _generate_action_items(self, categorized: Dict) -> List[Dict[str, str]]:
-        """Generate action items based on categories"""
-        actions = []
-        
-        # Quality defects
-        if 'Product Defects/Quality' in categorized and len(categorized['Product Defects/Quality']) > 5:
-            actions.append({
-                'priority': 'IMMEDIATE',
-                'action': 'Conduct quality audit with manufacturer',
-                'reason': f"{len(categorized['Product Defects/Quality'])} quality-related returns"
-            })
-        
-        # Size/fit issues
-        if 'Size/Fit Issues' in categorized and len(categorized['Size/Fit Issues']) > 3:
-            actions.append({
-                'priority': 'HIGH',
-                'action': 'Update product dimensions and sizing guide',
-                'reason': 'Multiple size-related returns'
-            })
-        
-        # Wrong product
-        if 'Wrong Product/Misunderstanding' in categorized:
-            actions.append({
-                'priority': 'MEDIUM',
-                'action': 'Review and clarify product listing',
-                'reason': 'Customer confusion about product'
-            })
-        
-        return actions[:5]  # Top 5 actions
-    
     def get_cost_summary(self) -> Dict[str, Any]:
-        """Get cost summary"""
+        """Get detailed cost summary"""
         return self.cost_tracker.get_summary()
     
-    def get_cost_summary(self) -> Dict[str, Any]:
-        """Get cost summary"""
-        return self.cost_tracker.get_summary()
-    
-    def generate_chat_response(self, user_message: str, context: Dict[str, Any] = None) -> str:
-        """Generate contextual chat responses"""
-        if context is None:
-            context = {}
+    def estimate_remaining_cost(self, remaining_items: int) -> float:
+        """Estimate cost for remaining items"""
+        # Consider quick categorization rate
+        summary = self.cost_tracker.get_summary()
+        quick_rate = self.cost_tracker.quick_categorizations / max(1, 
+            self.cost_tracker.quick_categorizations + self.cost_tracker.ai_categorizations)
         
-        providers = self.get_available_providers()
+        # Adjust estimate based on quick categorization rate
+        ai_items = remaining_items * (1 - quick_rate)
         
-        if not providers:
-            return "AI chat is not available. Please configure your OpenAI or Claude API key."
+        if self.cost_tracker.api_calls > 0:
+            avg_cost = self.cost_tracker.total_cost / self.cost_tracker.api_calls
+            return round(avg_cost * ai_items, 2)
         
-        try:
-            # Build context-aware prompt
-            system_prompt = """You are a helpful Amazon quality analysis assistant specializing in medical device returns and quality improvement.
-            Provide clear, actionable advice based on the user's question and the analysis context.
-            Focus on practical implementation steps for quality improvement."""
-            
-            # Add context
-            if context.get('has_analysis'):
-                system_prompt += "\nThe user has completed an analysis of their Amazon returns."
-            
-            if context.get('current_asin'):
-                system_prompt += f"\nCurrently analyzing ASIN: {context['current_asin']}"
-            
-            if context.get('categories_found'):
-                top_categories = sorted(context['categories_found'].items(), 
-                                      key=lambda x: x[1], reverse=True)[:3]
-                system_prompt += f"\nTop return categories: {', '.join([f'{cat[0]} ({cat[1]})' for cat in top_categories])}"
-            
-            # Get response
-            if 'claude' in providers and self.claude_configured:
-                response = self._call_claude_sync(
-                    user_message,
-                    system_prompt,
-                    'chat'
-                )
-                if response:
-                    return response
-            
-            if 'openai' in providers and self.openai_configured:
-                response = self._call_openai_sync(
-                    user_message,
-                    system_prompt,
-                    'chat'
-                )
-                if response:
-                    return response
-            
-            return "I'm having trouble processing your request. Please try again."
-            
-        except Exception as e:
-            logger.error(f"Chat error: {e}")
-            return f"Error: {str(e)}"
+        return 0.0
     
     def __del__(self):
         """Cleanup resources"""
@@ -858,13 +864,41 @@ Category:"""
         if hasattr(self, 'session') and self.session:
             self.session.close()
 
+# Helper functions for batch processing
+def process_dataframe_in_batches(df, analyzer, batch_size=20):
+    """Process dataframe in batches for speed"""
+    total_rows = len(df)
+    results = []
+    
+    for i in range(0, total_rows, batch_size):
+        batch = df.iloc[i:i+batch_size]
+        batch_data = []
+        
+        for idx, row in batch.iterrows():
+            batch_data.append({
+                'index': idx,
+                'complaint': str(row.get('Complaint', '')),
+                'return_reason': str(row.get('Return Reason', '')),
+                'fba_reason': str(row.get('FBA_Reason_Code', '')) if 'FBA_Reason_Code' in row else None
+            })
+        
+        # Process batch
+        batch_results = analyzer.categorize_batch(batch_data)
+        results.extend(batch_results)
+    
+    return results
+
 # Export all components
 __all__ = [
-    'UniversalAIAnalyzer',
-    'FileAnalysis',
+    'EnhancedAIAnalyzer',
+    'AIProvider',
     'MEDICAL_DEVICE_CATEGORIES',
     'FBA_REASON_MAP',
-    'AIProvider',
-    'quick_categorize',
-    'CostTracker'
+    'detect_severity',
+    'CostEstimate',
+    'CostTracker',
+    'estimate_tokens',
+    'calculate_cost',
+    'process_dataframe_in_batches',
+    'quick_categorize'
 ]
