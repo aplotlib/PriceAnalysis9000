@@ -40,10 +40,6 @@ pdfplumber, has_pdfplumber = safe_import('pdfplumber')
 PIL, has_pil = safe_import('PIL')
 pytesseract, has_tesseract = safe_import('pytesseract')
 
-# Standard imports that should always work
-import pandas as pd
-import numpy as np
-
 # Model configurations
 MODEL_CONFIG = {
     'openai': {
