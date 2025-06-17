@@ -18,6 +18,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 import os
+import chardet
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,7 @@ try:
     from injury_detector import InjuryDetector
     from universal_file_detector import UniversalFileDetector
     from enhanced_ai_analysis import EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES, FBA_REASON_MAP
+    from smart_column_mapper import SmartColumnMapper
     MODULES_AVAILABLE = True
     AI_AVAILABLE = True
 except ImportError as e:
@@ -206,7 +208,7 @@ def initialize_session_state():
         'raw_data': None,
         'processed_data': None,
         'categorized_data': None,
-        'file_type': None,  # 'pdf' or 'fba'
+        'file_type': None,  # 'pdf' or 'structured'
         
         # Analysis results
         'category_analysis': {},
@@ -225,6 +227,7 @@ def initialize_session_state():
         'pdf_analyzer': None,
         'injury_detector': None,
         'file_detector': None,
+        'column_mapper': None,
         
         # Filters
         'selected_asin': 'ALL',
@@ -289,6 +292,9 @@ def initialize_analyzers():
     
     if not st.session_state.file_detector:
         st.session_state.file_detector = UniversalFileDetector()
+    
+    if not st.session_state.get('column_mapper'):
+        st.session_state.column_mapper = SmartColumnMapper(st.session_state.ai_analyzer)
 
 def display_header():
     """Display application header"""
@@ -317,7 +323,7 @@ def display_header():
         """, unsafe_allow_html=True)
 
 def upload_section():
-    """File upload section for PDF and FBA returns"""
+    """File upload section for PDF and structured data files"""
     st.markdown("### 📁 Upload Amazon Return Data")
     
     col1, col2 = st.columns(2)
@@ -333,15 +339,37 @@ def upload_section():
     with col2:
         st.markdown("""
         <div class="category-card">
-            <h4>📊 FBA Returns Report (.txt)</h4>
-            <p>Download from Reports → Fulfillment → FBA Returns</p>
+            <h4>📊 Structured Data Files</h4>
+            <p>CSV, Excel, TXT files with return data</p>
+            <small>• FBA Returns Report (.txt)<br>
+            • Quality tracking spreadsheets<br>
+            • Custom return exports</small>
         </div>
         """, unsafe_allow_html=True)
     
+    # File format examples
+    with st.expander("📋 Supported File Formats & Examples"):
+        st.markdown("""
+        **The tool uses AI to automatically detect columns in your file!**
+        
+        Common formats we handle:
+        
+        **1. Amazon FBA Returns (.txt)**
+        - Headers: `return-date`, `order-id`, `sku`, `asin`, `reason`, `customer-comments`
+        
+        **2. Quality Tracking Spreadsheets**
+        - Example: `Date Complaint was made`, `Product Identifier Tag`, `ASIN`, `Order #`, `Complaint`
+        
+        **3. Custom Exports**
+        - Any file with columns for: dates, product IDs, order numbers, and complaint text
+        
+        **The AI will automatically map your columns** to the appropriate fields for analysis.
+        """)
+    
     uploaded_file = st.file_uploader(
         "Choose file",
-        type=['pdf', 'txt', 'csv'],
-        help="Upload PDF from Seller Central or FBA Returns report"
+        type=['pdf', 'txt', 'csv', 'tsv', 'xlsx', 'xls'],
+        help="Upload PDF from Seller Central or any structured data file with return information"
     )
     
     if uploaded_file:
@@ -360,8 +388,8 @@ def process_file(uploaded_file):
             
             if file_extension == 'pdf':
                 process_pdf_file(file_content, uploaded_file.name)
-            elif file_extension in ['txt', 'csv']:
-                process_fba_file(file_content, uploaded_file.name)
+            elif file_extension in ['txt', 'csv', 'tsv', 'xlsx', 'xls']:
+                process_structured_file(file_content, uploaded_file.name, file_extension)
             else:
                 st.error("Unsupported file type")
                 return
@@ -394,19 +422,60 @@ def process_pdf_file(content: bytes, filename: str):
     extracted_data = st.session_state.pdf_analyzer.extract_returns_from_pdf(content, filename)
     
     if not extracted_data or not extracted_data.get('returns'):
-        st.error("No return data found in PDF")
+        st.error("No return data found in PDF. The PDF might be in an unexpected format.")
+        
+        # Try to show what was extracted for debugging
+        if extracted_data and extracted_data.get('raw_text'):
+            with st.expander("Show extracted text (first 1000 chars)"):
+                st.text(extracted_data['raw_text'][:1000])
         return
     
     returns_data = extracted_data['returns']
     st.session_state.raw_data = returns_data
     
+    # Convert to DataFrame for column mapping
+    returns_df = pd.DataFrame(returns_data)
+    
+    # If we have a DataFrame, use smart column mapper
+    if not returns_df.empty:
+        st.markdown("### 🔍 Analyzing PDF Structure...")
+        
+        # Use column mapper to detect fields
+        with st.spinner("Detecting data fields in PDF..."):
+            column_mapping = st.session_state.column_mapper.detect_columns(returns_df)
+        
+        # Map to standardized format
+        mapped_df = st.session_state.column_mapper.map_dataframe(returns_df, column_mapping)
+        
+        # Show what was found
+        st.success(f"✅ Extracted {len(mapped_df)} returns from PDF")
+        
+        if column_mapping:
+            with st.expander("Detected fields"):
+                for field_type, col_name in column_mapping.items():
+                    st.write(f"- **{field_type}**: {col_name}")
+    else:
+        # Fallback to list processing
+        mapped_df = pd.DataFrame(returns_data)
+    
     # Process and categorize returns
     categorized_returns = []
     
     progress_bar = st.progress(0)
-    for idx, return_item in enumerate(returns_data):
+    status_text = st.empty()
+    
+    for idx, row in mapped_df.iterrows():
         # Get complaint text
-        complaint = return_item.get('customer_comment', '') or return_item.get('raw_content', '')
+        complaint = row.get('customer_comment', '') or row.get('raw_content', '') or ''
+        
+        return_item = {
+            'order_id': row.get('order_id', ''),
+            'sku': row.get('sku', ''),
+            'asin': row.get('asin', ''),
+            'return_date': row.get('return_date', ''),
+            'customer_comment': complaint,
+            'page': row.get('page', 0)
+        }
         
         if complaint and st.session_state.ai_analyzer:
             # Categorize using AI
@@ -418,83 +487,198 @@ def process_pdf_file(content: bytes, filename: str):
             return_item['confidence'] = 0.1
         
         categorized_returns.append(return_item)
-        progress_bar.progress((idx + 1) / len(returns_data))
+        progress_bar.progress((idx + 1) / len(mapped_df))
+        status_text.text(f"Processing return {idx + 1} of {len(mapped_df)}...")
     
     progress_bar.empty()
+    status_text.empty()
     
     st.session_state.categorized_data = pd.DataFrame(categorized_returns)
     st.session_state.total_returns = len(categorized_returns)
     
     # Check for injuries if injury detector is available
-    if st.session_state.injury_detector:
-        st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(returns_data)
+    if st.session_state.injury_detector and categorized_returns:
+        st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_returns)
 
-def process_fba_file(content: bytes, filename: str):
-    """Process FBA returns report file"""
-    st.session_state.file_type = 'fba'
+def process_structured_file(content: bytes, filename: str, file_extension: str):
+    """Process structured data files (CSV, TXT, Excel) with smart column mapping"""
+    st.session_state.file_type = 'structured'
     
-    # Detect encoding and read file
+    # Read file based on extension
     try:
-        # Try UTF-8 first
-        text = content.decode('utf-8')
-    except:
-        # Try other encodings
-        import chardet
-        encoding = chardet.detect(content)['encoding']
-        text = content.decode(encoding)
-    
-    # Parse FBA returns data
-    df = pd.read_csv(io.StringIO(text), delimiter='\t')
-    
-    # Clean column names (remove any special characters)
-    df.columns = [col.strip() for col in df.columns]
-    
-    # Expected FBA columns
-    required_columns = ['order-id', 'sku', 'asin', 'reason', 'customer-comments']
-    missing_cols = [col for col in required_columns if col not in df.columns]
-    
-    if missing_cols:
-        st.warning(f"Missing expected columns: {missing_cols}")
-    
-    # Process and categorize
-    categorized_data = []
-    
-    progress_bar = st.progress(0)
-    for idx, row in df.iterrows():
-        return_item = {
-            'order_id': row.get('order-id', ''),
-            'sku': row.get('sku', ''),
-            'asin': row.get('asin', ''),
-            'return_date': row.get('return-date', ''),
-            'fba_reason': row.get('reason', ''),
-            'customer_comment': row.get('customer-comments', ''),
-            'quantity': row.get('quantity', 1)
-        }
-        
-        # Categorize using FBA reason and/or customer comment
-        if st.session_state.ai_analyzer:
-            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
-                return_item['customer_comment'],
-                return_item['fba_reason']
-            )
-            return_item['category'] = category
-            return_item['confidence'] = confidence
+        if file_extension in ['csv', 'txt', 'tsv']:
+            # Detect encoding
+            try:
+                text = content.decode('utf-8')
+            except:
+                import chardet
+                encoding = chardet.detect(content)['encoding']
+                text = content.decode(encoding)
+            
+            # Detect delimiter
+            if file_extension == 'tsv' or '\t' in text.split('\n')[0]:
+                delimiter = '\t'
+            elif file_extension == 'csv' or ',' in text.split('\n')[0]:
+                delimiter = ','
+            else:
+                # Try to detect
+                first_line = text.split('\n')[0]
+                delimiter = ',' if first_line.count(',') > first_line.count('\t') else '\t'
+            
+            df = pd.read_csv(io.StringIO(text), delimiter=delimiter)
+            
+        elif file_extension in ['xlsx', 'xls']:
+            df = pd.read_excel(io.BytesIO(content))
         else:
-            # Fallback to FBA reason mapping
-            return_item['category'] = FBA_REASON_MAP.get(
-                return_item['fba_reason'], 
-                'Other/Miscellaneous'
-            )
-            return_item['confidence'] = 0.8
+            st.error(f"Cannot read {file_extension} files")
+            return
         
-        categorized_data.append(return_item)
-        progress_bar.progress((idx + 1) / len(df))
-    
-    progress_bar.empty()
-    
-    st.session_state.categorized_data = pd.DataFrame(categorized_data)
-    st.session_state.raw_data = categorized_data
-    st.session_state.total_returns = len(categorized_data)
+        # Clean column names
+        df.columns = [str(col).strip() for col in df.columns]
+        
+        st.info(f"📊 Loaded {len(df)} rows with {len(df.columns)} columns")
+        
+        # Show column mapping interface
+        st.markdown("### 🔍 Column Detection & Mapping")
+        
+        # Use smart column mapper
+        with st.spinner("Using AI to detect column types..."):
+            column_mapping = st.session_state.column_mapper.detect_columns(df)
+        
+        # Display detected mappings
+        st.success("✅ Columns detected automatically!")
+        
+        # Show mapping in expandable section
+        with st.expander("View/Edit Column Mappings", expanded=True):
+            st.markdown("**Detected Mappings:**")
+            
+            # Create editable mapping interface
+            edited_mapping = {}
+            col1, col2 = st.columns(2)
+            
+            # Define expected column types
+            column_types = {
+                'date': 'Date/When complaint was made',
+                'complaint': 'Customer complaint/comment text',
+                'product_id': 'Product SKU/Identifier',
+                'asin': 'Amazon ASIN',
+                'order_id': 'Order number',
+                'source': 'Complaint source',
+                'agent': 'Agent/Investigator name',
+                'ticket_id': 'Ticket/Case number',
+                'udi': 'UDI (Device Identifier)'
+            }
+            
+            # Show current mappings and allow editing
+            for col_type, description in column_types.items():
+                with col1 if list(column_types.keys()).index(col_type) < 5 else col2:
+                    current_mapping = column_mapping.get(col_type, '')
+                    
+                    # Create dropdown with all columns
+                    options = [''] + list(df.columns)
+                    default_index = options.index(current_mapping) if current_mapping in options else 0
+                    
+                    selected = st.selectbox(
+                        f"{description}:",
+                        options,
+                        index=default_index,
+                        key=f"map_{col_type}"
+                    )
+                    
+                    if selected:
+                        edited_mapping[col_type] = selected
+            
+            # Use edited mapping if any changes made
+            if edited_mapping:
+                column_mapping = edited_mapping
+        
+        # Validate mapping
+        validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
+        
+        if validation['missing_required']:
+            st.warning(f"⚠️ Missing required columns: {', '.join(validation['missing_required'])}")
+            st.info("The tool will still process available data, but results may be limited.")
+        
+        # Show data preview with mapped columns
+        st.markdown("### 📋 Data Preview")
+        
+        # Map to standardized format
+        mapped_df = st.session_state.column_mapper.map_dataframe(df, column_mapping)
+        
+        # Show preview of mapped data
+        preview_cols = ['return_date', 'sku', 'asin', 'order_id', 'customer_comment']
+        available_preview_cols = [col for col in preview_cols if col in mapped_df.columns and mapped_df[col].notna().any()]
+        
+        if available_preview_cols:
+            preview_df = mapped_df[available_preview_cols].head(5)
+            st.dataframe(preview_df, use_container_width=True)
+        
+        # Process returns
+        st.markdown("### 🤖 Categorizing Returns...")
+        
+        categorized_data = []
+        progress_bar = st.progress(0)
+        
+        for idx, row in mapped_df.iterrows():
+            return_item = {
+                'order_id': row.get('order_id', ''),
+                'sku': row.get('sku', ''),
+                'asin': row.get('asin', ''),
+                'return_date': row.get('return_date', ''),
+                'customer_comment': row.get('customer_comment', ''),
+                'source': row.get('source', ''),
+                'agent': row.get('agent', ''),
+                'original_index': idx
+            }
+            
+            # Check for FBA reason if present
+            fba_reason = row.get('reason', '') or row.get('fba_reason', '')
+            
+            # Categorize using AI
+            if st.session_state.ai_analyzer and return_item['customer_comment']:
+                category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                    return_item['customer_comment'],
+                    fba_reason
+                )
+                return_item['category'] = category
+                return_item['confidence'] = confidence
+            else:
+                # Fallback categorization
+                if fba_reason and fba_reason in FBA_REASON_MAP:
+                    return_item['category'] = FBA_REASON_MAP[fba_reason]
+                    return_item['confidence'] = 0.8
+                else:
+                    return_item['category'] = 'Other/Miscellaneous'
+                    return_item['confidence'] = 0.1
+            
+            categorized_data.append(return_item)
+            progress_bar.progress((idx + 1) / len(mapped_df))
+        
+        progress_bar.empty()
+        
+        # Store results
+        st.session_state.categorized_data = pd.DataFrame(categorized_data)
+        st.session_state.raw_data = categorized_data
+        st.session_state.total_returns = len(categorized_data)
+        
+        # Run injury analysis if comments are available
+        if any(item['customer_comment'] for item in categorized_data):
+            if st.session_state.injury_detector:
+                st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_data)
+        
+        # Show column mapping summary
+        st.markdown("### ✅ Processing Complete")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Columns Mapped", len(column_mapping))
+        with col2:
+            st.metric("Data Quality", f"{100 - len(validation['warnings']) * 10}%")
+        with col3:
+            st.metric("Rows Processed", len(categorized_data))
+        
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        logger.error(f"Structured file processing error: {e}", exc_info=True)
 
 def generate_quality_insights():
     """Generate quality-focused insights from categorized data"""
