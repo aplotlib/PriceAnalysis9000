@@ -22,9 +22,22 @@ import time
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import modules
-from pdf_analyzer import PDFAnalyzer, InjuryAnalysis
-from injury_detector import InjuryDetector, INJURY_KEYWORDS, SEVERITY_LEVELS
+# Import modules with error handling
+try:
+    from pdf_analyzer import PDFAnalyzer, InjuryAnalysis
+    from injury_detector import InjuryDetector, INJURY_KEYWORDS, SEVERITY_LEVELS
+    MODULES_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Required modules not found: {e}")
+    MODULES_AVAILABLE = False
+    # Define fallbacks
+    INJURY_KEYWORDS = {
+        'critical': ['hospital', 'emergency', 'death'],
+        'high': ['injured', 'bleeding', 'fracture'],
+        'medium': ['hurt', 'pain', 'fall'],
+        'low': ['uncomfortable', 'minor']
+    }
+    SEVERITY_LEVELS = ['critical', 'high', 'medium', 'low']
 
 # App Configuration
 st.set_page_config(
@@ -701,6 +714,13 @@ def export_critical_cases():
 
 def main():
     """Main application"""
+    # Check if required modules are available
+    if not MODULES_AVAILABLE:
+        st.error("""
+        ❌ Required modules not found. Please ensure pdf_analyzer.py and injury_detector.py are in the same directory as PA9.py
+        """)
+        st.stop()
+    
     initialize_session_state()
     inject_safety_css()
     
