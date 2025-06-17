@@ -852,8 +852,11 @@ class UniversalAIAnalyzer:
             'preventable_returns': "Returns that could be avoided with better product info"
         }
     
-    def generate_chat_response(self, user_message: str, context: Dict[str, Any]) -> str:
+    def generate_chat_response(self, user_message: str, context: Dict[str, Any] = None) -> str:
         """Generate contextual chat responses for the AI assistant"""
+        if context is None:
+            context = {}
+            
         providers = self.get_available_providers()
         
         if not providers:
