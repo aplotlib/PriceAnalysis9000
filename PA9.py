@@ -1,234 +1,198 @@
 """
-Amazon Returns Quality Analyzer - PDF & FBA Returns Processing
-Version: 5.0 - Complete Quality Management System
-For Quality Analysts to analyze returns, identify patterns, and drive quality improvements
+PA9.py - Amazon Return Analysis Tool
+Professional quality management system for analyzing Amazon returns
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import logging
 from datetime import datetime, timedelta
-import io
-from typing import Dict, List, Any, Optional, Tuple
-import re
 import json
-from collections import Counter, defaultdict
-import plotly.express as px
-import plotly.graph_objects as go
 import time
 import os
+import sys
+import re
+import io
+import base64
+from typing import Dict, List, Tuple, Optional, Any
+import logging
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Optional imports
-try:
-    import chardet
-    CHARDET_AVAILABLE = True
-except ImportError:
-    CHARDET_AVAILABLE = False
-    logger.warning("chardet not available, will use default encoding")
-
 # Import modules with error handling
+try:
+    from enhanced_ai_analysis import EnhancedAIAnalyzer, AIProvider
+    AI_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"Failed to import AI module: {e}")
+    AI_AVAILABLE = False
+
+try:
+    from amazon_file_detector import UniversalFileDetector
+    FILE_DETECTOR_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"Failed to import file detector: {e}")
+    FILE_DETECTOR_AVAILABLE = False
+
 try:
     from pdf_analyzer import PDFAnalyzer
     PDF_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    logger.error(f"Failed to import PDF analyzer: {e}")
     PDF_AVAILABLE = False
-    logger.warning("pdf_analyzer not available")
 
 try:
     from injury_detector import InjuryDetector
     INJURY_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    logger.error(f"Failed to import injury detector: {e}")
     INJURY_AVAILABLE = False
-    logger.warning("injury_detector not available")
 
-try:
-    from universal_file_detector import UniversalFileDetector
-    FILE_DETECTOR_AVAILABLE = True
-except ImportError:
-    FILE_DETECTOR_AVAILABLE = False
-    logger.warning("universal_file_detector not available")
+# Category definitions
+QUALITY_CATEGORIES = ['QUALITY_DEFECTS', 'FUNCTIONALITY_ISSUES', 'COMPATIBILITY_ISSUES', 'INJURY_RISK']
 
-try:
-    from enhanced_ai_analysis import EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES, FBA_REASON_MAP
-    AI_AVAILABLE = True
-except ImportError:
-    AI_AVAILABLE = False
-    logger.warning("enhanced_ai_analysis not available")
-    # Define fallbacks
-    MEDICAL_DEVICE_CATEGORIES = [
-        'Size/Fit Issues',
-        'Comfort Issues',
-        'Product Defects/Quality',
-        'Performance/Effectiveness',
-        'Stability/Positioning Issues',
-        'Equipment Compatibility',
-        'Design/Material Issues',
-        'Wrong Product/Misunderstanding',
-        'Missing Components',
-        'Customer Error/Changed Mind',
-        'Shipping/Fulfillment Issues',
-        'Assembly/Usage Difficulty',
-        'Medical/Health Concerns',
-        'Price/Value',
-        'Other/Miscellaneous'
-    ]
-    FBA_REASON_MAP = {}
-    
-    class AIProvider:
-        FASTEST = "fastest"
-        OPENAI = "openai"
-        CLAUDE = "claude"
-        BOTH = "both"
-    
-    class EnhancedAIAnalyzer:
-        def __init__(self, provider):
-            self.provider = provider
-        
-        def categorize_return(self, complaint, fba_reason=None, return_reason=None):
-            return 'Other/Miscellaneous', 0.1, 'none', 'en'
-        
-        def get_cost_summary(self):
-            return {'total_cost': 0.0, 'api_calls': 0}
-
-try:
-    from smart_column_mapper import SmartColumnMapper
-    MAPPER_AVAILABLE = True
-except ImportError:
-    MAPPER_AVAILABLE = False
-    logger.warning("smart_column_mapper not available")
-    
-    # Define fallback SmartColumnMapper
-    class SmartColumnMapper:
-        def __init__(self, ai_analyzer=None):
-            self.ai_analyzer = ai_analyzer
-        
-        def detect_columns(self, df):
-            # Basic column detection fallback
-            column_mapping = {}
-            for col in df.columns:
-                col_lower = str(col).lower()
-                if 'date' in col_lower:
-                    column_mapping['date'] = col
-                elif 'complaint' in col_lower or 'comment' in col_lower:
-                    column_mapping['complaint'] = col
-                elif 'product' in col_lower or 'sku' in col_lower:
-                    column_mapping['product_id'] = col
-                elif 'asin' in col_lower:
-                    column_mapping['asin'] = col
-                elif 'order' in col_lower:
-                    column_mapping['order_id'] = col
-            return column_mapping
-        
-        def validate_mapping(self, df, mapping):
-            return {
-                'is_valid': True,
-                'missing_required': [],
-                'warnings': []
-            }
-        
-        def map_dataframe(self, df, column_mapping):
-            mapped_df = df.copy()
-            rename_dict = {}
-            if column_mapping.get('date'):
-                rename_dict[column_mapping['date']] = 'return_date'
-            if column_mapping.get('complaint'):
-                rename_dict[column_mapping['complaint']] = 'customer_comment'
-            if column_mapping.get('product_id'):
-                rename_dict[column_mapping['product_id']] = 'sku'
-            if column_mapping.get('asin'):
-                rename_dict[column_mapping['asin']] = 'asin'
-            if column_mapping.get('order_id'):
-                rename_dict[column_mapping['order_id']] = 'order_id'
-            
-            if rename_dict:
-                mapped_df = mapped_df.rename(columns=rename_dict)
-            return mapped_df
-
-MODULES_AVAILABLE = all([PDF_AVAILABLE, AI_AVAILABLE])
-
-# App Configuration
-st.set_page_config(
-    page_title="Amazon Returns Quality Analyzer",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Professional color scheme
+# Color scheme
 COLORS = {
-    'primary': '#00D9FF',
-    'secondary': '#FF006E',
-    'accent': '#FFB700',
-    'success': '#00F5A0',
-    'warning': '#FF6B35',
-    'danger': '#FF0054',
-    'critical': '#DC143C',
-    'dark': '#2C3E50',
-    'light': '#ECF0F1',
-    'quality': '#9B59B6'
+    'primary': '#1E88E5',
+    'secondary': '#FFC107',
+    'success': '#4CAF50',
+    'danger': '#F44336',
+    'warning': '#FF9800',
+    'info': '#00BCD4',
+    'dark': '#212529',
+    'light': '#F8F9FA',
+    'critical': '#D32F2F'
 }
 
-# Quality-focused categories
-QUALITY_CATEGORIES = [
-    'Product Defects/Quality',
-    'Performance/Effectiveness',
-    'Design/Material Issues',
-    'Medical/Health Concerns',
-    'Missing Components'
-]
+# Define defaults dictionary globally for reuse
+SESSION_DEFAULTS = {
+    # Data storage
+    'raw_data': None,
+    'processed_data': None,
+    'categorized_data': None,
+    'file_type': None,
+    
+    # Analysis results
+    'category_analysis': {},
+    'product_analysis': {},
+    'quality_metrics': {},
+    'injury_analysis': None,
+    'ai_insights': None,
+    
+    # Processing state
+    'processing_complete': False,
+    'file_uploaded': False,
+    'analysis_ready': False,
+    
+    # AI components
+    'ai_analyzer': None,
+    'pdf_analyzer': None,
+    'injury_detector': None,
+    'file_detector': None,
+    'column_mapper': None,
+    
+    # Filters
+    'selected_asin': 'ALL',
+    'date_range': 'All Time',
+    'category_filter': 'All',
+    
+    # Tracking
+    'total_returns': 0,
+    'quality_issues': 0,
+    'processing_time': 0.0,
+    'api_cost': 0.0,
+    'total_injuries': 0  # Added missing field
+}
+
+def display_header():
+    """Display professional header with navigation"""
+    # Add navigation menu
+    col1, col2, col3 = st.columns([6, 3, 1])
+    
+    with col1:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E88E5 0%, #00BCD4 100%); 
+                    padding: 2rem; border-radius: 10px; margin-bottom: 2rem;">
+            <h1 style="color: white; margin: 0; font-size: 2.5rem;">🔍 PriceAnalysis9000</h1>
+            <p style="color: white; opacity: 0.9; margin: 0.5rem 0;">
+                Professional Return Analysis & Quality Management System
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("### 🔗 Quick Links")
+        # Navigation menu dropdown
+        selected_app = st.selectbox(
+            "Navigate to:",
+            ["Current App", 
+             "Amazon Review Analyzer", 
+             "Return Categorization", 
+             "AI Translator/Chatbot", 
+             "Marketing ROI Tool"],
+            key="nav_menu"
+        )
+        
+        if selected_app != "Current App":
+            app_urls = {
+                "Amazon Review Analyzer": "https://azanalysis.streamlit.app/",
+                "Return Categorization": "https://testenv.streamlit.app/",
+                "AI Translator/Chatbot": "https://vivequalitychatbot.streamlit.app/",
+                "Marketing ROI Tool": "https://kaizenroi.streamlit.app/"
+            }
+            st.markdown(f'<a href="{app_urls[selected_app]}" target="_blank" style="text-decoration: none;">'
+                       f'<button style="background: #1E88E5; color: white; border: none; '
+                       f'padding: 0.5rem 1rem; border-radius: 5px; cursor: pointer;">Go to {selected_app}</button></a>', 
+                       unsafe_allow_html=True)
+    
+    with col3:
+        if st.button("ℹ️", help="About this tool"):
+            st.info("PriceAnalysis9000 v2.0 - AI-Powered Return Analysis")
 
 def inject_professional_css():
-    """Professional CSS styling for quality management"""
+    """Inject custom CSS for professional styling"""
     st.markdown(f"""
     <style>
-    /* Professional styling */
+    /* Global styles */
     .main {{
         padding: 0;
-        background-color: #FAFAFA;
     }}
     
-    /* Header */
+    /* Header styling */
     .main-header {{
-        background: linear-gradient(135deg, {COLORS['dark']} 0%, {COLORS['primary']} 100%);
-        color: white;
+        background: linear-gradient(135deg, {COLORS['primary']} 0%, {COLORS['info']} 100%);
         padding: 2rem;
         border-radius: 10px;
         margin-bottom: 2rem;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
     }}
     
-    .main-header h1 {{
-        margin: 0;
-        font-size: 2.5rem;
-        font-weight: 700;
+    /* Category badges */
+    .category-badge {{
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin: 0.25rem;
     }}
     
-    /* Quality alert box */
-    .quality-alert {{
-        background: linear-gradient(135deg, rgba(155, 89, 182, 0.1), rgba(155, 89, 182, 0.2));
-        border: 2px solid {COLORS['quality']};
-        border-radius: 10px;
-        padding: 1.5rem;
-        margin: 1rem 0;
+    .quality-issue {{
+        background: {COLORS['danger']};
+        color: white;
     }}
     
-    /* Category cards */
-    .category-card {{
-        background: white;
-        border-radius: 8px;
-        padding: 1.5rem;
-        margin: 0.5rem 0;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        border-left: 5px solid {COLORS['primary']};
+    .size-issue {{
+        background: {COLORS['warning']};
+        color: white;
     }}
     
-    .quality-issue-card {{
-        border-left-color: {COLORS['danger']};
+    .other-issue {{
+        background: {COLORS['secondary']};
+        color: {COLORS['dark']};
     }}
     
     /* Metric cards */
@@ -290,6 +254,23 @@ def inject_professional_css():
         box-shadow: 0 5px 15px rgba(0,0,0,0.2);
     }}
     
+    /* Navigation styling */
+    .nav-link {{
+        display: inline-block;
+        padding: 0.5rem 1rem;
+        margin: 0.25rem;
+        background: {COLORS['info']};
+        color: white;
+        text-decoration: none;
+        border-radius: 5px;
+        transition: all 0.3s;
+    }}
+    
+    .nav-link:hover {{
+        background: {COLORS['primary']};
+        transform: translateY(-2px);
+    }}
+    
     /* Hide Streamlit branding */
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
@@ -298,47 +279,19 @@ def inject_professional_css():
 
 def initialize_session_state():
     """Initialize session state variables"""
-    defaults = {
-        # Data storage
-        'raw_data': None,
-        'processed_data': None,
-        'categorized_data': None,
-        'file_type': None,
-        
-        # Analysis results
-        'category_analysis': {},
-        'product_analysis': {},
-        'quality_metrics': {},
-        'injury_analysis': None,
-        'ai_insights': None,
-        
-        # Processing state
-        'processing_complete': False,
-        'file_uploaded': False,
-        'analysis_ready': False,
-        
-        # AI components
-        'ai_analyzer': None,
-        'pdf_analyzer': None,
-        'injury_detector': None,
-        'file_detector': None,
-        'column_mapper': None,
-        
-        # Filters
-        'selected_asin': 'ALL',
-        'date_range': 'All Time',
-        'category_filter': 'All',
-        
-        # Tracking
-        'total_returns': 0,
-        'quality_issues': 0,
-        'processing_time': 0.0,
-        'api_cost': 0.0
-    }
-    
-    for key, value in defaults.items():
+    for key, value in SESSION_DEFAULTS.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+def reset_analysis_state():
+    """Reset analysis-related session state while preserving analyzers"""
+    # List of keys to preserve (analyzers and detectors)
+    preserve_keys = ['ai_analyzer', 'pdf_analyzer', 'injury_detector', 'file_detector']
+    
+    # Reset all other keys to their defaults
+    for key, default_value in SESSION_DEFAULTS.items():
+        if key not in preserve_keys:
+            st.session_state[key] = default_value
 
 def check_api_keys():
     """Check for API keys"""
@@ -387,476 +340,246 @@ def initialize_analyzers():
     
     if not st.session_state.file_detector and FILE_DETECTOR_AVAILABLE:
         st.session_state.file_detector = UniversalFileDetector()
-    
-    if not st.session_state.get('column_mapper') and MAPPER_AVAILABLE:
-        st.session_state.column_mapper = SmartColumnMapper(st.session_state.ai_analyzer)
 
-def display_header():
-    """Display application header"""
-    st.markdown("""
-    <div class="main-header">
-        <h1>📊 Amazon Returns Quality Analyzer</h1>
-        <p style="font-size: 1.2rem; margin-top: 0.5rem;">
-            AI-Powered Return Analysis for Quality Management
-        </p>
-        <p style="font-size: 1rem; opacity: 0.9;">
-            Upload PDF or FBA Returns • Categorize Automatically • Identify Quality Issues • Export Insights
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Show quality alerts if issues found
-    if st.session_state.quality_issues > 0:
-        quality_rate = (st.session_state.quality_issues / st.session_state.total_returns * 100) if st.session_state.total_returns > 0 else 0
-        st.markdown(f"""
-        <div class="quality-alert">
-            <h2 style="color: {COLORS['quality']}; margin: 0;">
-                ⚠️ {st.session_state.quality_issues} Quality-Related Returns ({quality_rate:.1f}%)
-            </h2>
-            <p style="margin: 0.5rem 0 0 0;">Review quality categories for improvement opportunities</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-def upload_section():
-    """File upload section for PDF and structured data files"""
-    st.markdown("### 📁 Upload Amazon Return Data")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("""
-        <div class="category-card">
-            <h4>📄 PDF from Seller Central</h4>
-            <p>Export from Manage Returns → Print as PDF</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="category-card">
-            <h4>📊 Structured Data Files</h4>
-            <p>CSV, Excel, TXT files with return data</p>
-            <small>• FBA Returns Report (.txt)<br>
-            • Quality tracking spreadsheets<br>
-            • Custom return exports</small>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # File format examples
-    with st.expander("📋 Supported File Formats & Examples"):
-        st.markdown("""
-        **The tool uses AI to automatically detect columns in your file!**
-        
-        Common formats we handle:
-        
-        **1. Amazon FBA Returns (.txt)**
-        - Headers: `return-date`, `order-id`, `sku`, `asin`, `reason`, `customer-comments`
-        
-        **2. Quality Tracking Spreadsheets**
-        - Example: `Date Complaint was made`, `Product Identifier Tag`, `ASIN`, `Order #`, `Complaint`
-        
-        **3. Custom Exports**
-        - Any file with columns for: dates, product IDs, order numbers, and complaint text
-        
-        **The AI will automatically map your columns** to the appropriate fields for analysis.
-        """)
-    
-    uploaded_file = st.file_uploader(
-        "Choose file",
-        type=['pdf', 'txt', 'csv', 'tsv', 'xlsx', 'xls'],
-        help="Upload PDF from Seller Central or any structured data file with return information"
-    )
-    
-    if uploaded_file:
-        process_file(uploaded_file)
-
-def process_file(uploaded_file):
-    """Process uploaded file based on type"""
+def process_uploaded_file(uploaded_file):
+    """Process uploaded file and extract return data"""
     try:
-        initialize_analyzers()
+        start_time = time.time()
         
+        # Determine file type
         file_extension = uploaded_file.name.split('.')[-1].lower()
-        file_content = uploaded_file.read()
         
-        with st.spinner("🔍 Analyzing return data..."):
-            start_time = time.time()
-            
-            if file_extension == 'pdf':
-                process_pdf_file(file_content, uploaded_file.name)
-            elif file_extension in ['txt', 'csv', 'tsv', 'xlsx', 'xls']:
-                process_structured_file(file_content, uploaded_file.name, file_extension)
+        if file_extension == 'pdf':
+            # Process PDF
+            if st.session_state.pdf_analyzer:
+                with st.spinner("📄 Extracting data from PDF..."):
+                    data = st.session_state.pdf_analyzer.extract_return_data(uploaded_file)
+                    st.session_state.file_type = 'pdf'
             else:
-                st.error("Unsupported file type")
-                return
+                st.error("PDF analyzer not available")
+                return None
+                
+        elif file_extension in ['txt', 'csv']:
+            # Process text/CSV file
+            content = uploaded_file.read().decode('utf-8')
             
-            st.session_state.processing_time = time.time() - start_time
-            st.session_state.processing_complete = True
-            st.session_state.analysis_ready = True
-            
-            # Generate insights
-            generate_quality_insights()
-            
-            st.success(f"""
-            ✅ Analysis Complete!
-            - Total returns: {st.session_state.total_returns}
-            - Quality issues: {st.session_state.quality_issues}
-            - Processing time: {st.session_state.processing_time:.1f}s
-            """)
-            
-            st.rerun()
-            
-    except Exception as e:
-        st.error(f"❌ Error processing file: {str(e)}")
-        logger.error(f"File processing error: {e}", exc_info=True)
-
-def process_pdf_file(content: bytes, filename: str):
-    """Process PDF file from Amazon Seller Central"""
-    st.session_state.file_type = 'pdf'
-    
-    # Extract data from PDF
-    extracted_data = st.session_state.pdf_analyzer.extract_returns_from_pdf(content, filename)
-    
-    if not extracted_data or not extracted_data.get('returns'):
-        st.error("No return data found in PDF. The PDF might be in an unexpected format.")
-        
-        # Try to show what was extracted for debugging
-        if extracted_data and extracted_data.get('raw_text'):
-            with st.expander("Show extracted text (first 1000 chars)"):
-                st.text(extracted_data['raw_text'][:1000])
-        return
-    
-    returns_data = extracted_data['returns']
-    st.session_state.raw_data = returns_data
-    
-    # Process and categorize returns
-    categorized_returns = []
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for idx, return_item in enumerate(returns_data):
-        # Get return reason and buyer comment
-        return_reason = return_item.get('return_reason', '')
-        buyer_comment = return_item.get('buyer_comment', '') or return_item.get('customer_comment', '') or return_item.get('raw_content', '')
-        
-        # Create structured return item
-        categorized_item = {
-            'order_id': return_item.get('order_id', ''),
-            'sku': return_item.get('sku', ''),
-            'asin': return_item.get('asin', ''),
-            'return_date': return_item.get('return_date', ''),
-            'return_reason': return_reason,
-            'buyer_comment': buyer_comment,
-            'customer_comment': buyer_comment,  # Keep both for compatibility
-            'page': return_item.get('page', 0)
-        }
-        
-        # Categorize using AI with both return reason and buyer comment
-        if st.session_state.ai_analyzer:
-            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
-                complaint=buyer_comment,
-                return_reason=return_reason
-            )
-            categorized_item['category'] = category
-            categorized_item['confidence'] = confidence
-        else:
-            categorized_item['category'] = 'Other/Miscellaneous'
-            categorized_item['confidence'] = 0.1
-        
-        categorized_returns.append(categorized_item)
-        progress_bar.progress((idx + 1) / len(returns_data))
-        status_text.text(f"Processing return {idx + 1} of {len(returns_data)}...")
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    st.session_state.categorized_data = pd.DataFrame(categorized_returns)
-    st.session_state.total_returns = len(categorized_returns)
-    
-    # Check for injuries if injury detector is available
-    if st.session_state.injury_detector and categorized_returns:
-        st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_returns)
-
-def process_structured_file(content: bytes, filename: str, file_extension: str):
-    """Process structured data files (CSV, TXT, Excel) with smart column mapping"""
-    st.session_state.file_type = 'structured'
-    
-    # Read file based on extension
-    try:
-        if file_extension in ['csv', 'txt', 'tsv']:
-            # Detect encoding
-            try:
-                text = content.decode('utf-8')
-            except:
-                if CHARDET_AVAILABLE:
-                    encoding = chardet.detect(content)['encoding']
-                    text = content.decode(encoding)
-                else:
-                    # Try common encodings
-                    for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
-                        try:
-                            text = content.decode(encoding)
-                            break
-                        except:
-                            continue
-                    else:
-                        st.error("Could not decode file. Please ensure it's in UTF-8 format.")
-                        return
-            
-            # Detect delimiter
-            if file_extension == 'tsv' or '\t' in text.split('\n')[0]:
-                delimiter = '\t'
-            elif file_extension == 'csv' or ',' in text.split('\n')[0]:
-                delimiter = ','
+            # Check if it's FBA returns format
+            if 'return-date' in content and 'order-id' in content:
+                st.session_state.file_type = 'fba_returns'
+                data = process_fba_returns(content)
             else:
-                # Try to detect
-                first_line = text.split('\n')[0]
-                delimiter = ',' if first_line.count(',') > first_line.count('\t') else '\t'
-            
-            df = pd.read_csv(io.StringIO(text), delimiter=delimiter)
-            
-        elif file_extension in ['xlsx', 'xls']:
-            df = pd.read_excel(io.BytesIO(content))
+                st.error("Unrecognized file format")
+                return None
+                
         else:
-            st.error(f"Cannot read {file_extension} files")
-            return
+            st.error(f"Unsupported file type: {file_extension}")
+            return None
         
-        # Clean column names
-        df.columns = [str(col).strip() for col in df.columns]
+        # Store processing time
+        st.session_state.processing_time = time.time() - start_time
         
-        st.info(f"📊 Loaded {len(df)} rows with {len(df.columns)} columns")
-        
-        # Check if it's an FBA return report
-        fba_columns = ['return-date', 'order-id', 'sku', 'asin', 'reason', 'customer-comments']
-        is_fba_report = all(col in df.columns for col in fba_columns)
-        
-        if is_fba_report:
-            # Process FBA report directly
-            st.success("✅ Detected FBA Return Report format")
-            process_fba_returns(df)
-        else:
-            # Use smart column mapper for other formats
-            process_with_column_mapper(df, filename)
+        return data
         
     except Exception as e:
+        logger.error(f"Error processing file: {e}")
         st.error(f"Error processing file: {str(e)}")
-        logger.error(f"Structured file processing error: {e}", exc_info=True)
+        return None
 
-def process_fba_returns(df: pd.DataFrame):
-    """Process FBA return report"""
-    categorized_data = []
-    progress_bar = st.progress(0)
-    
-    for idx, row in df.iterrows():
-        return_item = {
-            'order_id': row.get('order-id', ''),
-            'sku': row.get('sku', ''),
-            'asin': row.get('asin', ''),
-            'return_date': row.get('return-date', ''),
-            'return_reason': row.get('reason', ''),
-            'buyer_comment': row.get('customer-comments', ''),
-            'customer_comment': row.get('customer-comments', ''),
-            'fba_reason': row.get('reason', ''),
-            'quantity': row.get('quantity', 1),
-            'original_index': idx
+def process_fba_returns(content: str) -> pd.DataFrame:
+    """Process FBA returns text file"""
+    try:
+        # Parse CSV content
+        df = pd.read_csv(io.StringIO(content), sep='\t')
+        
+        # Map columns to standard format
+        column_mapping = {
+            'order-id': 'Order ID',
+            'sku': 'SKU',
+            'asin': 'ASIN',
+            'product-name': 'Product Name',
+            'reason': 'Return Reason',
+            'customer-comments': 'Customer Comments',
+            'return-date': 'Return Date',
+            'quantity': 'Quantity'
         }
         
-        # Categorize using AI
+        # Rename columns
+        df = df.rename(columns=column_mapping)
+        
+        # Ensure required columns exist
+        required_columns = ['Order ID', 'SKU', 'ASIN', 'Return Reason']
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = ''
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error processing FBA returns: {e}")
+        raise
+
+def categorize_returns(df: pd.DataFrame) -> pd.DataFrame:
+    """Categorize returns using AI or rule-based logic"""
+    try:
+        # Add category column
+        df['Category'] = ''
+        
+        # Use AI if available
         if st.session_state.ai_analyzer:
-            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
-                complaint=return_item['buyer_comment'],
-                fba_reason=return_item['fba_reason'],
-                return_reason=return_item['return_reason']
-            )
-            return_item['category'] = category
-            return_item['confidence'] = confidence
-        else:
-            return_item['category'] = 'Other/Miscellaneous'
-            return_item['confidence'] = 0.1
-        
-        categorized_data.append(return_item)
-        progress_bar.progress((idx + 1) / len(df))
-    
-    progress_bar.empty()
-    
-    # Store results
-    st.session_state.categorized_data = pd.DataFrame(categorized_data)
-    st.session_state.raw_data = categorized_data
-    st.session_state.total_returns = len(categorized_data)
-    
-    # Run injury analysis
-    if st.session_state.injury_detector:
-        st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_data)
-
-def process_with_column_mapper(df: pd.DataFrame, filename: str):
-    """Process file using smart column mapper"""
-    st.markdown("### 🔍 Column Detection & Mapping")
-    
-    # Use smart column mapper if available
-    if MAPPER_AVAILABLE and st.session_state.column_mapper:
-        with st.spinner("Using AI to detect column types..."):
-            column_mapping = st.session_state.column_mapper.detect_columns(df)
-    else:
-        # Fallback to manual mapping
-        st.warning("Smart column mapper not available. Please map columns manually.")
-        column_mapping = {}
-    
-    # Display detected mappings
-    if column_mapping:
-        st.success("✅ Columns detected automatically!")
-    
-    # Show mapping in expandable section
-    with st.expander("View/Edit Column Mappings", expanded=True):
-        if column_mapping:
-            st.markdown("**Detected Mappings:**")
-        else:
-            st.markdown("**Please map your columns:**")
-        
-        # Create editable mapping interface
-        edited_mapping = {}
-        col1, col2 = st.columns(2)
-        
-        # Define expected column types
-        column_types = {
-            'date': 'Date/When complaint was made',
-            'complaint': 'Customer complaint/comment text',
-            'product_id': 'Product SKU/Identifier',
-            'asin': 'Amazon ASIN',
-            'order_id': 'Order number',
-            'source': 'Complaint source',
-            'agent': 'Agent/Investigator name',
-            'ticket_id': 'Ticket/Case number',
-            'udi': 'UDI (Device Identifier)'
-        }
-        
-        # Show current mappings and allow editing
-        for col_type, description in column_types.items():
-            with col1 if list(column_types.keys()).index(col_type) < 5 else col2:
-                current_mapping = column_mapping.get(col_type, '')
+            with st.spinner("🤖 AI categorizing returns..."):
+                categories = []
+                for idx, row in df.iterrows():
+                    reason = str(row.get('Return Reason', ''))
+                    comment = str(row.get('Customer Comments', ''))
+                    
+                    # Get AI categorization
+                    category = st.session_state.ai_analyzer.categorize_return(reason, comment)
+                    categories.append(category)
+                    
+                    # Update progress
+                    if idx % 10 == 0:
+                        progress = (idx + 1) / len(df)
+                        st.progress(progress)
                 
-                # Create dropdown with all columns
-                options = [''] + list(df.columns)
-                default_index = options.index(current_mapping) if current_mapping in options else 0
-                
-                selected = st.selectbox(
-                    f"{description}:",
-                    options,
-                    index=default_index,
-                    key=f"map_{col_type}"
-                )
-                
-                if selected:
-                    edited_mapping[col_type] = selected
-        
-        # Use edited mapping if any changes made
-        if edited_mapping:
-            column_mapping = edited_mapping
-    
-    # Validate mapping
-    if MAPPER_AVAILABLE and st.session_state.column_mapper:
-        validation = st.session_state.column_mapper.validate_mapping(df, column_mapping)
-        
-        if validation['missing_required']:
-            st.warning(f"⚠️ Missing required columns: {', '.join(validation['missing_required'])}")
-            st.info("The tool will still process available data, but results may be limited.")
-    
-    # Process returns
-    st.markdown("### 🤖 Categorizing Returns...")
-    
-    categorized_data = []
-    progress_bar = st.progress(0)
-    
-    for idx, row in df.iterrows():
-        return_item = {
-            'order_id': row.get(column_mapping.get('order_id', ''), ''),
-            'sku': row.get(column_mapping.get('product_id', ''), ''),
-            'asin': row.get(column_mapping.get('asin', ''), ''),
-            'return_date': row.get(column_mapping.get('date', ''), ''),
-            'customer_comment': row.get(column_mapping.get('complaint', ''), ''),
-            'buyer_comment': row.get(column_mapping.get('complaint', ''), ''),
-            'source': row.get(column_mapping.get('source', ''), ''),
-            'agent': row.get(column_mapping.get('agent', ''), ''),
-            'original_index': idx
-        }
-        
-        # Check for return reason if present
-        return_reason = ''
-        for col in df.columns:
-            if 'reason' in col.lower() and col not in column_mapping.values():
-                return_reason = row.get(col, '')
-                break
-        return_item['return_reason'] = return_reason
-        
-        # Categorize using AI
-        if st.session_state.ai_analyzer and return_item['customer_comment']:
-            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
-                complaint=return_item['customer_comment'],
-                return_reason=return_reason
-            )
-            return_item['category'] = category
-            return_item['confidence'] = confidence
+                df['Category'] = categories
         else:
-            return_item['category'] = 'Other/Miscellaneous'
-            return_item['confidence'] = 0.1
+            # Fallback to rule-based categorization
+            df['Category'] = df.apply(lambda row: rule_based_categorization(
+                str(row.get('Return Reason', '')),
+                str(row.get('Customer Comments', ''))
+            ), axis=1)
         
-        categorized_data.append(return_item)
-        progress_bar.progress((idx + 1) / len(df))
-    
-    progress_bar.empty()
-    
-    # Store results
-    st.session_state.categorized_data = pd.DataFrame(categorized_data)
-    st.session_state.raw_data = categorized_data
-    st.session_state.total_returns = len(categorized_data)
-    
-    # Run injury analysis if comments are available
-    if any(item['customer_comment'] for item in categorized_data):
+        # Check for injuries if detector available
         if st.session_state.injury_detector:
-            st.session_state.injury_analysis = st.session_state.injury_detector.analyze_returns_for_injuries(categorized_data)
-    
-    # Show column mapping summary
-    st.markdown("### ✅ Processing Complete")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Columns Mapped", len(column_mapping))
-    with col2:
-        st.metric("Rows Processed", len(categorized_data))
-    with col3:
-        st.metric("Categories Found", len(set(item['category'] for item in categorized_data)))
+            df['Has_Injury'] = df.apply(lambda row: st.session_state.injury_detector.check_for_injury(
+                str(row.get('Return Reason', '')) + ' ' + str(row.get('Customer Comments', ''))
+            ), axis=1)
+            st.session_state.total_injuries = df['Has_Injury'].sum()
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error categorizing returns: {e}")
+        raise
 
-def generate_quality_insights():
-    """Generate quality-focused insights from categorized data"""
-    df = st.session_state.categorized_data
+def rule_based_categorization(reason: str, comment: str) -> str:
+    """Simple rule-based categorization as fallback"""
+    text = (reason + ' ' + comment).lower()
     
-    # Category analysis
-    category_counts = df['category'].value_counts()
-    st.session_state.category_analysis = category_counts.to_dict()
+    # Quality issues
+    if any(word in text for word in ['defect', 'broken', 'damage', 'quality', 'faulty']):
+        return 'QUALITY_DEFECTS'
     
-    # Quality issues count
-    quality_issues = df[df['category'].isin(QUALITY_CATEGORIES)]
-    st.session_state.quality_issues = len(quality_issues)
+    # Size issues
+    elif any(word in text for word in ['small', 'large', 'size', 'fit']):
+        return 'SIZE_FIT_ISSUES'
     
-    # Product analysis
-    if 'asin' in df.columns:
-        product_analysis = defaultdict(lambda: defaultdict(int))
-        
-        for _, row in df.iterrows():
-            asin = row.get('asin', 'Unknown')
-            category = row['category']
-            product_analysis[asin][category] += 1
-            product_analysis[asin]['total'] += 1
-        
-        st.session_state.product_analysis = dict(product_analysis)
+    # Wrong product
+    elif any(word in text for word in ['wrong', 'incorrect', 'different']):
+        return 'WRONG_PRODUCT'
+    
+    # Functionality
+    elif any(word in text for word in ['work', 'function', 'operate']):
+        return 'FUNCTIONALITY_ISSUES'
+    
+    # Buyer mistake
+    elif any(word in text for word in ['mistake', 'accident', 'error']):
+        return 'BUYER_MISTAKE'
+    
+    # Default
+    else:
+        return 'OTHER'
+
+def analyze_categories(df: pd.DataFrame):
+    """Analyze return categories"""
+    # Category distribution
+    st.session_state.category_analysis = df['Category'].value_counts().to_dict()
     
     # Quality metrics
+    total_returns = len(df)
+    quality_issues = len(df[df['Category'].isin(QUALITY_CATEGORIES)])
+    
+    st.session_state.total_returns = total_returns
+    st.session_state.quality_issues = quality_issues
     st.session_state.quality_metrics = {
-        'quality_rate': (st.session_state.quality_issues / st.session_state.total_returns * 100) if st.session_state.total_returns > 0 else 0,
-        'top_quality_issue': quality_issues['category'].value_counts().index[0] if len(quality_issues) > 0 else 'None',
-        'products_with_quality_issues': len(quality_issues['asin'].unique()) if 'asin' in quality_issues.columns else 0
+        'quality_rate': (quality_issues / total_returns * 100) if total_returns > 0 else 0,
+        'top_quality_issue': df[df['Category'].isin(QUALITY_CATEGORIES)]['Category'].mode()[0] if quality_issues > 0 else 'None'
     }
 
+def analyze_products(df: pd.DataFrame):
+    """Analyze returns by product"""
+    product_analysis = {}
+    
+    for asin in df['ASIN'].unique():
+        if pd.notna(asin) and asin != '':
+            asin_df = df[df['ASIN'] == asin]
+            
+            product_analysis[asin] = {
+                'total_returns': len(asin_df),
+                'quality_issues': len(asin_df[asin_df['Category'].isin(QUALITY_CATEGORIES)]),
+                'categories': asin_df['Category'].value_counts().to_dict(),
+                'sku': asin_df['SKU'].iloc[0] if 'SKU' in asin_df.columns else ''
+            }
+    
+    st.session_state.product_analysis = product_analysis
+
+def upload_section():
+    """File upload section"""
+    st.markdown("### 📤 Upload Return Data")
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=['pdf', 'txt', 'csv'],
+            help="Upload PDF from Seller Central or FBA Returns text file"
+        )
+    
+    with col2:
+        st.markdown("#### Supported Formats")
+        st.markdown("""
+        - 📄 **PDF**: Seller Central returns
+        - 📝 **TXT**: FBA returns report
+        - 📊 **CSV**: Custom format
+        """)
+    
+    if uploaded_file:
+        # Initialize analyzers
+        initialize_analyzers()
+        
+        # Process file
+        with st.spinner("Processing file..."):
+            data = process_uploaded_file(uploaded_file)
+            
+            if data is not None and not data.empty:
+                st.session_state.raw_data = data
+                st.session_state.file_uploaded = True
+                
+                # Categorize returns
+                categorized_data = categorize_returns(data)
+                st.session_state.categorized_data = categorized_data
+                
+                # Analyze data
+                analyze_categories(categorized_data)
+                analyze_products(categorized_data)
+                
+                # Get AI insights if available
+                if st.session_state.ai_analyzer:
+                    with st.spinner("🤖 Generating AI insights..."):
+                        st.session_state.ai_insights = st.session_state.ai_analyzer.generate_insights(
+                            st.session_state.category_analysis,
+                            st.session_state.product_analysis
+                        )
+                
+                st.session_state.processing_complete = True
+                st.session_state.analysis_ready = True
+                
+                st.success(f"✅ Successfully processed {len(data)} returns!")
+                st.rerun()
+
 def display_dashboard():
-    """Display main analysis dashboard"""
+    """Display main dashboard"""
     st.markdown("### 📊 Return Analysis Dashboard")
     
     # Key metrics
@@ -872,7 +595,7 @@ def display_dashboard():
     
     with col2:
         quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
-        color = COLORS['danger'] if quality_rate > 30 else COLORS['warning'] if quality_rate > 15 else COLORS['success']
+        color = COLORS['danger'] if quality_rate > 30 else COLORS['warning'] if quality_rate > 20 else COLORS['success']
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Quality Issues</div>
@@ -900,13 +623,11 @@ def display_dashboard():
         """, unsafe_allow_html=True)
     
     with col5:
-        if st.session_state.injury_analysis:
-            injuries = st.session_state.injury_analysis.get('total_injuries', 0)
-            color = COLORS['critical'] if injuries > 0 else COLORS['success']
+        if st.session_state.total_injuries > 0:
             st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-label">Injury Cases</div>
-                <div class="metric-value" style="color: {color};">{injuries}</div>
+                <div class="metric-value" style="color: {COLORS['critical']};">{st.session_state.total_injuries}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -935,481 +656,227 @@ def display_category_analysis():
             columns=['Category', 'Count']
         ).sort_values('Count', ascending=False)
         
-        # Color mapping
-        colors = []
-        for cat in category_df['Category']:
-            if cat in QUALITY_CATEGORIES:
-                colors.append(COLORS['danger'])
-            elif cat in ['Customer Error/Changed Mind', 'Price/Value']:
-                colors.append(COLORS['success'])
-            else:
-                colors.append(COLORS['primary'])
-        
-        fig = px.bar(
-            category_df,
-            x='Count',
-            y='Category',
-            orientation='h',
-            title='Returns by Category',
-            color='Category',
-            color_discrete_sequence=colors
-        )
-        fig.update_layout(showlegend=False, height=500)
-        st.plotly_chart(fig, use_container_width=True)
+        # Create bar chart
+        st.bar_chart(category_df.set_index('Category'))
     
     with col2:
-        # Quality vs Non-Quality breakdown
-        quality_count = sum(count for cat, count in st.session_state.category_analysis.items() if cat in QUALITY_CATEGORIES)
-        non_quality_count = st.session_state.total_returns - quality_count
-        
-        fig = go.Figure(data=[go.Pie(
-            labels=['Quality Issues', 'Other Returns'],
-            values=[quality_count, non_quality_count],
-            hole=.3,
-            marker_colors=[COLORS['danger'], COLORS['primary']]
-        )])
-        fig.update_layout(title='Quality vs Non-Quality Returns', height=300)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Top insights
-        st.markdown("#### 💡 Key Insights")
-        
-        insights = generate_category_insights()
-        for insight in insights[:5]:
-            st.markdown(f"• {insight}")
-
-def generate_category_insights():
-    """Generate insights from category analysis"""
-    insights = []
-    
-    if not st.session_state.category_analysis:
-        return insights
-    
-    # Quality issue insights
-    quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
-    if quality_rate > 30:
-        insights.append(f"⚠️ Critical: {quality_rate:.1f}% of returns are quality-related")
-    elif quality_rate > 15:
-        insights.append(f"⚠️ High quality issue rate: {quality_rate:.1f}%")
-    
-    # Top category insights
-    top_categories = sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True)[:3]
-    for cat, count in top_categories:
-        percentage = (count / st.session_state.total_returns * 100)
-        if cat in QUALITY_CATEGORIES:
-            insights.append(f"🔴 {cat}: {count} returns ({percentage:.1f}%)")
-        else:
-            insights.append(f"📊 {cat}: {count} returns ({percentage:.1f}%)")
-    
-    # Specific category insights
-    if 'Size/Fit Issues' in st.session_state.category_analysis and st.session_state.category_analysis['Size/Fit Issues'] > 5:
-        insights.append("👔 Size/fit issues suggest need for better sizing guide")
-    
-    if 'Wrong Product/Misunderstanding' in st.session_state.category_analysis and st.session_state.category_analysis['Wrong Product/Misunderstanding'] > 3:
-        insights.append("📝 Product description may need clarification")
-    
-    return insights
+        # Category table
+        st.markdown("#### Category Breakdown")
+        for category, count in category_df.values:
+            percentage = (count / st.session_state.total_returns * 100)
+            badge_class = 'quality-issue' if category in QUALITY_CATEGORIES else 'other-issue'
+            
+            st.markdown(f"""
+            <div style="margin: 0.5rem 0;">
+                <span class="category-badge {badge_class}">{category}</span>
+                <div style="margin-top: 0.25rem;">
+                    <strong>{count}</strong> returns ({percentage:.1f}%)
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
 def display_product_analysis():
-    """Display product-specific analysis"""
-    st.markdown("### 📦 Product Quality Analysis")
+    """Display product-level analysis"""
+    st.markdown("### 📦 Product Analysis")
     
     if not st.session_state.product_analysis:
         st.info("No product data available")
         return
     
-    # Filter products with quality issues
-    products_with_quality = []
+    # Sort products by total returns
+    sorted_products = sorted(
+        st.session_state.product_analysis.items(),
+        key=lambda x: x[1]['total_returns'],
+        reverse=True
+    )
     
-    for asin, categories in st.session_state.product_analysis.items():
-        quality_count = sum(count for cat, count in categories.items() if cat in QUALITY_CATEGORIES and cat != 'total')
-        total = categories.get('total', 0)
-        
-        if quality_count > 0:
-            products_with_quality.append({
-                'ASIN': asin,
-                'Total Returns': total,
-                'Quality Issues': quality_count,
-                'Quality Rate': (quality_count / total * 100) if total > 0 else 0,
-                'Top Issue': max([(cat, count) for cat, count in categories.items() if cat != 'total'], key=lambda x: x[1])[0]
-            })
+    # Display top 10 products
+    st.markdown("#### Top 10 Products by Return Volume")
     
-    if products_with_quality:
-        # Sort by quality issues
-        products_df = pd.DataFrame(products_with_quality).sort_values('Quality Issues', ascending=False)
+    for i, (asin, data) in enumerate(sorted_products[:10]):
+        quality_rate = (data['quality_issues'] / data['total_returns'] * 100)
+        color = COLORS['danger'] if quality_rate > 30 else COLORS['warning'] if quality_rate > 20 else COLORS['success']
         
-        # Display top problematic products
-        st.markdown("#### 🚨 Products with Highest Quality Issues")
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
         
-        for idx, product in products_df.head(10).iterrows():
-            color = COLORS['danger'] if product['Quality Rate'] > 50 else COLORS['warning'] if product['Quality Rate'] > 25 else COLORS['primary']
-            
-            st.markdown(f"""
-            <div class="category-card quality-issue-card">
-                <div style="display: flex; justify-content: space-between;">
-                    <div>
-                        <strong>ASIN: {product['ASIN']}</strong>
-                        <div style="color: #666; font-size: 0.9rem;">Top Issue: {product['Top Issue']}</div>
-                    </div>
-                    <div style="text-align: right;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: {color};">
-                            {product['Quality Issues']} / {product['Total Returns']}
-                        </div>
-                        <div style="color: {color}; font-size: 0.9rem;">
-                            {product['Quality Rate']:.1f}% quality issues
-                        </div>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+        with col1:
+            st.markdown(f"**{asin}**")
+            if data.get('sku'):
+                st.caption(f"SKU: {data['sku']}")
         
-        # Quality heatmap
-        if st.checkbox("Show detailed category breakdown by product"):
-            # Create matrix for heatmap
-            products = list(st.session_state.product_analysis.keys())[:20]  # Top 20 products
-            categories = list(set(cat for prod_data in st.session_state.product_analysis.values() for cat in prod_data.keys() if cat != 'total'))
-            
-            matrix = []
-            for product in products:
-                row = []
-                for category in categories:
-                    count = st.session_state.product_analysis[product].get(category, 0)
-                    row.append(count)
-                matrix.append(row)
-            
-            fig = px.imshow(
-                matrix,
-                labels=dict(x="Category", y="Product (ASIN)", color="Returns"),
-                x=categories,
-                y=products,
-                color_continuous_scale='Reds',
-                title="Return Categories by Product"
-            )
-            fig.update_layout(height=600)
-            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            st.metric("Returns", data['total_returns'])
+        
+        with col3:
+            st.metric("Quality Issues", data['quality_issues'])
+        
+        with col4:
+            st.markdown(f"<div style='color: {color}; font-weight: bold;'>{quality_rate:.1f}%</div>", unsafe_allow_html=True)
 
 def display_recommendations():
-    """Display quality improvement recommendations"""
-    st.markdown("### 💡 Quality Improvement Recommendations")
+    """Display AI recommendations"""
+    st.markdown("### 💡 AI Recommendations")
     
-    recommendations = generate_quality_recommendations()
-    
-    # Priority recommendations
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.markdown("#### 🎯 Priority Actions")
-        
-        for idx, rec in enumerate(recommendations['priority']):
-            priority_color = {
-                'IMMEDIATE': COLORS['danger'],
-                'HIGH': COLORS['warning'],
-                'MEDIUM': COLORS['primary']
-            }.get(rec['priority'], COLORS['primary'])
-            
-            st.markdown(f"""
-            <div class="category-card" style="border-left-color: {priority_color};">
-                <div style="display: flex; justify-content: space-between;">
-                    <div>
-                        <strong>{idx + 1}. {rec['action']}</strong>
-                        <div style="color: #666; font-size: 0.9rem; margin-top: 0.5rem;">
-                            {rec['reason']}
-                        </div>
-                    </div>
-                    <div>
-                        <span style="background: {priority_color}; color: white; padding: 0.3rem 0.8rem; 
-                                     border-radius: 15px; font-size: 0.8rem;">
-                            {rec['priority']}
-                        </span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("#### 📊 Quality Score")
-        
-        # Calculate overall quality score
-        quality_score = calculate_quality_score()
-        
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Overall Quality Score</div>
-            <div class="metric-value" style="font-size: 3rem; color: {get_score_color(quality_score)};">
-                {quality_score}/100
-            </div>
-            <div class="quality-score" style="margin-top: 1rem;">
-                <div style="width: {quality_score}%; background: {get_score_color(quality_score)}; 
-                            height: 100%; border-radius: 5px;"></div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Score breakdown
-        st.markdown("##### Score Factors:")
-        st.markdown(f"• Quality issue rate: -{st.session_state.quality_metrics['quality_rate']:.0f} pts")
-        if st.session_state.injury_analysis and st.session_state.injury_analysis['total_injuries'] > 0:
-            st.markdown(f"• Injury cases: -20 pts")
-        
-        products_affected = st.session_state.quality_metrics.get('products_with_quality_issues', 0)
-        if products_affected > 5:
-            st.markdown(f"• Multiple products affected: -10 pts")
-
-def generate_quality_recommendations():
-    """Generate specific quality improvement recommendations"""
-    recommendations = {'priority': [], 'general': []}
-    
-    # Based on quality rate
-    quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
-    if quality_rate > 30:
-        recommendations['priority'].append({
-            'priority': 'IMMEDIATE',
-            'action': 'Conduct emergency quality audit',
-            'reason': f'{quality_rate:.1f}% quality issue rate exceeds critical threshold'
-        })
-    elif quality_rate > 15:
-        recommendations['priority'].append({
-            'priority': 'HIGH',
-            'action': 'Review manufacturing QC processes',
-            'reason': f'{quality_rate:.1f}% quality issue rate is above target'
-        })
-    
-    # Based on specific categories
-    for category, count in sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True):
-        if category == 'Product Defects/Quality' and count > 10:
-            recommendations['priority'].append({
-                'priority': 'IMMEDIATE',
-                'action': 'Investigate defect patterns with manufacturer',
-                'reason': f'{count} defect-related returns require root cause analysis'
-            })
-            break
-        elif category == 'Size/Fit Issues' and count > 5:
-            recommendations['priority'].append({
-                'priority': 'HIGH',
-                'action': 'Update product dimensions and sizing guide',
-                'reason': f'{count} size-related returns indicate measurement issues'
-            })
-        elif category == 'Performance/Effectiveness' and count > 5:
-            recommendations['priority'].append({
-                'priority': 'HIGH',
-                'action': 'Review product specifications and testing',
-                'reason': f'{count} performance issues reported by customers'
-            })
-    
-    # Based on products
-    if st.session_state.product_analysis:
-        high_issue_products = [
-            asin for asin, data in st.session_state.product_analysis.items()
-            if sum(count for cat, count in data.items() if cat in QUALITY_CATEGORIES and cat != 'total') > 5
-        ]
-        
-        if len(high_issue_products) > 3:
-            recommendations['priority'].append({
-                'priority': 'MEDIUM',
-                'action': 'Review common components across affected products',
-                'reason': f'{len(high_issue_products)} products show quality issues'
-            })
-    
-    # Injury-based recommendations
-    if st.session_state.injury_analysis and st.session_state.injury_analysis['total_injuries'] > 0:
-        recommendations['priority'].insert(0, {
-            'priority': 'IMMEDIATE',
-            'action': 'Review injury cases for safety compliance',
-            'reason': f"{st.session_state.injury_analysis['total_injuries']} potential injury cases detected"
-        })
-    
-    return recommendations
-
-def calculate_quality_score():
-    """Calculate overall quality score (0-100)"""
-    score = 100
-    
-    # Deduct for quality issue rate
-    quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
-    score -= min(quality_rate, 50)  # Max 50 point deduction
-    
-    # Deduct for injuries
-    if st.session_state.injury_analysis and st.session_state.injury_analysis['total_injuries'] > 0:
-        score -= 20
-    
-    # Deduct for multiple products affected
-    products_affected = st.session_state.quality_metrics.get('products_with_quality_issues', 0)
-    if products_affected > 5:
-        score -= 10
-    elif products_affected > 3:
-        score -= 5
-    
-    return max(0, int(score))
-
-def get_score_color(score):
-    """Get color based on quality score"""
-    if score >= 90:
-        return COLORS['success']
-    elif score >= 70:
-        return COLORS['warning']
+    if st.session_state.ai_insights:
+        st.markdown(st.session_state.ai_insights)
     else:
-        return COLORS['danger']
+        # Generate basic recommendations
+        recommendations = []
+        
+        # Quality issue recommendations
+        if st.session_state.quality_metrics.get('quality_rate', 0) > 30:
+            recommendations.append("🚨 **Critical Quality Alert**: Over 30% of returns are quality-related. Immediate action required.")
+        
+        # Product-specific recommendations
+        if st.session_state.product_analysis:
+            high_risk_products = [
+                asin for asin, data in st.session_state.product_analysis.items()
+                if (data['quality_issues'] / data['total_returns'] * 100) > 40
+            ]
+            
+            if high_risk_products:
+                recommendations.append(f"⚠️ **High-Risk Products**: {len(high_risk_products)} products have >40% quality-related returns")
+        
+        # Display recommendations
+        for rec in recommendations:
+            st.markdown(rec)
 
 def export_analysis():
     """Export analysis results"""
-    st.markdown("### 📥 Export Analysis Results")
+    st.markdown("### 📥 Export Options")
     
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📊 Export Full Report (Excel)", use_container_width=True):
-            export_excel_report()
-    
-    with col2:
-        if st.button("📋 Export Categorized Data (CSV)", use_container_width=True):
-            export_csv_data()
-    
-    with col3:
-        if st.button("📄 Export Executive Summary", use_container_width=True):
-            export_executive_summary()
-
-def export_excel_report():
-    """Export comprehensive Excel report"""
-    try:
-        output = io.BytesIO()
+    if not st.session_state.categorized_data is None:
+        col1, col2, col3 = st.columns(3)
         
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # Sheet 1: Categorized Returns
-            st.session_state.categorized_data.to_excel(
-                writer, sheet_name='Categorized_Returns', index=False
+        with col1:
+            # Export categorized data
+            csv = st.session_state.categorized_data.to_csv(index=False)
+            st.download_button(
+                label="📊 Download Categorized Data",
+                data=csv,
+                file_name=f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
             )
-            
-            # Sheet 2: Category Summary
-            category_summary = pd.DataFrame(
-                list(st.session_state.category_analysis.items()),
-                columns=['Category', 'Count']
-            ).sort_values('Count', ascending=False)
-            category_summary['Percentage'] = (category_summary['Count'] / st.session_state.total_returns * 100).round(1)
-            category_summary.to_excel(writer, sheet_name='Category_Summary', index=False)
-            
-            # Sheet 3: Product Analysis
-            if st.session_state.product_analysis:
-                product_data = []
-                for asin, categories in st.session_state.product_analysis.items():
-                    row = {'ASIN': asin}
-                    for cat, count in categories.items():
-                        if cat != 'total':
-                            row[cat] = count
-                    row['Total'] = categories.get('total', 0)
-                    product_data.append(row)
-                
-                product_df = pd.DataFrame(product_data).fillna(0)
-                product_df.to_excel(writer, sheet_name='Product_Analysis', index=False)
-            
-            # Sheet 4: Quality Metrics
-            metrics_df = pd.DataFrame([st.session_state.quality_metrics])
-            metrics_df.to_excel(writer, sheet_name='Quality_Metrics', index=False)
-            
-            # Add formatting
-            workbook = writer.book
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#2C3E50',
-                'font_color': 'white',
-                'border': 1
-            })
-            
-            # Format headers
-            for sheet_name in writer.sheets:
-                worksheet = writer.sheets[sheet_name]
-                worksheet.set_row(0, 20, header_format)
         
-        output.seek(0)
+        with col2:
+            # Export summary report
+            summary = generate_summary_report()
+            st.download_button(
+                label="📄 Download Summary Report",
+                data=summary,
+                file_name=f"return_analysis_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain"
+            )
         
-        st.download_button(
-            label="Download Excel Report",
-            data=output.getvalue(),
-            file_name=f"amazon_returns_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        
-    except Exception as e:
-        st.error(f"Export error: {str(e)}")
+        with col3:
+            # Export for Excel
+            excel_buffer = create_excel_export()
+            if excel_buffer:
+                st.download_button(
+                    label="📑 Download Excel Report",
+                    data=excel_buffer,
+                    file_name=f"return_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
-def export_csv_data():
-    """Export categorized data as CSV"""
-    csv = st.session_state.categorized_data.to_csv(index=False)
-    
-    st.download_button(
-        label="Download CSV",
-        data=csv,
-        file_name=f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv"
-    )
-
-def export_executive_summary():
-    """Export executive summary"""
-    summary = f"""
-AMAZON RETURNS QUALITY ANALYSIS - EXECUTIVE SUMMARY
+def generate_summary_report() -> str:
+    """Generate text summary report"""
+    report = f"""
+RETURN ANALYSIS SUMMARY REPORT
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 OVERVIEW
 ========
-Total Returns Analyzed: {st.session_state.total_returns:,}
-Quality-Related Returns: {st.session_state.quality_issues:,} ({st.session_state.quality_metrics['quality_rate']:.1f}%)
-Unique Products Affected: {len(st.session_state.product_analysis) if st.session_state.product_analysis else 0}
-Overall Quality Score: {calculate_quality_score()}/100
+Total Returns: {st.session_state.total_returns:,}
+Quality Issues: {st.session_state.quality_issues:,} ({st.session_state.quality_metrics.get('quality_rate', 0):.1f}%)
+Products Affected: {len(st.session_state.product_analysis)}
+Processing Time: {st.session_state.processing_time:.1f} seconds
 
-TOP RETURN CATEGORIES
-====================
+CATEGORY BREAKDOWN
+==================
 """
     
-    for cat, count in sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True)[:5]:
+    for category, count in sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True):
         percentage = (count / st.session_state.total_returns * 100)
-        quality_flag = " [QUALITY ISSUE]" if cat in QUALITY_CATEGORIES else ""
-        summary += f"{cat}{quality_flag}: {count} ({percentage:.1f}%)\n"
+        report += f"{category}: {count} ({percentage:.1f}%)\n"
     
-    summary += f"""
+    report += f"""
 
-KEY FINDINGS
-============
-"""
-    
-    insights = generate_category_insights()
-    for insight in insights[:5]:
-        summary += f"- {insight}\n"
-    
-    summary += f"""
-
-PRIORITY RECOMMENDATIONS
+TOP PRODUCTS BY RETURNS
 =======================
 """
     
-    recommendations = generate_quality_recommendations()
-    for idx, rec in enumerate(recommendations['priority'][:5]):
-        summary += f"{idx + 1}. [{rec['priority']}] {rec['action']}\n   Reason: {rec['reason']}\n\n"
+    sorted_products = sorted(
+        st.session_state.product_analysis.items(),
+        key=lambda x: x[1]['total_returns'],
+        reverse=True
+    )[:10]
     
-    # Add injury information if available
-    if st.session_state.injury_analysis and st.session_state.injury_analysis['total_injuries'] > 0:
-        summary += f"""
-
-SAFETY CONCERNS
-===============
-Potential Injury Cases: {st.session_state.injury_analysis['total_injuries']}
-Critical Severity: {st.session_state.injury_analysis['severity_breakdown']['critical']}
-High Severity: {st.session_state.injury_analysis['severity_breakdown']['high']}
-
-IMMEDIATE ACTION REQUIRED: Review all injury cases for regulatory compliance.
-"""
+    for asin, data in sorted_products:
+        quality_rate = (data['quality_issues'] / data['total_returns'] * 100)
+        report += f"\n{asin}:\n"
+        report += f"  Total Returns: {data['total_returns']}\n"
+        report += f"  Quality Issues: {data['quality_issues']} ({quality_rate:.1f}%)\n"
     
-    st.download_button(
-        label="Download Summary",
-        data=summary,
-        file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-        mime="text/plain"
-    )
+    if st.session_state.ai_insights:
+        report += f"\n\nAI INSIGHTS\n===========\n{st.session_state.ai_insights}"
+    
+    return report
+
+def create_excel_export():
+    """Create Excel export with multiple sheets"""
+    try:
+        import xlsxwriter
+        from io import BytesIO
+        
+        output = BytesIO()
+        workbook = xlsxwriter.Workbook(output)
+        
+        # Summary sheet
+        summary_sheet = workbook.add_worksheet('Summary')
+        summary_sheet.write(0, 0, 'Metric')
+        summary_sheet.write(0, 1, 'Value')
+        
+        summary_data = [
+            ['Total Returns', st.session_state.total_returns],
+            ['Quality Issues', st.session_state.quality_issues],
+            ['Quality Rate %', st.session_state.quality_metrics.get('quality_rate', 0)],
+            ['Products Affected', len(st.session_state.product_analysis)],
+            ['Processing Time (s)', st.session_state.processing_time]
+        ]
+        
+        for i, (metric, value) in enumerate(summary_data, 1):
+            summary_sheet.write(i, 0, metric)
+            summary_sheet.write(i, 1, value)
+        
+        # Raw data sheet
+        if st.session_state.categorized_data is not None:
+            data_sheet = workbook.add_worksheet('Categorized Data')
+            
+            # Write headers
+            for col, header in enumerate(st.session_state.categorized_data.columns):
+                data_sheet.write(0, col, header)
+            
+            # Write data
+            for row_idx, row in st.session_state.categorized_data.iterrows():
+                for col_idx, value in enumerate(row):
+                    data_sheet.write(row_idx + 1, col_idx, str(value))
+        
+        workbook.close()
+        output.seek(0)
+        
+        return output.getvalue()
+        
+    except ImportError:
+        st.warning("Excel export requires xlsxwriter. Using CSV export instead.")
+        return None
 
 def main():
     """Main application"""
     initialize_session_state()
     inject_professional_css()
     
-    # Header
+    # Header with navigation
     display_header()
     
     # Sidebar
@@ -1489,37 +956,135 @@ def main():
         upload_section()
     else:
         # Analysis tabs
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📊 Dashboard",
-            "📈 Categories",
-            "📦 Products",
-            "💡 Recommendations",
-            "📥 Export",
-            "🔄 New Analysis"
-        ])
+        tabs = ["📊 Dashboard", "📈 Categories", "📦 Products", "💡 Recommendations", "📥 Export", "🔄 New Analysis"]
         
-        with tab1:
+        # Add injury tab if injuries detected
+        if st.session_state.total_injuries > 0:
+            tabs.insert(1, "🚨 Injuries")
+        
+        tab_selection = st.tabs(tabs)
+        
+        # Dashboard
+        with tab_selection[0]:
             display_dashboard()
         
-        with tab2:
+        # Handle injury tab if present
+        current_tab = 1
+        if st.session_state.total_injuries > 0:
+            with tab_selection[current_tab]:
+                display_injury_analysis()
+            current_tab += 1
+        
+        # Categories
+        with tab_selection[current_tab]:
             display_category_analysis()
+        current_tab += 1
         
-        with tab3:
+        # Products
+        with tab_selection[current_tab]:
             display_product_analysis()
+        current_tab += 1
         
-        with tab4:
+        # Recommendations
+        with tab_selection[current_tab]:
             display_recommendations()
+        current_tab += 1
         
-        with tab5:
+        # Export
+        with tab_selection[current_tab]:
             export_analysis()
+        current_tab += 1
         
-        with tab6:
-            if st.button("🔄 Start New Analysis", type="primary", use_container_width=True):
-                # Reset state
-                for key in st.session_state:
-                    if key not in ['ai_analyzer', 'pdf_analyzer', 'injury_detector', 'file_detector']:
-                        st.session_state[key] = initialize_session_state.__defaults__[0].get(key)
-                st.rerun()
+        # New Analysis
+        with tab_selection[current_tab]:
+            st.markdown("### 🔄 Start New Analysis")
+            st.info("Click the button below to clear current data and start a new analysis.")
+            
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("🔄 Start New Analysis", type="primary", use_container_width=True):
+                    # Reset state using the new function
+                    reset_analysis_state()
+                    st.rerun()
+
+def display_injury_analysis():
+    """Display injury-related returns analysis"""
+    st.markdown("### 🚨 Injury-Related Returns Analysis")
+    
+    if st.session_state.categorized_data is None or 'Has_Injury' not in st.session_state.categorized_data.columns:
+        st.info("No injury data available")
+        return
+    
+    injury_df = st.session_state.categorized_data[st.session_state.categorized_data['Has_Injury'] == True]
+    
+    if injury_df.empty:
+        st.success("✅ No injury-related returns detected")
+        return
+    
+    # Injury metrics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card" style="border: 2px solid {COLORS['critical']};">
+            <div class="metric-label" style="color: {COLORS['critical']};">Total Injury Cases</div>
+            <div class="metric-value" style="color: {COLORS['critical']};">{len(injury_df)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        injury_rate = (len(injury_df) / st.session_state.total_returns * 100)
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Injury Rate</div>
+            <div class="metric-value" style="color: {COLORS['critical']};">{injury_rate:.2f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        unique_products = injury_df['ASIN'].nunique()
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Products with Injuries</div>
+            <div class="metric-value">{unique_products}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Injury details table
+    st.markdown("#### Injury Case Details")
+    
+    # Prepare display dataframe
+    display_df = injury_df[['Order ID', 'ASIN', 'SKU', 'Return Reason', 'Customer Comments']].copy()
+    
+    # Highlight injury keywords
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # FDA MDR warning
+    st.warning("""
+    ⚠️ **FDA MDR Reporting Required**
+    
+    These returns contain potential injury information that may require FDA Medical Device Reporting (MDR).
+    
+    **Next Steps:**
+    1. Review each case for severity
+    2. Determine if MDR criteria are met
+    3. File reports within 30 days if required
+    4. Document investigation and corrective actions
+    """)
+    
+    # Export injury report
+    if st.button("📥 Export Injury Report for FDA MDR", type="primary"):
+        injury_csv = injury_df.to_csv(index=False)
+        st.download_button(
+            label="Download Injury Report CSV",
+            data=injury_csv,
+            file_name=f"injury_returns_MDR_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
 
 if __name__ == "__main__":
     main()
