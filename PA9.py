@@ -1,7 +1,16 @@
 """
-Amazon Quality Analysis Platform
-Version: 2.1 - Universal File Support with AI Intelligence (Fixed)
-Designed for Quality Analysts to quickly analyze returns and reviews
+Amazon Quality Analysis Platform - Unified Edition
+Version: 3.0 - All-in-One Tool for Medical Device Quality Management
+Combines return categorization, PDF analysis, and comprehensive quality insights
+
+Key Features:
+- Medical device return categorization (15 Amazon categories)
+- Critical injury/safety detection with alerts
+- PDF processing from Amazon Seller Central
+- FBA return report analysis
+- Review correlation
+- AI-powered insights with OpenAI + Claude
+- Export to categorized Excel reports
 """
 
 import streamlit as st
@@ -17,265 +26,279 @@ import json
 from collections import Counter, defaultdict
 import plotly.express as px
 import plotly.graph_objects as go
-import importlib
-import sys
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Force reload modules to avoid caching issues
-for module in ['enhanced_ai_universal', 'universal_file_detector']:
-    if module in sys.modules:
-        del sys.modules[module]
+# Import our enhanced modules
+try:
+    from enhanced_ai_universal import (
+        UniversalAIAnalyzer, FileAnalysis, ReturnCategorization,
+        AIProvider, MEDICAL_DEVICE_CATEGORIES, CRITICAL_KEYWORDS
+    )
+    from universal_file_detector import UniversalFileDetector, ProcessedFile
+    AI_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"Module import error: {e}")
+    AI_AVAILABLE = False
 
-# Import our modules
-from enhanced_ai_universal import UniversalAIAnalyzer, FileAnalysis
-from universal_file_detector import UniversalFileDetector, ProcessedFile
-
-# Patch the AI analyzer if the method is missing
-def ensure_chat_method():
-    """Ensure the chat method exists on UniversalAIAnalyzer"""
-    
-    def generate_chat_response(self, user_message: str, context: Dict[str, Any] = None) -> str:
-        """Generate contextual chat responses for the AI assistant"""
-        if context is None:
-            context = {}
-        
-        providers = self.get_available_providers()
-        
-        if not providers:
-            return "AI chat is not available. Please configure your OpenAI or Claude API key to enable this feature."
-        
-        try:
-            # Build context-aware system prompt
-            system_prompt = """You are a helpful Amazon quality analysis assistant specializing in return analysis and product quality improvement. 
-            Provide clear, actionable advice based on the user's question and the analysis context.
-            Be concise but thorough. Focus on practical implementation steps for quality improvement."""
-            
-            # Add relevant context to the prompt
-            context_info = []
-            if context.get('has_analysis'):
-                context_info.append("The user has completed an analysis of their Amazon returns and reviews.")
-            
-            if context.get('current_asin'):
-                context_info.append(f"Currently analyzing ASIN: {context['current_asin']}")
-            
-            if context.get('file_count', 0) > 0:
-                context_info.append(f"Files loaded: {context['file_count']}")
-            
-            if context_info:
-                system_prompt += "\n\nContext:\n" + "\n".join(context_info)
-            
-            # Prepare the full prompt
-            full_prompt = f"{system_prompt}\n\nUser question: {user_message}"
-            
-            # Try Claude first if available (often better for analysis)
-            if 'claude' in providers:
-                import asyncio
-                result = asyncio.run(self._call_claude(
-                    user_message,
-                    "You are a quality analysis expert. " + full_prompt
-                ))
-                if result['success']:
-                    return result['response']
-            
-            # Fallback to OpenAI
-            if 'openai' in providers:
-                import asyncio
-                result = asyncio.run(self._call_openai(
-                    user_message,
-                    full_prompt
-                ))
-                if result['success']:
-                    return result['response']
-            
-            # If no AI response, provide helpful fallback
-            if 'error' in user_message.lower():
-                return "I can help you troubleshoot errors. Please describe what you're trying to do and what error message you're seeing."
-            elif 'return' in user_message.lower():
-                return "I can help analyze your return data. Upload your FBA return report or PDF from Amazon Seller Central to get started."
-            elif 'quality' in user_message.lower():
-                return "As a quality analysis assistant, I can help identify patterns in your returns and suggest improvements. What specific quality issues are you concerned about?"
-            else:
-                return f"I understand you're asking about: {user_message}. I'm here to help with Amazon return analysis and quality improvements. What specific aspect would you like to explore?"
-                
-        except Exception as e:
-            logger.error(f"Chat error: {e}")
-            return "I'm having trouble processing your request. Please try again."
-    
-    # Add the method if it doesn't exist
-    if not hasattr(UniversalAIAnalyzer, 'generate_chat_response'):
-        UniversalAIAnalyzer.generate_chat_response = generate_chat_response
-        logger.info("Added generate_chat_response method to UniversalAIAnalyzer")
-
-# Apply the patch
-ensure_chat_method()
-
-# App Configuration
+# Page configuration
 st.set_page_config(
-    page_title="Quality Analysis Platform",
-    page_icon="🔍",
+    page_title="Quality Analysis Platform - Vive Health",
+    page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Professional color scheme
+# Professional color scheme for medical/quality focus
 COLORS = {
-    'primary': '#2E86AB',      # Professional blue
-    'secondary': '#A23B72',    # Muted purple
-    'success': '#58B368',      # Green
-    'warning': '#F18F01',      # Orange
-    'danger': '#C73E1D',       # Red
-    'neutral': '#6C757D',      # Gray
-    'light': '#F8F9FA',        # Light gray
-    'dark': '#212529'          # Dark
+    'primary': '#1E3A8A',      # Deep blue
+    'secondary': '#3B82F6',    # Bright blue
+    'success': '#10B981',      # Green
+    'warning': '#F59E0B',      # Amber
+    'danger': '#EF4444',       # Red
+    'critical': '#991B1B',     # Dark red
+    'neutral': '#6B7280',      # Gray
+    'light': '#F3F4F6',        # Light gray
+    'dark': '#1F2937',         # Dark gray
+    'background': '#FFFFFF'    # White
 }
 
-def inject_professional_css():
-    """Clean, professional CSS styling"""
+def inject_custom_css():
+    """Professional CSS styling for quality management"""
     st.markdown(f"""
     <style>
-    /* Professional styling */
-    .main {{
-        padding: 0;
-    }}
+    /* Import fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
+    /* Global styles */
     .stApp {{
-        background-color: #FFFFFF;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: {COLORS['background']};
     }}
     
-    /* Header styling */
+    /* Main header */
     .main-header {{
         background: linear-gradient(135deg, {COLORS['primary']} 0%, {COLORS['secondary']} 100%);
         color: white;
         padding: 2rem;
-        border-radius: 10px;
+        border-radius: 12px;
         margin-bottom: 2rem;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }}
     
     .main-header h1 {{
         margin: 0;
         font-size: 2.5rem;
         font-weight: 700;
+        letter-spacing: -0.02em;
     }}
     
     .main-header p {{
         margin: 0.5rem 0 0 0;
         opacity: 0.9;
-        font-size: 1.1rem;
+        font-size: 1.125rem;
     }}
     
-    /* Card styling */
+    /* Critical alert box */
+    .critical-alert {{
+        background-color: #FEE2E2;
+        border: 2px solid {COLORS['danger']};
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+        animation: pulse 2s infinite;
+    }}
+    
+    @keyframes pulse {{
+        0% {{ opacity: 1; }}
+        50% {{ opacity: 0.8; }}
+        100% {{ opacity: 1; }}
+    }}
+    
+    /* Info cards */
     .info-card {{
         background: white;
-        border: 1px solid #E0E0E0;
+        border: 1px solid #E5E7EB;
         border-radius: 8px;
         padding: 1.5rem;
         margin-bottom: 1rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        transition: all 0.2s;
+    }}
+    
+    .info-card:hover {{
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transform: translateY(-1px);
     }}
     
     .info-card h3 {{
         color: {COLORS['primary']};
         margin-top: 0;
+        font-weight: 600;
     }}
     
     /* Metric cards */
     .metric-card {{
-        background: #F8F9FA;
+        background: white;
+        border: 1px solid #E5E7EB;
         border-radius: 8px;
-        padding: 1rem;
+        padding: 1.25rem;
         text-align: center;
-        border: 1px solid #E0E0E0;
+        height: 100%;
     }}
     
     .metric-value {{
-        font-size: 2rem;
+        font-size: 2.5rem;
         font-weight: 700;
         color: {COLORS['primary']};
+        line-height: 1;
+        margin-bottom: 0.5rem;
     }}
     
     .metric-label {{
         color: {COLORS['neutral']};
-        font-size: 0.9rem;
-        margin-top: 0.5rem;
-    }}
-    
-    /* Status badges */
-    .status-badge {{
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 20px;
-        font-size: 0.85rem;
+        font-size: 0.875rem;
         font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }}
     
-    .status-critical {{
-        background: #FEE;
-        color: {COLORS['danger']};
+    /* Category badges */
+    .category-badge {{
+        display: inline-block;
+        padding: 0.375rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin: 0.25rem;
+    }}
+    
+    .severity-critical {{
+        background-color: #FEE2E2;
+        color: {COLORS['critical']};
         border: 1px solid {COLORS['danger']};
     }}
     
-    .status-high {{
-        background: #FFF4E6;
-        color: {COLORS['warning']};
+    .severity-high {{
+        background-color: #FEF3C7;
+        color: #92400E;
         border: 1px solid {COLORS['warning']};
     }}
     
-    .status-medium {{
-        background: #E3F2FD;
-        color: {COLORS['primary']};
-        border: 1px solid {COLORS['primary']};
+    .severity-medium {{
+        background-color: #DBEAFE;
+        color: #1E40AF;
+        border: 1px solid {COLORS['secondary']};
     }}
     
-    .status-low {{
-        background: #F3F4F6;
+    .severity-low {{
+        background-color: {COLORS['light']};
         color: {COLORS['neutral']};
-        border: 1px solid {COLORS['neutral']};
+        border: 1px solid #E5E7EB;
     }}
     
     /* File upload area */
     .upload-area {{
         border: 2px dashed #CBD5E1;
-        border-radius: 8px;
-        padding: 2rem;
+        border-radius: 12px;
+        padding: 3rem 2rem;
         text-align: center;
-        background: #F8FAFC;
-        margin: 1rem 0;
+        background-color: #F9FAFB;
+        transition: all 0.3s;
+    }}
+    
+    .upload-area:hover {{
+        border-color: {COLORS['secondary']};
+        background-color: #EFF6FF;
+    }}
+    
+    /* Progress indicators */
+    .progress-step {{
+        display: flex;
+        align-items: center;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        background: white;
+        border: 1px solid #E5E7EB;
+    }}
+    
+    .progress-step.active {{
+        background: #EFF6FF;
+        border-color: {COLORS['secondary']};
+    }}
+    
+    .progress-step.completed {{
+        background: #D1FAE5;
+        border-color: {COLORS['success']};
+    }}
+    
+    /* Buttons */
+    .stButton > button {{
+        background: {COLORS['primary']};
+        color: white;
+        border: none;
+        padding: 0.625rem 1.25rem;
+        border-radius: 6px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }}
+    
+    .stButton > button:hover {{
+        background: {COLORS['secondary']};
+        transform: translateY(-1px);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }}
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 0.5rem;
+        background-color: #F3F4F6;
+        padding: 0.25rem;
+        border-radius: 8px;
+    }}
+    
+    .stTabs [data-baseweb="tab"] {{
+        height: 48px;
+        padding: 0 1.5rem;
+        background-color: transparent;
+        border-radius: 6px;
+        color: {COLORS['neutral']};
+        font-weight: 500;
+    }}
+    
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+        background-color: white;
+        color: {COLORS['primary']};
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }}
     
     /* Hide Streamlit branding */
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
     
-    /* Improve button styling */
-    .stButton > button {{
-        background: {COLORS['primary']};
-        color: white;
-        border: none;
-        padding: 0.5rem 2rem;
-        border-radius: 5px;
-        font-weight: 500;
-        transition: all 0.3s;
+    /* Data tables */
+    .dataframe {{
+        font-size: 0.875rem;
     }}
     
-    .stButton > button:hover {{
-        background: {COLORS['secondary']};
-        transform: translateY(-1px);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    /* Success animation */
+    @keyframes slideIn {{
+        from {{
+            transform: translateY(-10px);
+            opacity: 0;
+        }}
+        to {{
+            transform: translateY(0);
+            opacity: 1;
+        }}
     }}
     
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 2rem;
-    }}
-    
-    .stTabs [data-baseweb="tab"] {{
-        height: 50px;
-        padding: 0 2rem;
-        font-weight: 500;
+    .success-message {{
+        animation: slideIn 0.3s ease-out;
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -286,28 +309,38 @@ def initialize_session_state():
         # Core data
         'uploaded_files': [],
         'processed_files': [],
+        'categorized_data': {},
         'current_analysis': None,
         'target_asin': '',
         
         # UI state
-        'current_tab': 'upload',
+        'current_tab': 0,
+        'processing_status': 'idle',
         'show_ai_chat': False,
-        'analysis_complete': False,
+        
+        # Analysis results
+        'critical_issues': [],
+        'quality_metrics': {},
+        'recommendations': [],
         
         # AI components
         'ai_analyzer': None,
+        'ai_provider': AIProvider.FASTEST,
         'chat_messages': [],
         
-        # Settings
-        'auto_analyze': True,
-        'combine_sources': True,
+        # Processing settings
+        'batch_size': 50,
+        'auto_categorize': True,
+        'highlight_critical': True,
         
-        # Cache
-        'analysis_cache': {},
+        # Cost tracking
+        'total_cost': 0.0,
+        'api_calls': 0,
+        'processing_time': 0.0,
         
-        # Track initialization
-        'ai_initialized': False,
-        'modules_reloaded': True
+        # Export data
+        'export_ready': False,
+        'export_data': None
     }
     
     for key, value in defaults.items():
@@ -318,78 +351,229 @@ def display_header():
     """Display application header"""
     st.markdown("""
     <div class="main-header">
-        <h1>🔍 Quality Analysis Platform</h1>
-        <p>Intelligent Return & Review Analysis for Amazon Products</p>
+        <h1>🏥 Quality Analysis Platform</h1>
+        <p>Medical Device Return Analysis & Quality Management System</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Quick stats
-    if st.session_state.processed_files:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        total_returns = sum(
-            f.metadata.get('row_count', 0) 
-            for f in st.session_state.processed_files 
-            if f.content_category == 'returns' or f.content_category == 'fba_returns'
-        )
-        
-        with col1:
-            st.metric("Files Loaded", len(st.session_state.processed_files))
-        with col2:
-            st.metric("Total Returns", f"{total_returns:,}")
-        with col3:
-            if st.session_state.target_asin:
-                st.metric("Target ASIN", st.session_state.target_asin)
-        with col4:
-            ai_status = "🟢 Ready" if get_ai_status() else "🔴 Not configured"
-            st.metric("AI Status", ai_status)
+    # Critical issues alert
+    if st.session_state.critical_issues:
+        count = len(st.session_state.critical_issues)
+        st.markdown(f"""
+        <div class="critical-alert">
+            <h3>⚠️ CRITICAL ALERT: {count} Safety/Injury Issues Detected</h3>
+            <p>Immediate attention required - see Critical Issues tab for details</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-def get_ai_status():
-    """Check AI availability with proper initialization"""
-    try:
-        if not st.session_state.ai_initialized or st.session_state.ai_analyzer is None:
-            st.session_state.ai_analyzer = UniversalAIAnalyzer()
-            st.session_state.ai_initialized = True
-            
-        providers = st.session_state.ai_analyzer.get_available_providers()
-        return len(providers) > 0
-    except Exception as e:
-        logger.error(f"AI initialization error: {e}")
-        return False
-
-def display_file_upload():
-    """Simplified file upload interface"""
-    st.markdown("### 📤 Upload Files")
+def get_ai_analyzer():
+    """Get or create AI analyzer with medical device focus"""
+    if st.session_state.ai_analyzer is None and AI_AVAILABLE:
+        try:
+            st.session_state.ai_analyzer = UniversalAIAnalyzer(st.session_state.ai_provider)
+            logger.info(f"AI analyzer initialized with provider: {st.session_state.ai_provider.value}")
+        except Exception as e:
+            logger.error(f"Failed to initialize AI analyzer: {e}")
+            st.error(f"AI initialization error: {str(e)}")
     
-    # ASIN input first
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        asin_input = st.text_input(
-            "Target ASIN (Optional but recommended)",
-            value=st.session_state.target_asin,
-            placeholder="B00XYZ1234",
-            help="Enter the ASIN to filter and focus analysis"
+    return st.session_state.ai_analyzer
+
+def check_api_status():
+    """Check API configuration and availability"""
+    if not AI_AVAILABLE:
+        return {
+            'status': 'error',
+            'message': 'AI modules not available',
+            'providers': []
+        }
+    
+    analyzer = get_ai_analyzer()
+    if analyzer:
+        providers = analyzer.get_available_providers()
+        if providers:
+            return {
+                'status': 'ready',
+                'message': f"AI Ready ({', '.join(providers)})",
+                'providers': providers
+            }
+        else:
+            return {
+                'status': 'not_configured',
+                'message': 'No API keys configured',
+                'providers': []
+            }
+    
+    return {
+        'status': 'error',
+        'message': 'AI analyzer not initialized',
+        'providers': []
+    }
+
+def display_sidebar():
+    """Enhanced sidebar with quality focus"""
+    with st.sidebar:
+        st.markdown("### ⚙️ Configuration")
+        
+        # API Status
+        api_status = check_api_status()
+        if api_status['status'] == 'ready':
+            st.success(f"✅ {api_status['message']}")
+        else:
+            st.error(f"❌ {api_status['message']}")
+            with st.expander("Setup Instructions"):
+                st.markdown("""
+                Add to `.streamlit/secrets.toml`:
+                ```toml
+                openai_api_key = "sk-..."
+                anthropic_api_key = "sk-ant-..."
+                ```
+                """)
+        
+        st.markdown("---")
+        
+        # AI Provider Selection
+        st.markdown("### 🤖 AI Settings")
+        provider_options = {
+            'Fastest (Recommended)': AIProvider.FASTEST,
+            'Most Accurate': AIProvider.ACCURATE,
+            'OpenAI Only': AIProvider.OPENAI,
+            'Claude Only': AIProvider.CLAUDE,
+            'Both (Consensus)': AIProvider.BOTH
+        }
+        
+        selected_provider = st.selectbox(
+            "AI Provider",
+            options=list(provider_options.keys()),
+            index=0,
+            help="Choose AI model for categorization"
         )
+        st.session_state.ai_provider = provider_options[selected_provider]
+        
+        # Processing Settings
+        st.markdown("---")
+        st.markdown("### 🚀 Processing Settings")
+        
+        st.session_state.batch_size = st.slider(
+            "Batch Size",
+            min_value=10,
+            max_value=100,
+            value=50,
+            step=10,
+            help="Number of items to process at once"
+        )
+        
+        st.session_state.auto_categorize = st.checkbox(
+            "Auto-categorize on upload",
+            value=True,
+            help="Automatically categorize returns when files are uploaded"
+        )
+        
+        st.session_state.highlight_critical = st.checkbox(
+            "Highlight critical issues",
+            value=True,
+            help="Visually highlight safety and injury-related returns"
+        )
+        
+        # Target ASIN
+        st.markdown("---")
+        st.markdown("### 🎯 Target Product")
+        
+        asin_input = st.text_input(
+            "Target ASIN (Optional)",
+            value=st.session_state.target_asin,
+            placeholder="B00EXAMPLE",
+            help="Filter analysis to specific ASIN"
+        )
+        
         if asin_input and len(asin_input) == 10:
             st.session_state.target_asin = asin_input.upper()
+            st.success(f"Filtering for: {st.session_state.target_asin}")
+        
+        # Session Statistics
+        st.markdown("---")
+        st.markdown("### 📊 Session Statistics")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Files Processed", len(st.session_state.processed_files))
+            st.metric("API Calls", st.session_state.api_calls)
+        
+        with col2:
+            st.metric("Total Cost", f"${st.session_state.total_cost:.4f}")
+            if st.session_state.processing_time > 0:
+                st.metric("Process Time", f"{st.session_state.processing_time:.1f}s")
+        
+        # Quick Actions
+        st.markdown("---")
+        if st.button("🗑️ Clear All Data", use_container_width=True):
+            for key in ['uploaded_files', 'processed_files', 'categorized_data', 
+                       'critical_issues', 'quality_metrics', 'recommendations']:
+                st.session_state[key] = [] if key != 'categorized_data' else {}
+            st.rerun()
+        
+        # Help
+        st.markdown("---")
+        with st.expander("📖 Quick Guide"):
+            st.markdown("""
+            **1. Upload Files**
+            - PDF: Print from Manage Returns page
+            - TXT: FBA return reports
+            - Excel/CSV: Any format
+            
+            **2. Auto-Categorization**
+            - Uses 15 medical device categories
+            - Flags injuries & safety issues
+            - Pattern + AI hybrid approach
+            
+            **3. Review Results**
+            - Check Critical Issues tab first
+            - Review categorization accuracy
+            - Export for quality meetings
+            
+            **4. Take Action**
+            - Follow recommendations
+            - Track quality metrics
+            - Monitor trends
+            """)
+
+def display_upload_tab():
+    """File upload interface with drag-and-drop"""
+    st.markdown("### 📤 Upload Return Data")
+    
+    # Instructions
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("""
+        <div class="info-card">
+            <h3>Supported File Types</h3>
+            <ul>
+                <li><strong>PDF</strong>: Amazon Seller Central returns (print as PDF)</li>
+                <li><strong>TXT</strong>: FBA return reports (tab-delimited)</li>
+                <li><strong>Excel/CSV</strong>: Helium 10 reviews, custom exports</li>
+                <li><strong>Images</strong>: Screenshots (JPG/PNG)</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Clear All", use_container_width=True):
-            st.session_state.uploaded_files = []
-            st.session_state.processed_files = []
-            st.session_state.current_analysis = None
-            st.session_state.chat_messages = []
-            st.rerun()
+        st.markdown("""
+        <div class="info-card">
+            <h3>Quick Tips</h3>
+            <ul>
+                <li>🎯 Set Target ASIN for filtering</li>
+                <li>⚡ Batch upload multiple files</li>
+                <li>🔍 Auto-detects file types</li>
+                <li>⚠️ Highlights critical issues</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # File upload area
+    # Upload area
     st.markdown("""
     <div class="upload-area">
-        <h4>Drop files here or click to browse</h4>
-        <p>Supports: PDF, Excel, CSV, TSV, TXT, Images (JPG/PNG)</p>
-        <p style="color: #666; font-size: 0.9rem;">
-        💡 Upload Amazon return reports, FBA exports, Helium 10 reviews, or PDFs from Seller Central
-        </p>
+        <h2>📁 Drop files here or click to browse</h2>
+        <p>Upload Amazon return reports, FBA exports, or review files</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -404,623 +588,730 @@ def display_file_upload():
         process_uploaded_files(uploaded_files)
 
 def process_uploaded_files(files):
-    """Process uploaded files"""
+    """Process uploaded files with progress tracking"""
+    progress_container = st.container()
+    
+    with progress_container:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Process each file
+        new_files = []
+        for idx, file in enumerate(files):
+            # Check if already processed
+            if any(f.metadata.get('filename') == file.name for f in st.session_state.processed_files):
+                continue
+            
+            status_text.text(f"Processing {file.name}...")
+            progress_bar.progress((idx + 1) / len(files))
+            
+            try:
+                # Read file content
+                file_content = file.read()
+                
+                # Process with detector
+                processed = UniversalFileDetector.process_file(
+                    file_content, 
+                    file.name,
+                    st.session_state.target_asin
+                )
+                
+                # If needs AI analysis (PDF/Image)
+                if processed.extraction_method in ['ai_required', 'vision_ai_required']:
+                    analyzer = get_ai_analyzer()
+                    if analyzer:
+                        with st.spinner(f"AI analyzing {file.name}..."):
+                            analysis = asyncio.run(analyzer.analyze_file(
+                                file_content, file.name, processed.format
+                            ))
+                            
+                            # Update processed file with AI results
+                            if analysis.extracted_data:
+                                if analysis.content_type == 'returns':
+                                    processed.data = pd.DataFrame(analysis.extracted_data.get('returns', []))
+                                    processed.content_category = 'returns'
+                                    processed.critical_issues = analysis.critical_issues
+                                    processed.metadata['ai_analysis'] = analysis.extracted_data
+                
+                st.session_state.processed_files.append(processed)
+                new_files.append(processed)
+                
+                # Show result
+                if processed.warnings:
+                    st.warning(f"⚠️ {file.name}: {', '.join(processed.warnings)}")
+                elif processed.critical_issues:
+                    st.error(f"🚨 {file.name}: Found {len(processed.critical_issues)} critical issues!")
+                else:
+                    st.success(f"✅ {file.name} processed successfully")
+                    
+            except Exception as e:
+                st.error(f"❌ Error processing {file.name}: {str(e)}")
+                logger.error(f"File processing error: {e}", exc_info=True)
+        
+        progress_bar.empty()
+        status_text.empty()
+    
+    # Auto-categorize if enabled
+    if st.session_state.auto_categorize and new_files:
+        categorize_returns(new_files)
+
+def categorize_returns(files: List[ProcessedFile] = None):
+    """Categorize returns using medical device categories"""
+    if files is None:
+        files = st.session_state.processed_files
+    
+    return_files = [f for f in files if f.content_category in ['returns', 'fba_returns'] and f.data is not None]
+    
+    if not return_files:
+        st.warning("No return files to categorize")
+        return
+    
+    analyzer = get_ai_analyzer()
+    if not analyzer:
+        st.error("AI analyzer not available")
+        return
+    
+    # Process each file
+    total_categorized = 0
+    start_time = time.time()
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for idx, file in enumerate(files):
-        # Check if already processed
-        if any(f.metadata.get('filename') == file.name for f in st.session_state.processed_files):
-            continue
+    for file_idx, file in enumerate(return_files):
+        df = file.data
         
-        status_text.text(f"Processing {file.name}...")
-        progress_bar.progress((idx + 1) / len(files))
+        # Extract returns data
+        returns_to_categorize = []
         
-        try:
-            # Read file content
-            file_content = file.read()
+        # Handle different file formats
+        if file.content_category == 'fba_returns':
+            for idx, row in df.iterrows():
+                returns_to_categorize.append({
+                    'index': idx,
+                    'reason': str(row.get('reason', '')),
+                    'comment': str(row.get('customer_comments', '')),
+                    'order_id': str(row.get('order_id', '')),
+                    'sku': str(row.get('sku', '')),
+                    'asin': str(row.get('asin', ''))
+                })
+        else:
+            # Generic return format
+            for idx, row in df.iterrows():
+                returns_to_categorize.append({
+                    'index': idx,
+                    'reason': str(row.get('return_reason', row.get('reason', ''))),
+                    'comment': str(row.get('customer_comment', row.get('comment', ''))),
+                    'order_id': str(row.get('order_id', '')),
+                    'sku': str(row.get('sku', '')),
+                    'asin': str(row.get('asin', ''))
+                })
+        
+        # Process in batches
+        batch_size = st.session_state.batch_size
+        all_results = []
+        
+        for i in range(0, len(returns_to_categorize), batch_size):
+            batch = returns_to_categorize[i:i + batch_size]
+            status_text.text(f"Categorizing {file.metadata.get('filename')}: {i}/{len(returns_to_categorize)}")
             
-            # Process with detector
-            processed = UniversalFileDetector.process_file(
-                file_content, 
-                file.name,
-                st.session_state.target_asin
-            )
+            # Categorize batch
+            batch_results = asyncio.run(analyzer.process_batch_returns(batch, batch_size))
+            all_results.extend(batch_results)
             
-            # If needs AI analysis (PDF/Image), process with AI
-            if processed.extraction_method in ['ai_required', 'vision_ai_required']:
-                asyncio.run(process_with_ai(processed, file_content))
+            # Update progress
+            progress = (file_idx + (i + len(batch)) / len(returns_to_categorize)) / len(return_files)
+            progress_bar.progress(progress)
+        
+        # Update dataframe with categories
+        for result in all_results:
+            idx = result['index']
+            df.at[idx, 'category'] = result.get('category', 'Other/Miscellaneous')
+            df.at[idx, 'severity'] = result.get('severity', 'low')
+            df.at[idx, 'confidence'] = result.get('confidence', 0.0)
             
-            st.session_state.processed_files.append(processed)
-            
-            # Show success
-            if processed.warnings:
-                st.warning(f"⚠️ {file.name}: {', '.join(processed.warnings)}")
-            else:
-                st.success(f"✅ {file.name} processed successfully")
-                
-        except Exception as e:
-            st.error(f"❌ Error processing {file.name}: {str(e)}")
-            logger.error(f"File processing error: {e}", exc_info=True)
+            # Check for critical flags
+            if result.get('critical_flags'):
+                st.session_state.critical_issues.append({
+                    'file': file.metadata.get('filename'),
+                    'order_id': result.get('order_id'),
+                    'flags': result.get('critical_flags'),
+                    'reason': result.get('reason'),
+                    'comment': result.get('comment')
+                })
+        
+        # Store categorized data
+        file_key = file.metadata.get('filename', f'file_{file_idx}')
+        st.session_state.categorized_data[file_key] = df
+        total_categorized += len(all_results)
     
+    # Clear progress
     progress_bar.empty()
     status_text.empty()
     
-    # Auto-analyze if enabled
-    if st.session_state.auto_analyze and st.session_state.processed_files:
-        run_analysis()
+    # Update metrics
+    st.session_state.processing_time = time.time() - start_time
+    
+    # Get cost summary
+    if analyzer:
+        cost_summary = analyzer.get_api_usage_summary()
+        st.session_state.total_cost = cost_summary.get('total_cost', 0)
+        st.session_state.api_calls = cost_summary.get('api_calls', 0)
+    
+    # Show summary
+    st.success(f"""
+    ✅ Categorization Complete!
+    - Processed: {total_categorized} returns
+    - Time: {st.session_state.processing_time:.1f} seconds
+    - Cost: ${st.session_state.total_cost:.4f}
+    - Critical Issues: {len(st.session_state.critical_issues)}
+    """)
 
-async def process_with_ai(processed_file: ProcessedFile, content: bytes):
-    """Process files that need AI analysis - FIXED VERSION"""
-    if not get_ai_status():
-        st.warning("AI not configured - some features unavailable")
-        
-        # Provide sample data for PDFs so you can see the app working
-        if processed_file.format == 'pdf':
-            st.info("Simulating PDF analysis for demonstration...")
-            
-            # Create sample return data
-            sample_data = pd.DataFrame({
-                'order_id': [
-                    '111-1234567-1234567',
-                    '111-2345678-2345678', 
-                    '111-3456789-3456789',
-                    '111-4567890-4567890',
-                    '111-5678901-5678901'
-                ],
-                'asin': ['B00EXAMPLE'] * 5,
-                'sku': ['MOB-001', 'MOB-001', 'MOB-002', 'MOB-002', 'MOB-003'],
-                'return_date': pd.date_range(start='2024-01-01', periods=5),
-                'return_reason': [
-                    'Item defective or doesn\'t work',
-                    'Product and shipping box both damaged',
-                    'Wrong item was sent',
-                    'Item defective or doesn\'t work',
-                    'No longer needed'
-                ],
-                'customer_comment': [
-                    'Stopped working after 2 days',
-                    'Box was crushed, product broken',
-                    'Received different model',
-                    'Dead on arrival',
-                    'Bought wrong size'
-                ],
-                'category': [
-                    'QUALITY_DEFECTS',
-                    'SHIPPING_DAMAGE',
-                    'WRONG_PRODUCT',
-                    'QUALITY_DEFECTS',
-                    'BUYER_MISTAKE'
-                ]
-            })
-            
-            processed_file.data = sample_data
-            processed_file.content_category = 'returns'
-            processed_file.metadata['row_count'] = len(sample_data)
-            processed_file.metadata['ai_processed'] = True
-            processed_file.confidence = 0.95
-            
-            st.success(f"✓ Simulated analysis complete: {len(sample_data)} returns found")
+def display_analysis_tab():
+    """Display comprehensive analysis results"""
+    if not st.session_state.categorized_data:
+        st.info("No categorized data available. Please upload and process files first.")
         return
     
-    try:
-        analyzer = st.session_state.ai_analyzer
-        
-        # Analyze file with AI
-        with st.spinner(f"AI analyzing {processed_file.metadata.get('filename')}..."):
-            analysis = await analyzer.analyze_file(
-                content,
-                processed_file.metadata.get('filename', ''),
-                processed_file.format
-            )
-            
-            # Update processed file with AI results
-            if analysis.extracted_data:
-                # Check if we got returns data
-                returns_data = analysis.extracted_data.get('returns', [])
-                
-                if returns_data:
-                    processed_file.data = pd.DataFrame(returns_data)
-                    processed_file.content_category = 'returns'
-                    processed_file.metadata['row_count'] = len(returns_data)
-                else:
-                    # Try to extract from raw text if available
-                    raw_text = analysis.extracted_data.get('raw_text', '')
-                    if raw_text:
-                        st.warning("No structured returns found, attempting text analysis...")
-                        # You could add additional text parsing here
-                
-                processed_file.metadata['ai_analysis'] = analysis.extracted_data
-                processed_file.confidence = analysis.confidence
-                
-    except Exception as e:
-        logger.error(f"AI processing error: {e}")
-        st.error(f"AI analysis failed: {str(e)}")
-
-def display_file_overview():
-    """Display overview of processed files"""
-    if not st.session_state.processed_files:
-        st.info("No files uploaded yet. Upload files to begin analysis.")
-        return
+    # Combine all categorized data
+    all_returns = []
+    for filename, df in st.session_state.categorized_data.items():
+        df_copy = df.copy()
+        df_copy['source_file'] = filename
+        all_returns.append(df_copy)
     
-    st.markdown("### 📊 File Overview")
+    combined_df = pd.concat(all_returns, ignore_index=True)
     
-    # Create summary table
-    file_summary = []
-    for file in st.session_state.processed_files:
-        summary = {
-            'File': file.metadata.get('filename', 'Unknown'),
-            'Type': file.content_category.replace('_', ' ').title(),
-            'Format': file.format.upper(),
-            'Records': file.metadata.get('row_count', 0) if file.data is not None else 'N/A',
-            'Status': '✅' if file.confidence > 0.7 else '⚠️'
-        }
-        file_summary.append(summary)
+    # Summary metrics
+    st.markdown("### 📊 Quality Analysis Summary")
     
-    df_summary = pd.DataFrame(file_summary)
-    st.dataframe(df_summary, use_container_width=True, hide_index=True)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{len(combined_df):,}</div>
+            <div class="metric-label">Total Returns</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        critical_count = len(st.session_state.critical_issues)
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value" style="color: {COLORS['danger']};">{critical_count}</div>
+            <div class="metric-label">Critical Issues</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        quality_defects = len(combined_df[combined_df['category'] == 'Product Defects/Quality'])
+        defect_rate = (quality_defects / len(combined_df) * 100) if len(combined_df) > 0 else 0
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{defect_rate:.1f}%</div>
+            <div class="metric-label">Quality Defect Rate</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        unique_skus = combined_df['sku'].nunique() if 'sku' in combined_df.columns else 0
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{unique_skus}</div>
+            <div class="metric-label">Unique SKUs</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col5:
+        avg_confidence = combined_df['confidence'].mean() if 'confidence' in combined_df.columns else 0
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{avg_confidence:.0%}</div>
+            <div class="metric-label">Avg Confidence</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Category breakdown
-    categories = Counter(f.content_category for f in st.session_state.processed_files)
+    st.markdown("---")
+    st.markdown("### 📈 Return Categories Distribution")
     
-    if len(categories) > 1:
+    if 'category' in combined_df.columns:
+        category_counts = combined_df['category'].value_counts()
+        
+        # Create visualizations
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            fig = px.pie(
-                values=list(categories.values()),
-                names=list(categories.keys()),
-                title="Content Types"
+            # Bar chart
+            fig = px.bar(
+                x=category_counts.values,
+                y=category_counts.index,
+                orientation='h',
+                labels={'x': 'Count', 'y': 'Category'},
+                title='Returns by Category',
+                color=category_counts.values,
+                color_continuous_scale='Reds'
             )
-            fig.update_traces(textposition='inside', textinfo='percent+label')
+            fig.update_layout(height=500, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.markdown("#### Detection Confidence")
-            for file in st.session_state.processed_files:
-                confidence_color = COLORS['success'] if file.confidence > 0.8 else COLORS['warning']
+            # Top issues summary
+            st.markdown("#### 🎯 Top Issues")
+            
+            for i, (cat, count) in enumerate(category_counts.head(5).items()):
+                pct = (count / len(combined_df) * 100)
+                severity = MEDICAL_DEVICE_CATEGORIES.get(cat, {}).get('priority', 'low')
+                
+                severity_class = f"severity-{severity}"
                 st.markdown(f"""
-                <div style="margin: 0.5rem 0;">
-                    <small>{file.metadata.get('filename', 'Unknown')[:30]}...</small><br>
-                    <div style="background: #E0E0E0; height: 20px; border-radius: 10px;">
-                        <div style="background: {confidence_color}; width: {file.confidence*100}%; 
-                                    height: 100%; border-radius: 10px;"></div>
+                <div class="info-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span><strong>{i+1}. {cat}</strong></span>
+                        <span class="category-badge {severity_class}">{severity}</span>
+                    </div>
+                    <div style="margin-top: 0.5rem;">
+                        <div style="background: #E5E7EB; height: 20px; border-radius: 10px;">
+                            <div style="background: {COLORS['secondary']}; width: {pct}%; height: 100%; border-radius: 10px;"></div>
+                        </div>
+                        <small>{count} returns ({pct:.1f}%)</small>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-
-def run_analysis():
-    """Run comprehensive analysis on uploaded files"""
-    with st.spinner("🔍 Analyzing data..."):
-        try:
-            # Separate files by type
-            return_files = [f for f in st.session_state.processed_files 
-                          if 'return' in f.content_category or f.content_category == 'fba_returns']
-            review_files = [f for f in st.session_state.processed_files 
-                          if 'review' in f.content_category]
-            
-            # Merge data if multiple files
-            merged_returns = None
-            merged_reviews = None
-            
-            if return_files:
-                return_dfs = [f.data for f in return_files if f.data is not None]
-                if return_dfs:
-                    merged_returns = pd.concat(return_dfs, ignore_index=True)
-            
-            if review_files:
-                review_dfs = [f.data for f in review_files if f.data is not None]
-                if review_dfs:
-                    merged_reviews = pd.concat(review_dfs, ignore_index=True)
-            
-            # Generate analysis
-            if get_ai_status() and (merged_returns is not None or merged_reviews is not None):
-                analyzer = st.session_state.ai_analyzer
-                
-                # Convert to format expected by AI
-                returns_list = merged_returns.to_dict('records') if merged_returns is not None else []
-                reviews_list = merged_reviews.to_dict('records') if merged_reviews is not None else []
-                
-                # Generate report
-                report = analyzer.generate_return_analysis_report(
-                    st.session_state.target_asin or 'ALL',
-                    returns_list,
-                    reviews_list
-                )
-                
-                st.session_state.current_analysis = report
-                st.session_state.analysis_complete = True
-                st.success("✅ Analysis complete!")
-            else:
-                # Basic analysis without AI
-                st.session_state.current_analysis = generate_basic_analysis(
-                    merged_returns, merged_reviews
-                )
-                st.session_state.analysis_complete = True
-                
-        except Exception as e:
-            st.error(f"Analysis error: {str(e)}")
-            logger.error(f"Analysis error: {e}", exc_info=True)
-
-def generate_basic_analysis(returns_df, reviews_df):
-    """Generate basic analysis without AI"""
-    analysis = {
-        'executive_summary': {
-            'total_returns': len(returns_df) if returns_df is not None else 0,
-            'total_reviews': len(reviews_df) if reviews_df is not None else 0,
-            'main_issues': [],
-            'trend': 'Unknown'
-        },
-        'metrics': {}
-    }
     
-    if returns_df is not None and not returns_df.empty:
-        # Basic return metrics
-        if 'reason' in returns_df.columns:
-            reason_counts = returns_df['reason'].value_counts()
-            analysis['metrics']['top_return_reasons'] = reason_counts.head(5).to_dict()
-            analysis['executive_summary']['main_issues'] = reason_counts.head(3).index.tolist()
-        elif 'return_reason' in returns_df.columns:
-            reason_counts = returns_df['return_reason'].value_counts()
-            analysis['metrics']['top_return_reasons'] = reason_counts.head(5).to_dict()
-            analysis['executive_summary']['main_issues'] = reason_counts.head(3).index.tolist()
-            
-        # Category breakdown if available
-        if 'category' in returns_df.columns:
-            category_counts = returns_df['category'].value_counts()
-            analysis['category_breakdown'] = {}
-            for cat, count in category_counts.items():
-                analysis['category_breakdown'][cat] = {
-                    'count': count,
-                    'percentage': count / len(returns_df) * 100,
-                    'priority': 'high' if 'QUALITY' in cat or 'DEFECT' in cat else 'medium'
-                }
+    # Product analysis
+    if 'sku' in combined_df.columns:
+        st.markdown("---")
+        st.markdown("### 📦 Product-Level Analysis")
+        
+        # Top problematic products
+        product_issues = combined_df.groupby('sku').agg({
+            'category': 'count',
+            'severity': lambda x: (x == 'critical').sum()
+        }).rename(columns={'category': 'total_returns', 'severity': 'critical_issues'})
+        
+        product_issues = product_issues.sort_values('total_returns', ascending=False).head(10)
+        
+        # Display as table
+        st.dataframe(
+            product_issues.style.format({
+                'total_returns': '{:,.0f}',
+                'critical_issues': '{:,.0f}'
+            }).background_gradient(cmap='Reds', subset=['total_returns', 'critical_issues']),
+            use_container_width=True
+        )
     
-    if reviews_df is not None and not reviews_df.empty:
-        # Basic review metrics
-        if 'Rating' in reviews_df.columns:
-            analysis['metrics']['average_rating'] = reviews_df['Rating'].mean()
-            analysis['metrics']['rating_distribution'] = reviews_df['Rating'].value_counts().to_dict()
-    
-    return analysis
+    # Time analysis if dates available
+    date_columns = [col for col in combined_df.columns if 'date' in col.lower()]
+    if date_columns:
+        st.markdown("---")
+        st.markdown("### 📅 Temporal Analysis")
+        
+        date_col = date_columns[0]
+        combined_df['parsed_date'] = pd.to_datetime(combined_df[date_col], errors='coerce')
+        
+        # Group by month
+        monthly_returns = combined_df.groupby(combined_df['parsed_date'].dt.to_period('M')).size()
+        
+        if not monthly_returns.empty:
+            fig = px.line(
+                x=monthly_returns.index.astype(str),
+                y=monthly_returns.values,
+                labels={'x': 'Month', 'y': 'Return Count'},
+                title='Return Trend Over Time'
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-def display_analysis_results():
-    """Display analysis results"""
-    if not st.session_state.current_analysis:
-        st.info("No analysis available. Upload files and run analysis.")
+def display_critical_issues_tab():
+    """Display critical safety and injury issues"""
+    st.markdown("### 🚨 Critical Issues Requiring Immediate Attention")
+    
+    if not st.session_state.critical_issues:
+        st.success("✅ No critical safety or injury issues detected")
         return
     
-    analysis = st.session_state.current_analysis
+    # Summary
+    st.error(f"""
+    ⚠️ **Found {len(st.session_state.critical_issues)} critical issues that may involve:**
+    - Customer injuries or safety hazards
+    - Medical emergencies or hospital visits
+    - Severe product defects that could cause harm
+    """)
     
-    # Executive Summary
-    st.markdown("### 📋 Executive Summary")
+    # Group by type
+    issues_by_type = defaultdict(list)
+    for issue in st.session_state.critical_issues:
+        for flag in issue.get('flags', []):
+            issues_by_type[flag].append(issue)
     
-    summary = analysis.get('executive_summary', {})
+    # Display by type
+    for issue_type, issues in issues_by_type.items():
+        st.markdown(f"#### {issue_type.replace('_', ' ').title()} ({len(issues)} cases)")
+        
+        for issue in issues[:10]:  # Show first 10
+            st.markdown(f"""
+            <div class="critical-alert">
+                <strong>Order ID:</strong> {issue.get('order_id', 'Unknown')}<br>
+                <strong>File:</strong> {issue.get('file', 'Unknown')}<br>
+                <strong>Reason:</strong> {issue.get('reason', 'N/A')}<br>
+                <strong>Customer Comment:</strong> {issue.get('comment', 'N/A')}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        if len(issues) > 10:
+            st.info(f"... and {len(issues) - 10} more {issue_type} issues")
+
+def display_recommendations_tab():
+    """Display actionable recommendations"""
+    st.markdown("### 💡 Quality Improvement Recommendations")
     
-    col1, col2, col3, col4 = st.columns(4)
+    if not st.session_state.categorized_data:
+        st.info("Process files to generate recommendations")
+        return
+    
+    # Generate recommendations based on analysis
+    analyzer = get_ai_analyzer()
+    if analyzer:
+        # Get all processed files
+        analysis_results = []
+        for file in st.session_state.processed_files:
+            if file.content_category in ['returns', 'fba_returns']:
+                analysis_results.append(FileAnalysis(
+                    file_type=file.file_type,
+                    content_type=file.content_category,
+                    extracted_data={'returns': file.data.to_dict('records') if file.data is not None else []},
+                    confidence=file.confidence,
+                    ai_provider='hybrid',
+                    critical_issues=file.critical_issues
+                ))
+        
+        # Generate quality report
+        report = analyzer.generate_quality_report(analysis_results)
+        recommendations = report.get('recommendations', [])
+        
+        if recommendations:
+            for idx, rec in enumerate(recommendations):
+                priority = rec.get('priority', 'MEDIUM')
+                priority_color = {
+                    'IMMEDIATE': COLORS['danger'],
+                    'HIGH': COLORS['warning'],
+                    'MEDIUM': COLORS['secondary'],
+                    'LOW': COLORS['neutral']
+                }.get(priority, COLORS['neutral'])
+                
+                st.markdown(f"""
+                <div class="info-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3>{idx + 1}. {rec.get('recommendation', 'Action needed')}</h3>
+                        <span class="category-badge" style="background: {priority_color}20; color: {priority_color}; border-color: {priority_color};">
+                            {priority}
+                        </span>
+                    </div>
+                    <p><strong>Category:</strong> {rec.get('category', 'General')}</p>
+                    <p>{rec.get('details', '')}</p>
+                    <h4>Action Items:</h4>
+                    <ul>
+                """, unsafe_allow_html=True)
+                
+                for action in rec.get('action_items', []):
+                    st.markdown(f"<li>{action}</li>", unsafe_allow_html=True)
+                
+                st.markdown("</ul></div>", unsafe_allow_html=True)
+        else:
+            # Fallback recommendations
+            st.markdown("""
+            <div class="info-card">
+                <h3>1. Review Critical Issues</h3>
+                <p>Check the Critical Issues tab for any safety or injury-related returns</p>
+            </div>
+            
+            <div class="info-card">
+                <h3>2. Address Quality Defects</h3>
+                <p>Focus on products with highest defect rates</p>
+            </div>
+            
+            <div class="info-card">
+                <h3>3. Improve Product Information</h3>
+                <p>Update sizing guides and product descriptions for items with fit issues</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+def display_export_tab():
+    """Export functionality with multiple formats"""
+    st.markdown("### 💾 Export Analysis Results")
+    
+    if not st.session_state.categorized_data:
+        st.info("No data to export. Process files first.")
+        return
+    
+    # Export options
+    col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">{}</div>
-            <div class="metric-label">Total Returns</div>
+        <div class="info-card">
+            <h3>📊 Excel Export</h3>
+            <p>Comprehensive report with multiple sheets:</p>
+            <ul>
+                <li>Summary statistics</li>
+                <li>Categorized returns</li>
+                <li>Critical issues</li>
+                <li>Product analysis</li>
+                <li>Recommendations</li>
+            </ul>
         </div>
-        """.format(summary.get('total_returns', 0)), unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+        
+        if st.button("Generate Excel Report", use_container_width=True):
+            excel_data = generate_excel_report()
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=excel_data,
+                file_name=f"quality_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
     
     with col2:
-        trend = summary.get('trend', 'Unknown')
-        trend_color = COLORS['danger'] if trend == 'Increasing' else COLORS['success']
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value" style="color: {trend_color};">{trend}</div>
-            <div class="metric-label">Return Trend</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        main_issues = summary.get('main_issues', [])
-        if main_issues:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{len(main_issues)}</div>
-                <div class="metric-label">Critical Issues</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    with col4:
-        if st.button("💬 Discuss with AI", use_container_width=True):
-            st.session_state.show_ai_chat = True
-    
-    # Main Issues
-    if summary.get('main_issues'):
-        st.markdown("#### 🚨 Main Issues Identified")
-        for issue in summary['main_issues']:
-            st.markdown(f"- {issue}")
-    
-    # Category Breakdown
-    if 'category_breakdown' in analysis:
-        st.markdown("### 📊 Return Categories")
-        
-        categories = analysis['category_breakdown']
-        
-        # Create visualization
-        cat_data = []
-        for cat, info in categories.items():
-            cat_data.append({
-                'Category': cat.replace('_', ' ').title(),
-                'Count': info['count'],
-                'Percentage': info['percentage'],
-                'Priority': info['priority']
-            })
-        
-        if cat_data:
-            df_cat = pd.DataFrame(cat_data)
-            
-            # Bar chart
-            fig = px.bar(
-                df_cat,
-                x='Category',
-                y='Count',
-                color='Priority',
-                color_discrete_map={
-                    'critical': COLORS['danger'],
-                    'high': COLORS['warning'],
-                    'medium': COLORS['primary'],
-                    'low': COLORS['neutral']
-                },
-                title="Returns by Category"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Detailed table
-            st.dataframe(df_cat, use_container_width=True, hide_index=True)
-    
-    # Business Impact
-    if 'business_impact' in analysis:
-        st.markdown("### 💼 Business Impact")
-        
-        impact = analysis['business_impact']
-        severity = impact.get('severity', 'Unknown')
-        
-        severity_color = {
-            'High': COLORS['danger'],
-            'Medium': COLORS['warning'],
-            'Low': COLORS['success']
-        }.get(severity, COLORS['neutral'])
-        
-        st.markdown(f"""
+        st.markdown("""
         <div class="info-card">
-            <h3 style="color: {severity_color};">Severity: {severity}</h3>
-            <p><strong>Risk Assessment:</strong> {impact.get('risk_assessment', 'N/A')}</p>
-            <p><strong>Critical Returns:</strong> {impact.get('critical_return_percentage', 0):.1f}%</p>
+            <h3>📄 CSV Export</h3>
+            <p>Simple categorized data export:</p>
+            <ul>
+                <li>All returns with categories</li>
+                <li>Severity levels</li>
+                <li>Confidence scores</li>
+                <li>Critical flags</li>
+            </ul>
         </div>
         """, unsafe_allow_html=True)
-    
-    # Action Items
-    if 'action_items' in analysis:
-        st.markdown("### 🎯 Recommended Actions")
         
-        for idx, action in enumerate(analysis['action_items'], 1):
-            priority = action.get('priority', 'MEDIUM')
-            badge_class = {
-                'IMMEDIATE': 'status-critical',
-                'HIGH': 'status-high',
-                'MEDIUM': 'status-medium',
-                'LOW': 'status-low'
-            }.get(priority, 'status-medium')
-            
-            st.markdown(f"""
-            <div class="info-card">
-                <span class="status-badge {badge_class}">{priority}</span>
-                <h4>{idx}. {action.get('action', 'Action needed')}</h4>
-                <p>{action.get('reason', '')}</p>
-            </div>
-            """, unsafe_allow_html=True)
+        if st.button("Generate CSV Export", use_container_width=True):
+            csv_data = generate_csv_export()
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_data,
+                file_name=f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
-def display_ai_chat():
-    """AI chat interface with error handling"""
-    st.markdown("### 💬 AI Assistant")
+def generate_excel_report():
+    """Generate comprehensive Excel report"""
+    output = io.BytesIO()
     
-    # Check if AI is properly initialized
-    if not get_ai_status():
-        st.warning("AI is not configured. Please add API keys to enable chat.")
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        
+        # Define formats
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#1E3A8A',
+            'font_color': 'white',
+            'align': 'center'
+        })
+        
+        critical_format = workbook.add_format({
+            'bg_color': '#FEE2E2',
+            'font_color': '#991B1B'
+        })
+        
+        # 1. Summary sheet
+        summary_data = {
+            'Metric': [
+                'Total Returns',
+                'Critical Issues',
+                'Quality Defect Rate',
+                'Files Processed',
+                'Processing Cost',
+                'Processing Time'
+            ],
+            'Value': [
+                sum(len(df) for df in st.session_state.categorized_data.values()),
+                len(st.session_state.critical_issues),
+                f"{calculate_quality_defect_rate():.1f}%",
+                len(st.session_state.processed_files),
+                f"${st.session_state.total_cost:.4f}",
+                f"{st.session_state.processing_time:.1f} seconds"
+            ]
+        }
+        
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Format summary sheet
+        worksheet = writer.sheets['Summary']
+        for col_num, value in enumerate(summary_df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+        
+        # 2. Categorized Returns sheet
+        all_returns = []
+        for filename, df in st.session_state.categorized_data.items():
+            df_copy = df.copy()
+            df_copy['source_file'] = filename
+            all_returns.append(df_copy)
+        
+        if all_returns:
+            combined_df = pd.concat(all_returns, ignore_index=True)
+            
+            # Reorder columns for better readability
+            priority_cols = ['category', 'severity', 'order_id', 'asin', 'sku', 
+                           'reason', 'customer_comments', 'source_file']
+            other_cols = [col for col in combined_df.columns if col not in priority_cols]
+            ordered_cols = [col for col in priority_cols if col in combined_df.columns] + other_cols
+            
+            combined_df = combined_df[ordered_cols]
+            combined_df.to_excel(writer, sheet_name='Categorized Returns', index=False)
+            
+            # Apply conditional formatting
+            worksheet = writer.sheets['Categorized Returns']
+            for col_num, value in enumerate(combined_df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Highlight critical rows
+            if 'severity' in combined_df.columns:
+                severity_col = combined_df.columns.get_loc('severity')
+                for row_num, severity in enumerate(combined_df['severity'], 1):
+                    if severity == 'critical':
+                        worksheet.set_row(row_num, None, critical_format)
+        
+        # 3. Critical Issues sheet
+        if st.session_state.critical_issues:
+            critical_df = pd.DataFrame(st.session_state.critical_issues)
+            critical_df.to_excel(writer, sheet_name='Critical Issues', index=False)
+            
+            worksheet = writer.sheets['Critical Issues']
+            for col_num, value in enumerate(critical_df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+        
+        # 4. Category Analysis sheet
+        if all_returns:
+            category_summary = combined_df['category'].value_counts().reset_index()
+            category_summary.columns = ['Category', 'Count']
+            category_summary['Percentage'] = (category_summary['Count'] / len(combined_df) * 100).round(1)
+            
+            # Add severity
+            category_summary['Priority'] = category_summary['Category'].apply(
+                lambda x: MEDICAL_DEVICE_CATEGORIES.get(x, {}).get('priority', 'low')
+            )
+            
+            category_summary.to_excel(writer, sheet_name='Category Analysis', index=False)
+            
+            worksheet = writer.sheets['Category Analysis']
+            for col_num, value in enumerate(category_summary.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+    
+    output.seek(0)
+    return output.getvalue()
+
+def generate_csv_export():
+    """Generate simple CSV export"""
+    all_returns = []
+    for filename, df in st.session_state.categorized_data.items():
+        df_copy = df.copy()
+        df_copy['source_file'] = filename
+        all_returns.append(df_copy)
+    
+    if all_returns:
+        combined_df = pd.concat(all_returns, ignore_index=True)
+        
+        # Add critical flags
+        combined_df['is_critical'] = combined_df.apply(
+            lambda row: any(
+                issue.get('order_id') == str(row.get('order_id', ''))
+                for issue in st.session_state.critical_issues
+            ), axis=1
+        )
+        
+        return combined_df.to_csv(index=False)
+    
+    return ""
+
+def calculate_quality_defect_rate():
+    """Calculate overall quality defect rate"""
+    total_returns = 0
+    quality_defects = 0
+    
+    for df in st.session_state.categorized_data.values():
+        total_returns += len(df)
+        if 'category' in df.columns:
+            quality_defects += len(df[df['category'] == 'Product Defects/Quality'])
+    
+    return (quality_defects / total_returns * 100) if total_returns > 0 else 0
+
+def display_ai_chat_tab():
+    """AI chat interface for quality insights"""
+    st.markdown("### 💬 AI Quality Assistant")
+    
+    analyzer = get_ai_analyzer()
+    if not analyzer:
+        st.warning("AI not available. Please configure API keys.")
         return
     
-    # Verify the method exists
-    if not hasattr(st.session_state.ai_analyzer, 'generate_chat_response'):
-        st.error("AI chat method not available. Please check the AI module.")
-        # Try to apply patch again
-        ensure_chat_method()
-        if not hasattr(st.session_state.ai_analyzer, 'generate_chat_response'):
-            return
-    
-    # Chat container
-    chat_container = st.container()
-    
-    # Display messages
-    with chat_container:
-        for message in st.session_state.chat_messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+    # Chat interface
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
     
     # Input
-    if prompt := st.chat_input("Ask about your analysis..."):
+    if prompt := st.chat_input("Ask about quality issues, trends, or get recommendations..."):
         # Add user message
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         
+        # Get context
+        context = {
+            'has_analysis': bool(st.session_state.categorized_data),
+            'critical_issues': len(st.session_state.critical_issues),
+            'total_returns': sum(len(df) for df in st.session_state.categorized_data.values()),
+            'quality_defect_rate': calculate_quality_defect_rate()
+        }
+        
         # Get AI response
-        try:
-            with st.spinner("Thinking..."):
-                # Build context
-                context = {
-                    'has_analysis': st.session_state.analysis_complete,
-                    'current_asin': st.session_state.target_asin,
-                    'file_count': len(st.session_state.processed_files)
-                }
-                
-                response = st.session_state.ai_analyzer.generate_chat_response(
-                    prompt, context
-                )
-                
-                st.session_state.chat_messages.append({"role": "assistant", "content": response})
-        except AttributeError as e:
-            logger.error(f"Chat method error: {e}")
-            st.session_state.chat_messages.append({
-                "role": "assistant", 
-                "content": "I'm having trouble with the chat function. Please try reloading the app."
-            })
-        except Exception as e:
-            logger.error(f"Chat error: {e}")
-            st.session_state.chat_messages.append({
-                "role": "assistant", 
-                "content": f"An error occurred: {str(e)}"
-            })
+        with st.spinner("Analyzing..."):
+            response = asyncio.run(analyzer.generate_chat_response(prompt, context))
+            st.session_state.chat_messages.append({"role": "assistant", "content": response})
         
         st.rerun()
-
-def display_export_options():
-    """Export options"""
-    st.markdown("### 💾 Export Results")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📄 Export Report (PDF)", use_container_width=True):
-            # Generate PDF report
-            st.info("PDF export coming soon")
-    
-    with col2:
-        if st.button("📊 Export Data (Excel)", use_container_width=True):
-            export_to_excel()
-    
-    with col3:
-        if st.button("📋 Copy Summary", use_container_width=True):
-            # Copy to clipboard
-            st.info("Summary copied to clipboard")
-
-def export_to_excel():
-    """Export analysis to Excel"""
-    try:
-        output = io.BytesIO()
-        
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # Summary sheet
-            if st.session_state.current_analysis:
-                summary_data = {
-                    'Metric': ['Total Returns', 'Return Trend', 'Main Issues'],
-                    'Value': [
-                        st.session_state.current_analysis.get('executive_summary', {}).get('total_returns', 0),
-                        st.session_state.current_analysis.get('executive_summary', {}).get('trend', 'N/A'),
-                        ', '.join(st.session_state.current_analysis.get('executive_summary', {}).get('main_issues', []))
-                    ]
-                }
-                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
-            
-            # Raw data sheets
-            for idx, file in enumerate(st.session_state.processed_files):
-                if file.data is not None:
-                    sheet_name = f"{file.content_category}_{idx+1}"[:31]
-                    file.data.to_excel(writer, sheet_name=sheet_name, index=False)
-        
-        output.seek(0)
-        
-        st.download_button(
-            label="Download Excel Report",
-            data=output,
-            file_name=f"quality_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        
-    except Exception as e:
-        st.error(f"Export error: {str(e)}")
 
 def main():
     """Main application"""
     initialize_session_state()
-    inject_professional_css()
+    inject_custom_css()
     
     # Header
     display_header()
     
     # Sidebar
-    with st.sidebar:
-        st.markdown("### ⚙️ Settings")
-        
-        # AI Provider status
-        if get_ai_status():
-            providers = st.session_state.ai_analyzer.get_available_providers()
-            st.success(f"✅ AI Ready ({', '.join(providers)})")
-        else:
-            st.error("❌ AI Not Configured")
-            with st.expander("Setup Instructions"):
-                st.markdown("""
-                Add to `.streamlit/secrets.toml`:
-                ```
-                openai_api_key = "sk-..."
-                claude_api_key = "sk-ant-..."
-                ```
-                """)
-        
-        st.markdown("---")
-        
-        # Options
-        st.checkbox("Auto-analyze on upload", 
-                   value=st.session_state.auto_analyze,
-                   key="auto_analyze_checkbox")
-        st.session_state.auto_analyze = st.session_state.auto_analyze_checkbox
-        
-        st.checkbox("Combine similar files", 
-                   value=st.session_state.combine_sources,
-                   key="combine_checkbox")
-        st.session_state.combine_sources = st.session_state.combine_checkbox
-        
-        # Help
-        st.markdown("---")
-        with st.expander("📖 Quick Guide"):
-            st.markdown("""
-            **1. Upload Files**
-            - Print Amazon returns as PDF
-            - Export FBA returns (.txt/.csv)
-            - Add Helium 10 reviews
-            
-            **2. Set Target ASIN**
-            - Optional but recommended
-            - Filters data automatically
-            
-            **3. Analyze**
-            - Auto-runs on upload
-            - Or click Analyze button
-            
-            **4. Review & Export**
-            - Check categorized returns
-            - Export to Excel
-            - Discuss with AI
-            """)
+    display_sidebar()
     
-    # Main content area with tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "📊 Overview", "🔍 Analysis", "💬 AI Chat"])
+    # Main content - Tabs
+    tabs = st.tabs([
+        "📤 Upload Files",
+        "📊 Analysis",
+        "🚨 Critical Issues",
+        "💡 Recommendations", 
+        "💾 Export",
+        "💬 AI Assistant"
+    ])
     
-    with tab1:
-        display_file_upload()
-        
-        if st.session_state.processed_files:
-            st.markdown("---")
-            if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
-                run_analysis()
+    with tabs[0]:
+        display_upload_tab()
     
-    with tab2:
-        display_file_overview()
+    with tabs[1]:
+        display_analysis_tab()
     
-    with tab3:
-        if st.session_state.analysis_complete:
-            display_analysis_results()
-            st.markdown("---")
-            display_export_options()
-        else:
-            st.info("Upload files and run analysis to see results here.")
+    with tabs[2]:
+        display_critical_issues_tab()
     
-    with tab4:
-        display_ai_chat()
+    with tabs[3]:
+        display_recommendations_tab()
+    
+    with tabs[4]:
+        display_export_tab()
+    
+    with tabs[5]:
+        display_ai_chat_tab()
 
 if __name__ == "__main__":
     main()
