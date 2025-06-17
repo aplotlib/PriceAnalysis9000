@@ -1,19 +1,19 @@
-# Absolute Core Dependencies
+# Core requirements
 streamlit>=1.28.0
 pandas>=2.0.0
 numpy>=1.24.0
+plotly>=5.14.0
 
-# AI APIs (required for return categorization)
-openai>=1.3.0
-anthropic>=0.7.0
+# AI providers (optional - choose one or both)
+openai>=1.0.0
+anthropic>=0.18.0
 
-# PDF Processing (required for Amazon PDF uploads)
-pdfplumber>=0.10.0
+# File processing
+openpyxl>=3.1.0  # For Excel files
+pdfplumber>=0.10.0  # For PDF files
+chardet>=5.1.0  # For encoding detection
 
-# Excel Export (required for quality reports)
-xlsxwriter>=3.1.0
-
-# HTTP (required for API calls)
-requests>=2.31.0
-
-plotly
+# Optional but recommended
+xlrd>=2.0.0  # For older Excel formats
+PyPDF2>=3.0.0  # Alternative PDF reader
+python-dateutil>=2.8.0  # For date parsing
