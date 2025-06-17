@@ -1,1007 +1,1945 @@
 """
-Enhanced AI Analysis Module - Dual AI with Advanced Injury Detection
-Version 15.0 - Medical Device Safety Focus
-
-Key Features:
-- Advanced injury detection and severity classification
-- FDA MDR compliance checks
-- Automatic flagging of reportable events
-- Detailed injury case extraction
+Amazon Returns Quality Analyzer - PDF & FBA Returns Processing
+Version: 6.0 - Enhanced Medical Device Safety Focus
+Critical: Immediate injury case notifications for quality managers
 """
 
+import streamlit as st
+import pandas as pd
+import numpy as np
 import logging
-import os
-import json
+from datetime import datetime, timedelta
+import io
+from typing import Dict, List, Any, Optional, Tuple
 import re
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple, Union
-from enum import Enum
+import json
+from collections import Counter, defaultdict
+import plotly.express as px
+import plotly.graph_objects as go
 import time
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Safe imports
-def safe_import(module_name):
-    try:
-        return __import__(module_name), True
-    except ImportError:
-        logger.warning(f"Module {module_name} not available")
-        return None, False
+# Configure page
+st.set_page_config(
+    page_title="Amazon Returns Quality Analyzer - Medical Device Safety",
+    page_icon="🚨",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Check for dependencies
-requests, has_requests = safe_import('requests')
+# Optional imports
+try:
+    import chardet
+    CHARDET_AVAILABLE = True
+except ImportError:
+    CHARDET_AVAILABLE = False
+    logger.warning("chardet not available")
 
-# API Configuration
-API_TIMEOUT = 30
-MAX_RETRIES = 2
-BATCH_SIZE = 20
-MAX_WORKERS = 5
+# Import modules with error handling
+try:
+    from pdf_analyzer import PDFAnalyzer
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    logger.warning("pdf_analyzer not available")
 
-# Token configurations by mode
-TOKEN_LIMITS = {
-    'standard': 100,
-    'enhanced': 200,     
-    'extreme': 400,      
-    'chat': 500,
-    'injury_analysis': 300  # Special mode for injury detection
-}
+try:
+    from injury_detector import InjuryDetector
+    INJURY_AVAILABLE = True
+except ImportError:
+    INJURY_AVAILABLE = False
+    logger.warning("injury_detector not available")
 
-# Model configurations
-MODELS = {
-    'openai': {
-        'standard': 'gpt-3.5-turbo',
-        'enhanced': 'gpt-3.5-turbo',
-        'extreme': 'gpt-4',
-        'chat': 'gpt-3.5-turbo',
-        'injury_analysis': 'gpt-4'  # Use GPT-4 for injury analysis
-    },
-    'claude': {
-        'standard': 'claude-3-haiku-20240307',
-        'enhanced': 'claude-3-haiku-20240307',
-        'extreme': 'claude-3-sonnet-20240229',
-        'chat': 'claude-3-haiku-20240307',
-        'injury_analysis': 'claude-3-sonnet-20240229'  # Use Sonnet for injury analysis
-    }
-}
+try:
+    from universal_file_detector import UniversalFileDetector
+    FILE_DETECTOR_AVAILABLE = True
+except ImportError:
+    FILE_DETECTOR_AVAILABLE = False
+    logger.warning("universal_file_detector not available")
 
-# Updated pricing per 1K tokens
-PRICING = {
-    # OpenAI
-    'gpt-3.5-turbo': {'input': 0.0005, 'output': 0.0015},
-    'gpt-4': {'input': 0.03, 'output': 0.06},
-    'gpt-4-turbo': {'input': 0.01, 'output': 0.03},
-    # Claude (Anthropic)
-    'claude-3-haiku-20240307': {'input': 0.00025, 'output': 0.00125},
-    'claude-3-sonnet-20240229': {'input': 0.003, 'output': 0.015},
-    'claude-3-opus-20240229': {'input': 0.015, 'output': 0.075}
-}
-
-# Medical Device Return Categories with injury risk indicators
-MEDICAL_DEVICE_CATEGORIES = [
-    'Size/Fit Issues',
-    'Comfort Issues',
-    'Product Defects/Quality',
-    'Performance/Effectiveness',
-    'Stability/Positioning Issues',
-    'Equipment Compatibility',
-    'Design/Material Issues',
-    'Wrong Product/Misunderstanding',
-    'Missing Components',
-    'Customer Error/Changed Mind',
-    'Shipping/Fulfillment Issues',
-    'Assembly/Usage Difficulty',
-    'Medical/Health Concerns',  # HIGH INJURY RISK
-    'Price/Value',
-    'Other/Miscellaneous'
-]
-
-# Injury risk categories
-INJURY_RISK_CATEGORIES = {
-    'Medical/Health Concerns': 'CRITICAL',
-    'Product Defects/Quality': 'HIGH',
-    'Stability/Positioning Issues': 'HIGH',
-    'Performance/Effectiveness': 'MEDIUM',
-    'Design/Material Issues': 'MEDIUM',
-    'Assembly/Usage Difficulty': 'MEDIUM',
-    'Comfort Issues': 'LOW'
-}
-
-# Enhanced injury keywords for medical devices
-INJURY_KEYWORDS = {
-    'critical': [
-        'hospital', 'emergency', 'emergency room', 'er visit', 'urgent care',
-        'ambulance', 'died', 'death', 'fatal', 'life threatening',
-        'severe injury', 'serious injury', 'surgery', 'operation',
-        'permanent damage', 'disability', 'paralyzed', 'unconscious',
-        'bleeding profusely', 'severe bleeding', 'hemorrhage',
-        'anaphylactic', 'seizure', 'cardiac', 'heart attack',
-        'stroke', 'respiratory failure', 'suffocation', 'choking'
-    ],
-    'high': [
-        'injured', 'hurt badly', 'hurt seriously', 'broken bone', 'fracture',
-        'bleeding', 'blood', 'wound', 'laceration', 'cut deep', 'stitches',
-        'concussion', 'head injury', 'knocked out', 'passed out', 'fainted',
-        'burn', 'burned', 'severe pain', 'excruciating', 'unbearable pain',
-        'infection', 'infected', 'swollen badly', 'allergic reaction',
-        'can\'t walk', 'can\'t move', 'immobilized', 'nerve damage',
-        'hospitalized', 'medical attention', 'doctor visit', 'emergency visit',
-        'fell down', 'collapsed', 'dropped me', 'gave way'
-    ],
-    'medium': [
-        'hurt', 'pain', 'painful', 'ache', 'sore', 'bruise', 'bruised',
-        'swelling', 'swollen', 'inflammation', 'rash', 'irritation',
-        'cut', 'scrape', 'scratch', 'minor bleeding', 'discomfort',
-        'sprain', 'strain', 'pulled muscle', 'dizzy', 'nausea',
-        'fell', 'fall', 'dropped', 'slipped', 'tripped', 'stumbled',
-        'pinched', 'squeezed', 'pressure', 'numbness', 'tingling',
-        'doctor recommended against', 'unsafe', 'dangerous'
-    ]
-}
-
-# FBA reason code mapping - Enhanced with injury indicators
-FBA_REASON_MAP = {
-    # Original mappings
-    'NOT_COMPATIBLE': 'Equipment Compatibility',
-    'DAMAGED_BY_FC': 'Product Defects/Quality',
-    'DAMAGED_BY_CARRIER': 'Shipping/Fulfillment Issues',
-    'DEFECTIVE': 'Product Defects/Quality',
-    'NOT_AS_DESCRIBED': 'Wrong Product/Misunderstanding',
-    'WRONG_ITEM': 'Wrong Product/Misunderstanding',
-    'MISSING_PARTS': 'Missing Components',
-    'QUALITY_NOT_ADEQUATE': 'Product Defects/Quality',
-    'UNWANTED_ITEM': 'Customer Error/Changed Mind',
-    'UNAUTHORIZED_PURCHASE': 'Customer Error/Changed Mind',
-    'CUSTOMER_DAMAGED': 'Customer Error/Changed Mind',
-    'SWITCHEROO': 'Wrong Product/Misunderstanding',
-    'EXPIRED_ITEM': 'Product Defects/Quality',
-    'DAMAGED_GLASS_VIAL': 'Product Defects/Quality',
-    'DIFFERENT_PRODUCT': 'Wrong Product/Misunderstanding',
-    'MISSING_ITEM': 'Missing Components',
-    'NOT_DELIVERED': 'Shipping/Fulfillment Issues',
-    'ORDERED_WRONG_ITEM': 'Customer Error/Changed Mind',
-    'UNNEEDED_ITEM': 'Customer Error/Changed Mind',
-    'BAD_GIFT': 'Customer Error/Changed Mind',
-    'INACCURATE_WEBSITE_DESCRIPTION': 'Wrong Product/Misunderstanding',
-    'BETTER_PRICE_AVAILABLE': 'Price/Value',
-    'DOES_NOT_FIT': 'Size/Fit Issues',
-    'NOT_COMPATIBLE_WITH_DEVICE': 'Equipment Compatibility',
-    'UNSATISFACTORY_PRODUCT': 'Performance/Effectiveness',
-    'ARRIVED_LATE': 'Shipping/Fulfillment Issues',
-    # Additional mappings
-    'TOO_SMALL': 'Size/Fit Issues',
-    'TOO_LARGE': 'Size/Fit Issues',
-    'UNCOMFORTABLE': 'Comfort Issues',
-    'DIFFICULT_TO_USE': 'Assembly/Usage Difficulty',
-    'DAMAGED': 'Product Defects/Quality',
-    'BROKEN': 'Product Defects/Quality',
-    'POOR_QUALITY': 'Product Defects/Quality',
-    'NOT_WORKING': 'Product Defects/Quality',
-    'DOESNT_WORK': 'Product Defects/Quality',
-    # Injury-related mappings
-    'CAUSED_INJURY': 'Medical/Health Concerns',
-    'SAFETY_ISSUE': 'Medical/Health Concerns',
-    'HEALTH_CONCERN': 'Medical/Health Concerns'
-}
-
-# Quick categorization patterns - Enhanced with injury detection
-QUICK_PATTERNS = {
-    'Medical/Health Concerns': [
-        r'injur', r'hurt', r'pain', r'hospital', r'emergency', r'doctor',
-        r'medical', r'health', r'safety', r'dangerous', r'unsafe',
-        r'allergic', r'reaction', r'bleeding', r'blood', r'wound',
-        r'burn', r'infection', r'fever', r'sick', r'ill'
-    ],
-    'Size/Fit Issues': [
-        r'too (small|large|big|tight|loose)', r'doesn[\']?t fit', r'wrong size',
-        r'size issue', r'(small|large)r than expected', r'fit issue', r'too (tall|short|wide)',
-        r'sizing issues', r'bad fit', r'didn[\']?t fit', r'doesn[\']?t fit well'
-    ],
-    'Product Defects/Quality': [
-        r'defect', r'broken', r'damaged', r'poor quality', r'didn[\']?t work',
-        r'stopped working', r'malfunction', r'fell apart', r'ripped', r'torn',
-        r'does not work properly', r'bad velcro', r'velcro doesn[\']?t stick',
-        r'defective handles', r'defective suction cups', r'won[\']?t inflate',
-        r'inflation issues', r'not working', r'broke while using', r'collapsed'
-    ],
-    # ... (rest of patterns remain the same)
-}
-
-# Compile patterns for speed
-COMPILED_PATTERNS = {
-    category: [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
-    for category, patterns in QUICK_PATTERNS.items()
-}
-
-# Injury detection patterns
-INJURY_PATTERNS = {
-    severity: [re.compile(r'\b' + keyword + r'\b', re.IGNORECASE) for keyword in keywords]
-    for severity, keywords in INJURY_KEYWORDS.items()
-}
-
-class AIProvider(Enum):
-    OPENAI = "openai"
-    CLAUDE = "claude"
-    BOTH = "both"
-    FASTEST = "fastest"
-
-@dataclass
-class InjuryCase:
-    """Detailed injury case information"""
-    order_id: str
-    asin: str
-    sku: str
-    return_date: str
-    severity: str  # critical, high, medium
-    injury_keywords: List[str]
-    full_comment: str
-    category: str
-    confidence: float
-    reportable: bool  # FDA MDR requirement
-    device_type: str
-    potential_causes: List[str]
-    recommendation: str
-
-@dataclass
-class CostEstimate:
-    """Cost estimation data class"""
-    provider: str
-    model: str
-    input_tokens: int
-    output_tokens: int
-    input_cost: float
-    output_cost: float
-    total_cost: float
-    
-    def to_dict(self):
-        return {
-            'provider': self.provider,
-            'model': self.model,
-            'input_tokens': self.input_tokens,
-            'output_tokens': self.output_tokens,
-            'input_cost': self.input_cost,
-            'output_cost': self.output_cost,
-            'total_cost': self.total_cost
-        }
-
-def estimate_tokens(text: str) -> int:
-    """Estimate token count (rough approximation)"""
-    return max(len(text) // 4, len(text.split()) * 4 // 3)
-
-def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> CostEstimate:
-    """Calculate cost for API usage"""
-    if model not in PRICING:
-        logger.warning(f"Model {model} not in pricing table")
-        return CostEstimate("unknown", model, input_tokens, output_tokens, 0, 0, 0)
-    
-    pricing = PRICING[model]
-    input_cost = (input_tokens / 1000) * pricing['input']
-    output_cost = (output_tokens / 1000) * pricing['output']
-    total_cost = input_cost + output_cost
-    
-    provider = 'openai' if 'gpt' in model else 'claude'
-    
-    return CostEstimate(
-        provider=provider,
-        model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        input_cost=input_cost,
-        output_cost=output_cost,
-        total_cost=total_cost
+try:
+    from enhanced_ai_analysis import (
+        EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES, 
+        FBA_REASON_MAP, INJURY_RISK_CATEGORIES, detect_injury_severity
     )
-
-def detect_injury_severity(complaint: str) -> Tuple[str, List[str]]:
-    """Detect injury severity and keywords"""
-    if not complaint:
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+    logger.warning("enhanced_ai_analysis not available")
+    # Define fallbacks
+    MEDICAL_DEVICE_CATEGORIES = [
+        'Size/Fit Issues',
+        'Comfort Issues',
+        'Product Defects/Quality',
+        'Performance/Effectiveness',
+        'Stability/Positioning Issues',
+        'Equipment Compatibility',
+        'Design/Material Issues',
+        'Wrong Product/Misunderstanding',
+        'Missing Components',
+        'Customer Error/Changed Mind',
+        'Shipping/Fulfillment Issues',
+        'Assembly/Usage Difficulty',
+        'Medical/Health Concerns',
+        'Price/Value',
+        'Other/Miscellaneous'
+    ]
+    FBA_REASON_MAP = {}
+    INJURY_RISK_CATEGORIES = {}
+    
+    def detect_injury_severity(text):
         return 'none', []
     
-    complaint_lower = complaint.lower()
-    found_keywords = []
+    class AIProvider:
+        FASTEST = "fastest"
+        OPENAI = "openai"
+        CLAUDE = "claude"
+        BOTH = "both"
     
-    # Check each severity level
-    for severity in ['critical', 'high', 'medium']:
-        for pattern in INJURY_PATTERNS[severity]:
-            matches = pattern.findall(complaint_lower)
-            if matches:
-                found_keywords.extend(matches)
+    class EnhancedAIAnalyzer:
+        def __init__(self, provider):
+            self.provider = provider
+            self.injury_cases = []
         
-        if found_keywords:
-            return severity, list(set(found_keywords))
-    
-    return 'none', []
+        def categorize_return(self, complaint, fba_reason=None, return_reason=None, return_data=None):
+            return 'Other/Miscellaneous', 0.1, 'none', 'en'
+        
+        def get_cost_summary(self):
+            return {'total_cost': 0.0, 'api_calls': 0}
+        
+        def get_injury_summary(self):
+            return {'total_injuries': 0, 'critical': 0, 'high': 0, 'medium': 0, 'cases': []}
+        
+        def export_injury_report(self):
+            return "No injury cases detected"
 
-def quick_categorize(complaint: str, fba_reason: str = None, return_reason: str = None) -> Optional[str]:
-    """Quick pattern-based categorization with injury priority"""
-    if not complaint:
-        complaint = ""
+try:
+    from smart_column_mapper import SmartColumnMapper
+    MAPPER_AVAILABLE = True
+except ImportError:
+    MAPPER_AVAILABLE = False
+    logger.warning("smart_column_mapper not available")
     
-    # Check for injury indicators first
-    injury_severity, injury_keywords = detect_injury_severity(complaint)
-    if injury_severity in ['critical', 'high']:
-        return 'Medical/Health Concerns'
-    
-    # Check FBA reason
-    if fba_reason and fba_reason in FBA_REASON_MAP:
-        return FBA_REASON_MAP[fba_reason]
-    
-    # Check Amazon return reason
-    if return_reason:
-        return_reason_lower = return_reason.lower().strip()
-        # Add injury-specific checks
-        if any(word in return_reason_lower for word in ['injury', 'hurt', 'medical', 'safety']):
-            return 'Medical/Health Concerns'
-    
-    # Combined text for analysis
-    combined_text = f"{return_reason or ''} {complaint}".lower().strip()
-    
-    # Check compiled patterns (Medical/Health Concerns first)
-    pattern_order = ['Medical/Health Concerns'] + [cat for cat in COMPILED_PATTERNS.keys() if cat != 'Medical/Health Concerns']
-    
-    for category in pattern_order:
-        if category in COMPILED_PATTERNS:
-            for pattern in COMPILED_PATTERNS[category]:
-                if pattern.search(combined_text):
-                    return category
-    
-    return None
+    class SmartColumnMapper:
+        def __init__(self, ai_analyzer=None):
+            self.ai_analyzer = ai_analyzer
+        
+        def detect_columns(self, df):
+            column_mapping = {}
+            for col in df.columns:
+                col_lower = str(col).lower()
+                if 'date' in col_lower:
+                    column_mapping['date'] = col
+                elif 'complaint' in col_lower or 'comment' in col_lower:
+                    column_mapping['complaint'] = col
+                elif 'product' in col_lower or 'sku' in col_lower:
+                    column_mapping['product_id'] = col
+                elif 'asin' in col_lower:
+                    column_mapping['asin'] = col
+                elif 'order' in col_lower:
+                    column_mapping['order_id'] = col
+            return column_mapping
+        
+        def validate_mapping(self, df, mapping):
+            return {'is_valid': True, 'missing_required': [], 'warnings': []}
+        
+        def map_dataframe(self, df, column_mapping):
+            return df
 
-class CostTracker:
-    """Track API costs across sessions"""
-    
-    def __init__(self):
-        self.session_costs = []
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cost = 0.0
-        self.api_calls = 0
-        self.start_time = datetime.now()
-        self.quick_categorizations = 0
-        self.ai_categorizations = 0
-        self.injury_cases_detected = 0
-    
-    def add_cost(self, cost_estimate: CostEstimate):
-        """Add cost to tracking"""
-        self.session_costs.append(cost_estimate)
-        self.total_input_tokens += cost_estimate.input_tokens
-        self.total_output_tokens += cost_estimate.output_tokens
-        self.total_cost += cost_estimate.total_cost
-        self.api_calls += 1
-    
-    def add_quick_categorization(self):
-        """Track quick categorization"""
-        self.quick_categorizations += 1
-    
-    def add_ai_categorization(self):
-        """Track AI categorization"""
-        self.ai_categorizations += 1
-    
-    def add_injury_case(self):
-        """Track injury case detection"""
-        self.injury_cases_detected += 1
-    
-    def get_summary(self) -> Dict[str, Any]:
-        """Get cost summary"""
-        duration = (datetime.now() - self.start_time).total_seconds() / 60
-        
-        return {
-            'total_cost': round(self.total_cost, 4),
-            'api_calls': self.api_calls,
-            'total_tokens': self.total_input_tokens + self.total_output_tokens,
-            'quick_categorizations': self.quick_categorizations,
-            'ai_categorizations': self.ai_categorizations,
-            'injury_cases_detected': self.injury_cases_detected,
-            'speed_improvement': f"{self.quick_categorizations / max(1, self.quick_categorizations + self.ai_categorizations) * 100:.1f}%",
-            'average_cost_per_call': round(self.total_cost / max(1, self.api_calls), 4),
-            'duration_minutes': round(duration, 1),
-            'breakdown_by_provider': self._get_provider_breakdown()
-        }
-    
-    def _get_provider_breakdown(self) -> Dict[str, Dict]:
-        """Get cost breakdown by provider"""
-        breakdown = {'openai': {'calls': 0, 'cost': 0}, 'claude': {'calls': 0, 'cost': 0}}
-        
-        for cost in self.session_costs:
-            provider = cost.provider
-            if provider in breakdown:
-                breakdown[provider]['calls'] += 1
-                breakdown[provider]['cost'] += cost.total_cost
-        
-        return breakdown
+MODULES_AVAILABLE = all([PDF_AVAILABLE, AI_AVAILABLE])
 
-class EnhancedAIAnalyzer:
-    """Main AI analyzer with injury detection focus"""
+# Professional color scheme with safety focus
+COLORS = {
+    'primary': '#00D9FF',
+    'secondary': '#FF006E',
+    'accent': '#FFB700',
+    'success': '#00F5A0',
+    'warning': '#FF6B35',
+    'danger': '#FF0054',
+    'critical': '#DC143C',  # For critical injuries
+    'injury': '#FF1744',    # For injury alerts
+    'dark': '#2C3E50',
+    'light': '#ECF0F1',
+    'quality': '#9B59B6'
+}
+
+# Quality-focused categories
+QUALITY_CATEGORIES = [
+    'Product Defects/Quality',
+    'Performance/Effectiveness',
+    'Design/Material Issues',
+    'Medical/Health Concerns',
+    'Missing Components'
+]
+
+def inject_professional_css():
+    """Professional CSS styling with injury alert focus"""
+    st.markdown(f"""
+    <style>
+    /* Professional styling */
+    .main {{
+        padding: 0;
+        background-color: #FAFAFA;
+    }}
     
-    def __init__(self, provider: AIProvider = AIProvider.FASTEST):
-        self.provider = provider
-        self.openai_key = self._get_api_key('openai')
-        self.claude_key = self._get_api_key('claude')
-        
-        # Initialize tracking
-        self.cost_tracker = CostTracker()
-        self.injury_cases = []  # Store all detected injury cases
-        
-        # Initialize API availability
-        self.openai_configured = bool(self.openai_key and has_requests)
-        self.claude_configured = bool(self.claude_key and has_requests)
-        
-        # Thread pool for parallel processing
-        self.executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-        
-        # Session for connection pooling
-        self.session = None
-        if has_requests:
-            self.session = requests.Session()
-        
-        logger.info(f"AI Analyzer initialized - OpenAI: {self.openai_configured}, Claude: {self.claude_configured}, Mode: {provider.value}")
+    /* Header */
+    .main-header {{
+        background: linear-gradient(135deg, {COLORS['dark']} 0%, {COLORS['primary']} 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }}
     
-    def _get_api_key(self, provider: str) -> Optional[str]:
-        """Get API key from multiple sources"""
-        # Try Streamlit secrets first
+    .main-header h1 {{
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }}
+    
+    /* Critical injury alert */
+    .injury-alert {{
+        background: linear-gradient(135deg, {COLORS['injury']} 0%, {COLORS['critical']} 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        box-shadow: 0 0 20px rgba(255, 23, 68, 0.5);
+        animation: pulse 2s infinite;
+    }}
+    
+    @keyframes pulse {{
+        0% {{ box-shadow: 0 0 20px rgba(255, 23, 68, 0.5); }}
+        50% {{ box-shadow: 0 0 30px rgba(255, 23, 68, 0.8); }}
+        100% {{ box-shadow: 0 0 20px rgba(255, 23, 68, 0.5); }}
+    }}
+    
+    /* Injury case card */
+    .injury-case-card {{
+        background: white;
+        border-left: 5px solid {COLORS['injury']};
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 2px 10px rgba(255, 23, 68, 0.2);
+    }}
+    
+    .injury-severity-critical {{
+        background: {COLORS['critical']};
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-weight: bold;
+        display: inline-block;
+    }}
+    
+    .injury-severity-high {{
+        background: {COLORS['danger']};
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-weight: bold;
+        display: inline-block;
+    }}
+    
+    .injury-severity-medium {{
+        background: {COLORS['warning']};
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-weight: bold;
+        display: inline-block;
+    }}
+    
+    /* Quality alert box */
+    .quality-alert {{
+        background: linear-gradient(135deg, rgba(155, 89, 182, 0.1), rgba(155, 89, 182, 0.2));
+        border: 2px solid {COLORS['quality']};
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+    }}
+    
+    /* Category cards */
+    .category-card {{
+        background: white;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 0.5rem 0;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        border-left: 5px solid {COLORS['primary']};
+    }}
+    
+    .quality-issue-card {{
+        border-left-color: {COLORS['danger']};
+    }}
+    
+    /* Metric cards */
+    .metric-card {{
+        background: white;
+        border-radius: 8px;
+        padding: 1.5rem;
+        text-align: center;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        border: 1px solid #E0E0E0;
+        transition: transform 0.3s;
+    }}
+    
+    .metric-card:hover {{
+        transform: translateY(-5px);
+        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+    }}
+    
+    .metric-value {{
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0.5rem 0;
+    }}
+    
+    .metric-label {{
+        color: {COLORS['dark']};
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }}
+    
+    /* FDA MDR alert */
+    .fda-alert {{
+        background: {COLORS['critical']};
+        color: white;
+        padding: 1rem;
+        border-radius: 5px;
+        font-weight: bold;
+        text-align: center;
+        margin: 1rem 0;
+    }}
+    
+    /* Progress indicators */
+    .quality-score {{
+        background: linear-gradient(90deg, {COLORS['danger']} 0%, {COLORS['warning']} 50%, {COLORS['success']} 100%);
+        height: 10px;
+        border-radius: 5px;
+        position: relative;
+    }}
+    
+    /* Data tables */
+    .dataframe {{
+        font-size: 0.9rem;
+    }}
+    
+    /* Buttons */
+    .stButton > button {{
+        background: {COLORS['dark']};
+        color: white;
+        border: none;
+        padding: 0.75rem 2rem;
+        border-radius: 5px;
+        font-weight: 600;
+        transition: all 0.3s;
+    }}
+    
+    .stButton > button:hover {{
+        background: {COLORS['primary']};
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }}
+    
+    /* Emergency button */
+    .emergency-button {{
+        background: {COLORS['injury']} !important;
+        animation: pulse 2s infinite;
+    }}
+    
+    /* Hide Streamlit branding */
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    </style>
+    """, unsafe_allow_html=True)
+
+def initialize_session_state():
+    """Initialize session state variables"""
+    defaults = {
+        # Data storage
+        'raw_data': None,
+        'processed_data': None,
+        'categorized_data': None,
+        'file_type': None,
+        
+        # Analysis results
+        'category_analysis': {},
+        'product_analysis': {},
+        'quality_metrics': {},
+        'injury_analysis': None,
+        'ai_insights': None,
+        
+        # Injury tracking
+        'injury_cases': [],
+        'critical_injuries': 0,
+        'fda_mdr_required': False,
+        
+        # Processing state
+        'processing_complete': False,
+        'file_uploaded': False,
+        'analysis_ready': False,
+        
+        # AI components
+        'ai_analyzer': None,
+        'pdf_analyzer': None,
+        'injury_detector': None,
+        'file_detector': None,
+        'column_mapper': None,
+        
+        # Filters
+        'selected_asin': 'ALL',
+        'date_range': 'All Time',
+        'category_filter': 'All',
+        'show_injuries_only': False,
+        
+        # Tracking
+        'total_returns': 0,
+        'quality_issues': 0,
+        'total_injuries': 0,
+        'processing_time': 0.0,
+        'api_cost': 0.0
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+def check_api_keys():
+    """Check for API keys"""
+    keys_found = {}
+    
+    try:
+        if hasattr(st, 'secrets'):
+            # Check OpenAI
+            for key in ['OPENAI_API_KEY', 'openai_api_key', 'openai']:
+                if key in st.secrets:
+                    keys_found['openai'] = str(st.secrets[key]).strip()
+                    break
+            
+            # Check Claude
+            for key in ['ANTHROPIC_API_KEY', 'anthropic_api_key', 'claude_api_key', 'claude']:
+                if key in st.secrets:
+                    keys_found['claude'] = str(st.secrets[key]).strip()
+                    break
+    except Exception as e:
+        logger.warning(f"Error checking secrets: {e}")
+    
+    return keys_found
+
+def initialize_analyzers():
+    """Initialize all analyzer components"""
+    if not st.session_state.ai_analyzer and AI_AVAILABLE:
         try:
-            import streamlit as st
-            if hasattr(st, 'secrets'):
-                if provider == 'openai':
-                    for key_name in ["OPENAI_API_KEY", "openai_api_key", "openai"]:
-                        if key_name in st.secrets:
-                            key_value = str(st.secrets[key_name]).strip()
-                            if key_value and key_value.startswith('sk-'):
-                                logger.info(f"Found {provider} key in Streamlit secrets")
-                                return key_value
-                elif provider == 'claude':
-                    for key_name in ["ANTHROPIC_API_KEY", "anthropic_api_key", "claude_api_key", "claude"]:
-                        if key_name in st.secrets:
-                            key_value = str(st.secrets[key_name]).strip()
-                            if key_value:
-                                logger.info(f"Found {provider} key in Streamlit secrets")
-                                return key_value
+            keys = check_api_keys()
+            if keys:
+                # Set environment variables
+                if 'openai' in keys:
+                    os.environ['OPENAI_API_KEY'] = keys['openai']
+                if 'claude' in keys:
+                    os.environ['ANTHROPIC_API_KEY'] = keys['claude']
+                
+                st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
+                logger.info("AI analyzer initialized with injury detection")
         except Exception as e:
-            logger.debug(f"Streamlit secrets not available: {e}")
-        
-        # Try environment variables
-        env_vars = {
-            'openai': ["OPENAI_API_KEY", "OPENAI_API"],
-            'claude': ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"]
-        }
-        
-        for env_name in env_vars.get(provider, []):
-            api_key = os.environ.get(env_name, '').strip()
-            if api_key:
-                logger.info(f"Found {provider} key in environment")
-                return api_key
-        
-        logger.warning(f"No {provider} API key found")
-        return None
+            logger.error(f"Failed to initialize AI: {e}")
     
-    def get_api_status(self) -> Dict[str, Any]:
-        """Get API status with injury tracking"""
-        status = {
-            'available': self.openai_configured or self.claude_configured,
-            'openai_configured': self.openai_configured,
-            'claude_configured': self.claude_configured,
-            'dual_ai_available': self.openai_configured and self.claude_configured,
-            'provider': self.provider.value,
-            'cost_summary': self.cost_tracker.get_summary(),
-            'injury_cases_found': len(self.injury_cases),
-            'message': ''
-        }
-        
-        if status['dual_ai_available']:
-            status['message'] = 'Both OpenAI and Claude APIs are configured'
-        elif self.openai_configured:
-            status['message'] = 'OpenAI API is configured (Claude not available)'
-        elif self.claude_configured:
-            status['message'] = 'Claude API is configured (OpenAI not available)'
+    if not st.session_state.pdf_analyzer and PDF_AVAILABLE:
+        st.session_state.pdf_analyzer = PDFAnalyzer()
+    
+    if not st.session_state.injury_detector and INJURY_AVAILABLE:
+        st.session_state.injury_detector = InjuryDetector()
+    
+    if not st.session_state.file_detector and FILE_DETECTOR_AVAILABLE:
+        st.session_state.file_detector = UniversalFileDetector()
+    
+    if not st.session_state.get('column_mapper') and MAPPER_AVAILABLE:
+        st.session_state.column_mapper = SmartColumnMapper(st.session_state.ai_analyzer)
+
+def display_header():
+    """Display application header with injury alerts"""
+    st.markdown("""
+    <div class="main-header">
+        <h1>🚨 Amazon Returns Quality Analyzer</h1>
+        <p style="font-size: 1.2rem; margin-top: 0.5rem;">
+            Medical Device Safety & Injury Detection System
+        </p>
+        <p style="font-size: 1rem; opacity: 0.9;">
+            Automatic injury case identification • FDA MDR compliance • Quality improvement tracking
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Show critical injury alert if present
+    if st.session_state.critical_injuries > 0:
+        st.markdown(f"""
+        <div class="injury-alert">
+            <h2 style="margin: 0;">
+                ⚠️ CRITICAL SAFETY ALERT: {st.session_state.critical_injuries} Critical Injury Case{'s' if st.session_state.critical_injuries > 1 else ''} Detected
+            </h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+                Immediate action required - Review injury cases below for potential FDA MDR reporting
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Show quality alerts
+    elif st.session_state.quality_issues > 0:
+        quality_rate = (st.session_state.quality_issues / st.session_state.total_returns * 100) if st.session_state.total_returns > 0 else 0
+        if quality_rate > 30:
+            st.markdown(f"""
+            <div class="quality-alert">
+                <h2 style="color: {COLORS['quality']}; margin: 0;">
+                    ⚠️ {st.session_state.quality_issues} Quality-Related Returns ({quality_rate:.1f}%)
+                </h2>
+                <p style="margin: 0.5rem 0 0 0;">Review quality categories for improvement opportunities</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+def display_injury_summary():
+    """Display detailed injury case summary"""
+    if not st.session_state.ai_analyzer:
+        return
+    
+    injury_summary = st.session_state.ai_analyzer.get_injury_summary()
+    
+    if injury_summary['total_injuries'] == 0:
+        return
+    
+    st.markdown("### 🚨 Injury Case Summary")
+    
+    # Summary metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card" style="border: 2px solid {COLORS['injury']};">
+            <div class="metric-label">Total Injuries</div>
+            <div class="metric-value" style="color: {COLORS['injury']};">{injury_summary['total_injuries']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card" style="border: 2px solid {COLORS['critical']};">
+            <div class="metric-label">Critical</div>
+            <div class="metric-value" style="color: {COLORS['critical']};">{injury_summary['critical']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card" style="border: 2px solid {COLORS['danger']};">
+            <div class="metric-label">High Severity</div>
+            <div class="metric-value" style="color: {COLORS['danger']};">{injury_summary['high']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card" style="border: 2px solid {COLORS['warning']};">
+            <div class="metric-label">Medium</div>
+            <div class="metric-value" style="color: {COLORS['warning']};">{injury_summary['medium']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col5:
+        if injury_summary['fda_mdr_required']:
+            st.markdown(f"""
+            <div class="fda-alert">
+                FDA MDR<br>REQUIRED
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            status['message'] = 'No APIs configured'
-        
-        return status
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Reportable</div>
+                <div class="metric-value">{injury_summary['reportable_cases']}</div>
+            </div>
+            """, unsafe_allow_html=True)
     
-    def _call_openai(self, prompt: str, system_prompt: str, mode: str = 'standard') -> Tuple[Optional[str], Optional[CostEstimate]]:
-        """Call OpenAI API with cost tracking"""
-        if not self.openai_configured:
-            return None, None
-        
-        model = MODELS['openai'][mode]
-        max_tokens = TOKEN_LIMITS[mode]
-        
-        # Estimate input tokens
-        input_tokens = estimate_tokens(system_prompt + prompt)
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.openai_key}"
-        }
-        
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1,
-            "max_tokens": max_tokens
-        }
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = (self.session or requests).post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=API_TIMEOUT
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    content = result["choices"][0]["message"]["content"].strip()
-                    
-                    # Get actual token usage
-                    usage = result.get("usage", {})
-                    actual_input = usage.get("prompt_tokens", input_tokens)
-                    actual_output = usage.get("completion_tokens", len(content.split()))
-                    
-                    # Calculate cost
-                    cost = calculate_cost(model, actual_input, actual_output)
-                    self.cost_tracker.add_cost(cost)
-                    
-                    return content, cost
-                
-                elif response.status_code == 429:
-                    wait_time = min(2 ** attempt, 10)
-                    logger.warning(f"OpenAI rate limited, waiting {wait_time}s")
-                    time.sleep(wait_time)
-                    continue
-                
-                else:
-                    logger.error(f"OpenAI API error {response.status_code}")
-                    return None, None
-                    
-            except Exception as e:
-                logger.error(f"OpenAI call error: {e}")
-                if attempt == MAX_RETRIES - 1:
-                    return None, None
-                time.sleep(1)
-        
-        return None, None
+    # Detailed injury cases
+    st.markdown("#### 📋 Detailed Injury Cases")
     
-    def _call_claude(self, prompt: str, system_prompt: str, mode: str = 'standard') -> Tuple[Optional[str], Optional[CostEstimate]]:
-        """Call Claude API with cost tracking"""
-        if not self.claude_configured:
-            return None, None
-        
-        model = MODELS['claude'][mode]
-        max_tokens = TOKEN_LIMITS[mode]
-        
-        # Estimate input tokens
-        input_tokens = estimate_tokens(system_prompt + prompt)
-        
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": self.claude_key,
-            "anthropic-version": "2023-06-01"
-        }
-        
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": 0.1,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = (self.session or requests).post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers=headers,
-                    json=payload,
-                    timeout=API_TIMEOUT
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    content = result["content"][0]["text"].strip()
-                    
-                    # Get actual token usage
-                    usage = result.get("usage", {})
-                    actual_input = usage.get("input_tokens", input_tokens)
-                    actual_output = usage.get("output_tokens", len(content.split()))
-                    
-                    # Calculate cost
-                    cost = calculate_cost(model, actual_input, actual_output)
-                    self.cost_tracker.add_cost(cost)
-                    
-                    return content, cost
-                
-                elif response.status_code == 429:
-                    wait_time = min(2 ** attempt, 10)
-                    logger.warning(f"Claude rate limited, waiting {wait_time}s")
-                    time.sleep(wait_time)
-                    continue
-                
-                else:
-                    logger.error(f"Claude API error {response.status_code}: {response.text}")
-                    return None, None
-                    
-            except Exception as e:
-                logger.error(f"Claude call error: {e}")
-                if attempt == MAX_RETRIES - 1:
-                    return None, None
-                time.sleep(1)
-        
-        return None, None
-    
-    def detect_injury_case(self, return_data: Dict[str, Any]) -> Optional[InjuryCase]:
-        """Detect if return involves injury and create detailed case"""
-        complaint = return_data.get('customer_comment', '') or return_data.get('buyer_comment', '')
-        if not complaint:
-            return None
-        
-        # Detect injury severity
-        severity, keywords = detect_injury_severity(complaint)
-        if severity == 'none':
-            return None
-        
-        # Determine if reportable (FDA MDR)
-        reportable = severity in ['critical', 'high'] or any(
-            keyword in ['death', 'permanent', 'surgery', 'hospitalization'] 
-            for keyword in keywords
+    # Filter options
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        severity_filter = st.selectbox(
+            "Filter by severity",
+            ["All", "Critical", "High", "Medium"],
+            key="injury_severity_filter"
         )
-        
-        # Analyze device type and potential causes
-        device_type = self._identify_device_type(return_data)
-        potential_causes = self._analyze_potential_causes(complaint, device_type)
-        
-        # Generate recommendation
-        recommendation = self._generate_safety_recommendation(severity, device_type, potential_causes)
-        
-        # Create injury case
-        injury_case = InjuryCase(
-            order_id=return_data.get('order_id', 'Unknown'),
-            asin=return_data.get('asin', 'Unknown'),
-            sku=return_data.get('sku', 'Unknown'),
-            return_date=return_data.get('return_date', 'Unknown'),
-            severity=severity,
-            injury_keywords=keywords,
-            full_comment=complaint,
-            category='Medical/Health Concerns',
-            confidence=0.95 if severity == 'critical' else 0.85,
-            reportable=reportable,
-            device_type=device_type,
-            potential_causes=potential_causes,
-            recommendation=recommendation
+    with col2:
+        asin_filter = st.selectbox(
+            "Filter by ASIN",
+            ["All"] + list(set(case.asin for case in injury_summary['cases'])),
+            key="injury_asin_filter"
         )
-        
-        # Track injury case
-        self.injury_cases.append(injury_case)
-        self.cost_tracker.add_injury_case()
-        
-        return injury_case
+    with col3:
+        if st.button("Export Injury Report", type="primary"):
+            export_injury_report()
     
-    def _identify_device_type(self, return_data: Dict[str, Any]) -> str:
-        """Identify medical device type from SKU/product info"""
-        sku = str(return_data.get('sku', '')).upper()
-        product_name = str(return_data.get('product_name', '')).lower()
+    # Display cases
+    filtered_cases = injury_summary['cases']
+    
+    if severity_filter != "All":
+        filtered_cases = [c for c in filtered_cases if c.severity == severity_filter.lower()]
+    
+    if asin_filter != "All":
+        filtered_cases = [c for c in filtered_cases if c.asin == asin_filter]
+    
+    for idx, case in enumerate(filtered_cases):
+        severity_class = f"injury-severity-{case.severity}"
         
-        # Device type patterns
-        device_patterns = {
-            'mobility': ['MOB', 'WALK', 'CANE', 'CRUTCH', 'WHEEL', 'SCOOT'],
-            'support': ['SUP', 'BRACE', 'SLING', 'COMPRESS', 'IMMOBIL'],
-            'bathroom': ['BATH', 'TOIL', 'SHOWER', 'COMMODE', 'RAIL'],
-            'respiratory': ['CPAP', 'OXYGEN', 'NEBUL', 'BREATH'],
-            'monitoring': ['MONITOR', 'SENSOR', 'ALARM', 'GLUCOSE', 'PRESSURE']
+        st.markdown(f"""
+        <div class="injury-case-card">
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="flex: 1;">
+                    <h4 style="margin: 0;">Case #{idx + 1}: Order {case.order_id}</h4>
+                    <div style="margin: 0.5rem 0;">
+                        <span class="{severity_class}">{case.severity.upper()}</span>
+                        {' <span style="background: #FF5722; color: white; padding: 0.2rem 0.5rem; border-radius: 15px; font-size: 0.8rem;">FDA MDR REQUIRED</span>' if case.reportable else ''}
+                    </div>
+                    <div style="color: #666; margin: 0.5rem 0;">
+                        <strong>ASIN:</strong> {case.asin} | <strong>SKU:</strong> {case.sku} | <strong>Date:</strong> {case.return_date}
+                    </div>
+                    <div style="color: #666; margin: 0.5rem 0;">
+                        <strong>Device Type:</strong> {case.device_type} | <strong>Potential Causes:</strong> {', '.join(case.potential_causes)}
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin: 1rem 0;">
+                <strong>Injury Keywords Detected:</strong>
+                <div style="margin: 0.5rem 0;">
+                    {' '.join([f'<span style="background: #FFE0E0; color: #D32F2F; padding: 0.2rem 0.5rem; margin: 0.2rem; border-radius: 15px; display: inline-block;">{kw}</span>' for kw in case.injury_keywords])}
+                </div>
+            </div>
+            
+            <div style="background: #F5F5F5; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
+                <strong>Customer Comment:</strong>
+                <div style="margin-top: 0.5rem; font-style: italic;">"{case.full_comment}"</div>
+            </div>
+            
+            <div style="background: #FFF3E0; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
+                <strong>Quality Team Recommendation:</strong>
+                <div style="margin-top: 0.5rem;">{case.recommendation}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+def export_injury_report():
+    """Export detailed injury report"""
+    if st.session_state.ai_analyzer:
+        report = st.session_state.ai_analyzer.export_injury_report()
+        
+        st.download_button(
+            label="Download Injury Report",
+            data=report,
+            file_name=f"injury_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain"
+        )
+
+def upload_section():
+    """File upload section for PDF and structured data files"""
+    st.markdown("### 📁 Upload Amazon Return Data")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        <div class="category-card">
+            <h4>📄 PDF from Seller Central</h4>
+            <p>Export from Manage Returns → Print as PDF</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div class="category-card">
+            <h4>📊 Structured Data Files</h4>
+            <p>CSV, Excel, TXT files with return data</p>
+            <small>• FBA Returns Report (.txt)<br>
+            • Quality tracking spreadsheets<br>
+            • Custom return exports</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Injury detection notice
+    st.info("""
+    🚨 **Automatic Injury Detection**: The system will automatically identify and flag any potential injury cases for immediate review.
+    All injury keywords like "hurt", "pain", "hospital", "bleeding" etc. will be detected and categorized by severity.
+    """)
+    
+    # File format examples
+    with st.expander("📋 Supported File Formats & Examples"):
+        st.markdown("""
+        **The tool uses AI to automatically detect columns and injury cases!**
+        
+        Common formats we handle:
+        
+        **1. Amazon FBA Returns (.txt)**
+        - Headers: `return-date`, `order-id`, `sku`, `asin`, `reason`, `customer-comments`
+        
+        **2. Quality Tracking Spreadsheets**
+        - Example: `Date Complaint was made`, `Product Identifier Tag`, `ASIN`, `Order #`, `Complaint`
+        
+        **3. Custom Exports**
+        - Any file with columns for: dates, product IDs, order numbers, and complaint text
+        
+        **The AI will automatically:**
+        - Map your columns to appropriate fields
+        - Detect and flag injury cases
+        - Categorize returns for quality analysis
+        """)
+    
+    uploaded_file = st.file_uploader(
+        "Choose file",
+        type=['pdf', 'txt', 'csv', 'tsv', 'xlsx', 'xls'],
+        help="Upload PDF from Seller Central or any structured data file with return information"
+    )
+    
+    if uploaded_file:
+        process_file(uploaded_file)
+
+def process_file(uploaded_file):
+    """Process uploaded file based on type"""
+    try:
+        initialize_analyzers()
+        
+        file_extension = uploaded_file.name.split('.')[-1].lower()
+        file_content = uploaded_file.read()
+        
+        with st.spinner("🔍 Analyzing return data and detecting injury cases..."):
+            start_time = time.time()
+            
+            if file_extension == 'pdf':
+                process_pdf_file(file_content, uploaded_file.name)
+            elif file_extension in ['txt', 'csv', 'tsv', 'xlsx', 'xls']:
+                process_structured_file(file_content, uploaded_file.name, file_extension)
+            else:
+                st.error("Unsupported file type")
+                return
+            
+            st.session_state.processing_time = time.time() - start_time
+            st.session_state.processing_complete = True
+            st.session_state.analysis_ready = True
+            
+            # Generate insights
+            generate_quality_insights()
+            
+            # Check for injuries
+            check_injury_cases()
+            
+            st.success(f"""
+            ✅ Analysis Complete!
+            - Total returns: {st.session_state.total_returns}
+            - Quality issues: {st.session_state.quality_issues}
+            - Injury cases: {st.session_state.total_injuries} {'⚠️ CRITICAL CASES FOUND!' if st.session_state.critical_injuries > 0 else ''}
+            - Processing time: {st.session_state.processing_time:.1f}s
+            """)
+            
+            st.rerun()
+            
+    except Exception as e:
+        st.error(f"❌ Error processing file: {str(e)}")
+        logger.error(f"File processing error: {e}", exc_info=True)
+
+def process_pdf_file(content: bytes, filename: str):
+    """Process PDF file from Amazon Seller Central"""
+    st.session_state.file_type = 'pdf'
+    
+    # Extract data from PDF
+    extracted_data = st.session_state.pdf_analyzer.extract_returns_from_pdf(content, filename)
+    
+    if not extracted_data or not extracted_data.get('returns'):
+        st.error("No return data found in PDF.")
+        return
+    
+    returns_data = extracted_data['returns']
+    st.session_state.raw_data = returns_data
+    
+    # Process and categorize returns
+    categorized_returns = []
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, return_item in enumerate(returns_data):
+        # Get return reason and buyer comment
+        return_reason = return_item.get('return_reason', '')
+        buyer_comment = return_item.get('buyer_comment', '') or return_item.get('customer_comment', '') or return_item.get('raw_content', '')
+        
+        # Create structured return item
+        categorized_item = {
+            'order_id': return_item.get('order_id', ''),
+            'sku': return_item.get('sku', ''),
+            'asin': return_item.get('asin', ''),
+            'return_date': return_item.get('return_date', ''),
+            'return_reason': return_reason,
+            'buyer_comment': buyer_comment,
+            'customer_comment': buyer_comment,
+            'page': return_item.get('page', 0)
         }
         
-        for device_type, patterns in device_patterns.items():
-            if any(pattern in sku for pattern in patterns):
-                return device_type
-            if any(pattern.lower() in product_name for pattern in patterns):
-                return device_type
-        
-        return 'medical_device'
-    
-    def _analyze_potential_causes(self, complaint: str, device_type: str) -> List[str]:
-        """Analyze potential causes of injury"""
-        causes = []
-        complaint_lower = complaint.lower()
-        
-        # Common medical device failure modes
-        failure_patterns = {
-            'structural_failure': ['broke', 'collapsed', 'gave way', 'snapped', 'cracked'],
-            'instability': ['tipped', 'unstable', 'wobbled', 'fell over', 'slipped'],
-            'sharp_edges': ['cut', 'sharp', 'rough edge', 'scraped', 'laceration'],
-            'material_issue': ['allergic', 'rash', 'irritation', 'reaction', 'burn'],
-            'design_flaw': ['pinched', 'trapped', 'caught', 'squeezed'],
-            'instruction_issue': ['confusing', 'unclear', 'no instructions', 'didn\'t know']
-        }
-        
-        for cause, patterns in failure_patterns.items():
-            if any(pattern in complaint_lower for pattern in patterns):
-                causes.append(cause)
-        
-        if not causes:
-            causes.append('unknown_cause')
-        
-        return causes
-    
-    def _generate_safety_recommendation(self, severity: str, device_type: str, causes: List[str]) -> str:
-        """Generate safety recommendation based on injury"""
-        if severity == 'critical':
-            return "IMMEDIATE ACTION: Investigate immediately. Consider product recall. Report to FDA within 5 days if death/serious injury."
-        elif severity == 'high':
-            return "URGENT: Conduct root cause analysis within 48 hours. Evaluate need for safety alert. Monitor for similar cases."
-        else:
-            return "Monitor for trends. Review design/instructions if pattern emerges. Document for quality system."
-    
-    def categorize_return(self, complaint: str, fba_reason: str = None, return_reason: str = None, 
-                         mode: str = 'standard', return_data: Dict[str, Any] = None) -> Tuple[str, float, str, str]:
-        """Categorize return with injury detection priority"""
-        
-        # First check for injury case
-        if return_data:
-            injury_case = self.detect_injury_case(return_data)
-            if injury_case:
-                return 'Medical/Health Concerns', injury_case.confidence, injury_case.severity, 'en'
-        
-        # Try quick categorization
-        quick_category = quick_categorize(complaint, fba_reason, return_reason)
-        if quick_category:
-            self.cost_tracker.add_quick_categorization()
-            severity = 'none'
-            if quick_category == 'Medical/Health Concerns':
-                severity, _ = detect_injury_severity(complaint)
-            return quick_category, 0.9, severity, 'en'
-        
-        # AI categorization
-        self.cost_tracker.add_ai_categorization()
-        
-        # Build prompts with injury focus
-        system_prompt = """You are a medical device safety expert categorizing returns. 
-CRITICAL: Identify ANY potential injury or safety concerns immediately.
-
-Your task:
-1. First check for ANY injury, safety, or health concerns
-2. If injury/safety issue found, ALWAYS categorize as "Medical/Health Concerns"
-3. Otherwise, categorize into the most appropriate category
-
-IMPORTANT: Be vigilant for injuries - even minor ones. Words like hurt, pain, bleeding, 
-fell, hospital, doctor, unsafe, dangerous should trigger "Medical/Health Concerns"."""
-        
-        categories_list = '\n'.join(f'- {cat}' for cat in MEDICAL_DEVICE_CATEGORIES)
-        
-        user_prompt = f"""Return Reason: "{return_reason or 'Not specified'}"
-Customer Comment: "{complaint}"
-
-Available Categories:
-{categories_list}
-
-Category:"""
-        
-        # Use appropriate AI mode
-        if self.provider == AIProvider.FASTEST:
-            mode = 'injury_analysis' if any(word in complaint.lower() for word in ['hurt', 'pain', 'injur', 'hospital']) else 'standard'
-        
-        # Make AI call
-        response = None
-        if self.provider == AIProvider.OPENAI and self.openai_configured:
-            response, _ = self._call_openai(user_prompt, system_prompt, mode)
-        elif self.provider == AIProvider.CLAUDE and self.claude_configured:
-            response, _ = self._call_claude(user_prompt, system_prompt, mode)
-        elif self.provider == AIProvider.FASTEST:
-            if self.claude_configured:
-                response, _ = self._call_claude(user_prompt, system_prompt, mode)
-            elif self.openai_configured:
-                response, _ = self._call_openai(user_prompt, system_prompt, mode)
-        
-        if response:
-            category = self._clean_category_response(response)
-            severity = 'none'
-            if category == 'Medical/Health Concerns':
-                severity, _ = detect_injury_severity(complaint)
-            return category, 0.85, severity, 'en'
-        
-        # Fallback
-        return 'Other/Miscellaneous', 0.3, 'none', 'en'
-    
-    def categorize_batch(self, complaints: List[Dict[str, Any]], mode: str = 'standard') -> List[Dict[str, Any]]:
-        """Categorize multiple complaints with injury detection"""
-        results = []
-        futures = []
-        
-        # Submit all tasks
-        for item in complaints:
-            future = self.executor.submit(
-                self.categorize_return,
-                item.get('complaint', ''),
-                item.get('fba_reason'),
-                item.get('return_reason'),
-                mode,
-                item  # Pass full data for injury detection
+        # Categorize using AI with injury detection
+        if st.session_state.ai_analyzer:
+            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                complaint=buyer_comment,
+                return_reason=return_reason,
+                return_data=categorized_item
             )
-            futures.append((future, item))
+            categorized_item['category'] = category
+            categorized_item['confidence'] = confidence
+            categorized_item['injury_severity'] = severity
+            categorized_item['is_injury'] = severity != 'none'
+        else:
+            categorized_item['category'] = 'Other/Miscellaneous'
+            categorized_item['confidence'] = 0.1
+            categorized_item['injury_severity'] = 'none'
+            categorized_item['is_injury'] = False
         
-        # Collect results
-        for future, item in futures:
+        categorized_returns.append(categorized_item)
+        progress_bar.progress((idx + 1) / len(returns_data))
+        status_text.text(f"Processing return {idx + 1} of {len(returns_data)}...")
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    st.session_state.categorized_data = pd.DataFrame(categorized_returns)
+    st.session_state.total_returns = len(categorized_returns)
+
+def process_structured_file(content: bytes, filename: str, file_extension: str):
+    """Process structured data files with smart column mapping"""
+    st.session_state.file_type = 'structured'
+    
+    # Read file based on extension
+    try:
+        if file_extension in ['csv', 'txt', 'tsv']:
+            # Detect encoding
             try:
-                category, confidence, severity, language = future.result(timeout=API_TIMEOUT)
-                result = item.copy()
-                result.update({
-                    'category': category,
-                    'confidence': confidence,
-                    'severity': severity,
-                    'language': language,
-                    'is_injury': severity != 'none'
-                })
-                results.append(result)
-            except Exception as e:
-                logger.error(f"Batch categorization error: {e}")
-                result = item.copy()
-                result.update({
-                    'category': 'Other/Miscellaneous',
-                    'confidence': 0.1,
-                    'severity': 'none',
-                    'language': 'en',
-                    'is_injury': False
-                })
-                results.append(result)
+                text = content.decode('utf-8')
+            except:
+                if CHARDET_AVAILABLE:
+                    encoding = chardet.detect(content)['encoding']
+                    text = content.decode(encoding)
+                else:
+                    # Try common encodings
+                    for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                        try:
+                            text = content.decode(encoding)
+                            break
+                        except:
+                            continue
+                    else:
+                        st.error("Could not decode file.")
+                        return
+            
+            # Detect delimiter
+            if file_extension == 'tsv' or '\t' in text.split('\n')[0]:
+                delimiter = '\t'
+            elif file_extension == 'csv' or ',' in text.split('\n')[0]:
+                delimiter = ','
+            else:
+                first_line = text.split('\n')[0]
+                delimiter = ',' if first_line.count(',') > first_line.count('\t') else '\t'
+            
+            df = pd.read_csv(io.StringIO(text), delimiter=delimiter)
+            
+        elif file_extension in ['xlsx', 'xls']:
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            st.error(f"Cannot read {file_extension} files")
+            return
         
-        return results
+        # Clean column names
+        df.columns = [str(col).strip() for col in df.columns]
+        
+        st.info(f"📊 Loaded {len(df)} rows with {len(df.columns)} columns")
+        
+        # Check if it's an FBA return report
+        fba_columns = ['return-date', 'order-id', 'sku', 'asin', 'reason', 'customer-comments']
+        is_fba_report = all(col in df.columns for col in fba_columns)
+        
+        if is_fba_report:
+            st.success("✅ Detected FBA Return Report format")
+            process_fba_returns(df)
+        else:
+            process_with_column_mapper(df, filename)
+        
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        logger.error(f"Structured file processing error: {e}", exc_info=True)
+
+def process_fba_returns(df: pd.DataFrame):
+    """Process FBA return report with injury detection"""
+    categorized_data = []
+    progress_bar = st.progress(0)
+    injury_count = 0
     
-    def _clean_category_response(self, response: str) -> str:
-        """Clean AI response to extract category"""
-        response = response.strip().strip('"').strip("'").strip()
-        
-        # Remove common prefixes
-        prefixes = ['Category:', 'The category is:', 'Answer:']
-        for prefix in prefixes:
-            if response.startswith(prefix):
-                response = response[len(prefix):].strip()
-        
-        # Try exact match first
-        for valid_cat in MEDICAL_DEVICE_CATEGORIES:
-            if response == valid_cat or response.lower() == valid_cat.lower():
-                return valid_cat
-        
-        # Try partial match
-        response_lower = response.lower()
-        for valid_cat in MEDICAL_DEVICE_CATEGORIES:
-            if valid_cat.lower() in response_lower:
-                return valid_cat
-        
-        # Try keyword match
-        for valid_cat in MEDICAL_DEVICE_CATEGORIES:
-            cat_words = set(valid_cat.lower().split('/'))
-            response_words = set(response_lower.split())
-            if cat_words & response_words:
-                return valid_cat
-        
-        return 'Other/Miscellaneous'
-    
-    def get_injury_summary(self) -> Dict[str, Any]:
-        """Get summary of all injury cases detected"""
-        if not self.injury_cases:
-            return {
-                'total_injuries': 0,
-                'critical': 0,
-                'high': 0,
-                'medium': 0,
-                'reportable_cases': 0,
-                'cases': []
-            }
-        
-        severity_counts = {'critical': 0, 'high': 0, 'medium': 0}
-        reportable_count = 0
-        
-        for case in self.injury_cases:
-            severity_counts[case.severity] += 1
-            if case.reportable:
-                reportable_count += 1
-        
-        return {
-            'total_injuries': len(self.injury_cases),
-            'critical': severity_counts['critical'],
-            'high': severity_counts['high'],
-            'medium': severity_counts['medium'],
-            'reportable_cases': reportable_count,
-            'cases': self.injury_cases,
-            'fda_mdr_required': reportable_count > 0,
-            'immediate_action_required': severity_counts['critical'] > 0
+    for idx, row in df.iterrows():
+        return_item = {
+            'order_id': row.get('order-id', ''),
+            'sku': row.get('sku', ''),
+            'asin': row.get('asin', ''),
+            'return_date': row.get('return-date', ''),
+            'return_reason': row.get('reason', ''),
+            'buyer_comment': row.get('customer-comments', ''),
+            'customer_comment': row.get('customer-comments', ''),
+            'fba_reason': row.get('reason', ''),
+            'quantity': row.get('quantity', 1),
+            'original_index': idx
         }
-    
-    def export_injury_report(self) -> str:
-        """Export detailed injury report"""
-        summary = self.get_injury_summary()
         
-        report = f"""MEDICAL DEVICE INJURY REPORT
+        # Categorize using AI with injury detection
+        if st.session_state.ai_analyzer:
+            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                complaint=return_item['buyer_comment'],
+                fba_reason=return_item['fba_reason'],
+                return_reason=return_item['return_reason'],
+                return_data=return_item
+            )
+            return_item['category'] = category
+            return_item['confidence'] = confidence
+            return_item['injury_severity'] = severity
+            return_item['is_injury'] = severity != 'none'
+            
+            if return_item['is_injury']:
+                injury_count += 1
+        else:
+            return_item['category'] = 'Other/Miscellaneous'
+            return_item['confidence'] = 0.1
+            return_item['injury_severity'] = 'none'
+            return_item['is_injury'] = False
+        
+        categorized_data.append(return_item)
+        progress_bar.progress((idx + 1) / len(df))
+    
+    progress_bar.empty()
+    
+    if injury_count > 0:
+        st.warning(f"⚠️ Detected {injury_count} potential injury case{'s' if injury_count > 1 else ''}!")
+    
+    # Store results
+    st.session_state.categorized_data = pd.DataFrame(categorized_data)
+    st.session_state.raw_data = categorized_data
+    st.session_state.total_returns = len(categorized_data)
+
+def process_with_column_mapper(df: pd.DataFrame, filename: str):
+    """Process file using smart column mapper with injury detection"""
+    st.markdown("### 🔍 Column Detection & Mapping")
+    
+    # Use smart column mapper if available
+    if MAPPER_AVAILABLE and st.session_state.column_mapper:
+        with st.spinner("Using AI to detect column types..."):
+            column_mapping = st.session_state.column_mapper.detect_columns(df)
+    else:
+        st.warning("Smart column mapper not available. Please map columns manually.")
+        column_mapping = {}
+    
+    # Display detected mappings
+    if column_mapping:
+        st.success("✅ Columns detected automatically!")
+    
+    # Show mapping in expandable section
+    with st.expander("View/Edit Column Mappings", expanded=True):
+        # Create editable mapping interface
+        edited_mapping = {}
+        col1, col2 = st.columns(2)
+        
+        # Define expected column types
+        column_types = {
+            'date': 'Date/When complaint was made',
+            'complaint': 'Customer complaint/comment text',
+            'product_id': 'Product SKU/Identifier',
+            'asin': 'Amazon ASIN',
+            'order_id': 'Order number',
+            'source': 'Complaint source',
+            'agent': 'Agent/Investigator name',
+            'ticket_id': 'Ticket/Case number',
+            'udi': 'UDI (Device Identifier)'
+        }
+        
+        # Show current mappings and allow editing
+        for col_type, description in column_types.items():
+            with col1 if list(column_types.keys()).index(col_type) < 5 else col2:
+                current_mapping = column_mapping.get(col_type, '')
+                
+                # Create dropdown with all columns
+                options = [''] + list(df.columns)
+                default_index = options.index(current_mapping) if current_mapping in options else 0
+                
+                selected = st.selectbox(
+                    f"{description}:",
+                    options,
+                    index=default_index,
+                    key=f"map_{col_type}"
+                )
+                
+                if selected:
+                    edited_mapping[col_type] = selected
+        
+        # Use edited mapping if any changes made
+        if edited_mapping:
+            column_mapping = edited_mapping
+    
+    # Process returns with injury detection
+    st.markdown("### 🤖 Categorizing Returns & Detecting Injuries...")
+    
+    categorized_data = []
+    progress_bar = st.progress(0)
+    injury_count = 0
+    
+    for idx, row in df.iterrows():
+        return_item = {
+            'order_id': row.get(column_mapping.get('order_id', ''), ''),
+            'sku': row.get(column_mapping.get('product_id', ''), ''),
+            'asin': row.get(column_mapping.get('asin', ''), ''),
+            'return_date': row.get(column_mapping.get('date', ''), ''),
+            'customer_comment': row.get(column_mapping.get('complaint', ''), ''),
+            'buyer_comment': row.get(column_mapping.get('complaint', ''), ''),
+            'source': row.get(column_mapping.get('source', ''), ''),
+            'agent': row.get(column_mapping.get('agent', ''), ''),
+            'original_index': idx
+        }
+        
+        # Check for return reason if present
+        return_reason = ''
+        for col in df.columns:
+            if 'reason' in col.lower() and col not in column_mapping.values():
+                return_reason = row.get(col, '')
+                break
+        return_item['return_reason'] = return_reason
+        
+        # Categorize using AI with injury detection
+        if st.session_state.ai_analyzer and return_item['customer_comment']:
+            category, confidence, severity, language = st.session_state.ai_analyzer.categorize_return(
+                complaint=return_item['customer_comment'],
+                return_reason=return_reason,
+                return_data=return_item
+            )
+            return_item['category'] = category
+            return_item['confidence'] = confidence
+            return_item['injury_severity'] = severity
+            return_item['is_injury'] = severity != 'none'
+            
+            if return_item['is_injury']:
+                injury_count += 1
+        else:
+            return_item['category'] = 'Other/Miscellaneous'
+            return_item['confidence'] = 0.1
+            return_item['injury_severity'] = 'none'
+            return_item['is_injury'] = False
+        
+        categorized_data.append(return_item)
+        progress_bar.progress((idx + 1) / len(df))
+    
+    progress_bar.empty()
+    
+    if injury_count > 0:
+        st.warning(f"⚠️ Detected {injury_count} potential injury case{'s' if injury_count > 1 else ''}!")
+    
+    # Store results
+    st.session_state.categorized_data = pd.DataFrame(categorized_data)
+    st.session_state.raw_data = categorized_data
+    st.session_state.total_returns = len(categorized_data)
+    
+    # Show summary
+    st.markdown("### ✅ Processing Complete")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Columns Mapped", len(column_mapping))
+    with col2:
+        st.metric("Rows Processed", len(categorized_data))
+    with col3:
+        st.metric("Categories Found", len(set(item['category'] for item in categorized_data)))
+    with col4:
+        st.metric("Injury Cases", injury_count, delta=None if injury_count == 0 else "⚠️")
+
+def check_injury_cases():
+    """Check and summarize injury cases"""
+    if st.session_state.ai_analyzer:
+        injury_summary = st.session_state.ai_analyzer.get_injury_summary()
+        st.session_state.total_injuries = injury_summary['total_injuries']
+        st.session_state.critical_injuries = injury_summary['critical']
+        st.session_state.fda_mdr_required = injury_summary['fda_mdr_required']
+        st.session_state.injury_cases = injury_summary['cases']
+
+def generate_quality_insights():
+    """Generate quality-focused insights from categorized data"""
+    df = st.session_state.categorized_data
+    
+    # Category analysis
+    category_counts = df['category'].value_counts()
+    st.session_state.category_analysis = category_counts.to_dict()
+    
+    # Quality issues count
+    quality_issues = df[df['category'].isin(QUALITY_CATEGORIES)]
+    st.session_state.quality_issues = len(quality_issues)
+    
+    # Product analysis
+    if 'asin' in df.columns:
+        product_analysis = defaultdict(lambda: defaultdict(int))
+        
+        for _, row in df.iterrows():
+            asin = row.get('asin', 'Unknown')
+            category = row['category']
+            product_analysis[asin][category] += 1
+            product_analysis[asin]['total'] += 1
+            
+            # Track injuries by product
+            if row.get('is_injury', False):
+                product_analysis[asin]['injuries'] += 1
+                product_analysis[asin][f'injury_{row.get("injury_severity", "unknown")}'] += 1
+        
+        st.session_state.product_analysis = dict(product_analysis)
+    
+    # Quality metrics
+    st.session_state.quality_metrics = {
+        'quality_rate': (st.session_state.quality_issues / st.session_state.total_returns * 100) if st.session_state.total_returns > 0 else 0,
+        'injury_rate': (st.session_state.total_injuries / st.session_state.total_returns * 100) if st.session_state.total_returns > 0 else 0,
+        'top_quality_issue': quality_issues['category'].value_counts().index[0] if len(quality_issues) > 0 else 'None',
+        'products_with_quality_issues': len(quality_issues['asin'].unique()) if 'asin' in quality_issues.columns else 0,
+        'products_with_injuries': len([asin for asin, data in st.session_state.product_analysis.items() if data.get('injuries', 0) > 0])
+    }
+
+def display_dashboard():
+    """Display main analysis dashboard with injury focus"""
+    st.markdown("### 📊 Return Analysis Dashboard")
+    
+    # Key metrics
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Total Returns</div>
+            <div class="metric-value">{st.session_state.total_returns:,}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
+        color = COLORS['danger'] if quality_rate > 30 else COLORS['warning'] if quality_rate > 15 else COLORS['success']
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Quality Issues</div>
+            <div class="metric-value" style="color: {color};">{st.session_state.quality_issues:,}</div>
+            <div style="color: {color}; font-size: 0.9rem;">{quality_rate:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        injury_rate = st.session_state.quality_metrics.get('injury_rate', 0)
+        color = COLORS['critical'] if st.session_state.critical_injuries > 0 else COLORS['injury'] if st.session_state.total_injuries > 0 else COLORS['success']
+        st.markdown(f"""
+        <div class="metric-card" style="border: 2px solid {color};">
+            <div class="metric-label">Injury Cases</div>
+            <div class="metric-value" style="color: {color};">{st.session_state.total_injuries}</div>
+            <div style="color: {color}; font-size: 0.9rem;">{injury_rate:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        top_category = max(st.session_state.category_analysis.items(), key=lambda x: x[1])[0] if st.session_state.category_analysis else 'None'
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Top Return Reason</div>
+            <div class="metric-value" style="font-size: 1.2rem;">{top_category}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col5:
+        unique_products = len(st.session_state.product_analysis) if st.session_state.product_analysis else 0
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Products Affected</div>
+            <div class="metric-value">{unique_products}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col6:
+        if st.session_state.fda_mdr_required:
+            st.markdown(f"""
+            <div class="fda-alert">
+                FDA MDR<br>REQUIRED
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">AI Cost</div>
+                <div class="metric-value">${st.session_state.api_cost:.4f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Show injury summary if injuries detected
+    if st.session_state.total_injuries > 0:
+        st.markdown("---")
+        display_injury_summary()
+
+def display_category_analysis():
+    """Display category breakdown and analysis"""
+    st.markdown("### 📈 Return Category Analysis")
+    
+    if not st.session_state.category_analysis:
+        st.info("No category data available")
+        return
+    
+    # Create two columns
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Category distribution chart
+        category_df = pd.DataFrame(
+            list(st.session_state.category_analysis.items()),
+            columns=['Category', 'Count']
+        ).sort_values('Count', ascending=False)
+        
+        # Color mapping with injury highlight
+        colors = []
+        for cat in category_df['Category']:
+            if cat == 'Medical/Health Concerns':
+                colors.append(COLORS['injury'])
+            elif cat in QUALITY_CATEGORIES:
+                colors.append(COLORS['danger'])
+            elif cat in ['Customer Error/Changed Mind', 'Price/Value']:
+                colors.append(COLORS['success'])
+            else:
+                colors.append(COLORS['primary'])
+        
+        fig = px.bar(
+            category_df,
+            x='Count',
+            y='Category',
+            orientation='h',
+            title='Returns by Category',
+            color='Category',
+            color_discrete_sequence=colors
+        )
+        fig.update_layout(showlegend=False, height=500)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Quality vs Non-Quality vs Injury breakdown
+        quality_count = sum(count for cat, count in st.session_state.category_analysis.items() 
+                          if cat in QUALITY_CATEGORIES and cat != 'Medical/Health Concerns')
+        injury_count = st.session_state.category_analysis.get('Medical/Health Concerns', 0)
+        non_quality_count = st.session_state.total_returns - quality_count - injury_count
+        
+        fig = go.Figure(data=[go.Pie(
+            labels=['Injury/Health', 'Other Quality', 'Non-Quality'],
+            values=[injury_count, quality_count, non_quality_count],
+            hole=.3,
+            marker_colors=[COLORS['injury'], COLORS['danger'], COLORS['primary']]
+        )])
+        fig.update_layout(title='Return Type Distribution', height=300)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Top insights
+        st.markdown("#### 💡 Key Insights")
+        
+        insights = generate_category_insights()
+        for insight in insights[:5]:
+            st.markdown(f"• {insight}")
+
+def generate_category_insights():
+    """Generate insights from category analysis with injury focus"""
+    insights = []
+    
+    if not st.session_state.category_analysis:
+        return insights
+    
+    # Injury insights (highest priority)
+    injury_rate = st.session_state.quality_metrics.get('injury_rate', 0)
+    if st.session_state.critical_injuries > 0:
+        insights.append(f"🚨 CRITICAL: {st.session_state.critical_injuries} critical injury case(s) require immediate action")
+    elif st.session_state.total_injuries > 0:
+        insights.append(f"⚠️ {st.session_state.total_injuries} injury cases detected ({injury_rate:.1f}% of returns)")
+    
+    # Quality issue insights
+    quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
+    if quality_rate > 30:
+        insights.append(f"⚠️ Critical: {quality_rate:.1f}% of returns are quality-related")
+    elif quality_rate > 15:
+        insights.append(f"⚠️ High quality issue rate: {quality_rate:.1f}%")
+    
+    # Top category insights
+    top_categories = sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True)[:3]
+    for cat, count in top_categories:
+        percentage = (count / st.session_state.total_returns * 100)
+        if cat == 'Medical/Health Concerns':
+            insights.append(f"🚨 {cat}: {count} returns ({percentage:.1f}%) - SAFETY PRIORITY")
+        elif cat in QUALITY_CATEGORIES:
+            insights.append(f"🔴 {cat}: {count} returns ({percentage:.1f}%)")
+        else:
+            insights.append(f"📊 {cat}: {count} returns ({percentage:.1f}%)")
+    
+    # Specific category insights
+    if 'Size/Fit Issues' in st.session_state.category_analysis and st.session_state.category_analysis['Size/Fit Issues'] > 5:
+        insights.append("👔 Size/fit issues suggest need for better sizing guide")
+    
+    if 'Wrong Product/Misunderstanding' in st.session_state.category_analysis and st.session_state.category_analysis['Wrong Product/Misunderstanding'] > 3:
+        insights.append("📝 Product description may need clarification")
+    
+    return insights
+
+def display_product_analysis():
+    """Display product-specific analysis with injury tracking"""
+    st.markdown("### 📦 Product Quality & Safety Analysis")
+    
+    if not st.session_state.product_analysis:
+        st.info("No product data available")
+        return
+    
+    # Products with injuries (highest priority)
+    products_with_injuries = [
+        (asin, data) for asin, data in st.session_state.product_analysis.items() 
+        if data.get('injuries', 0) > 0
+    ]
+    
+    if products_with_injuries:
+        st.markdown("#### 🚨 Products with Injury Cases")
+        
+        injury_products_df = []
+        for asin, data in products_with_injuries:
+            injury_products_df.append({
+                'ASIN': asin,
+                'Total Returns': data.get('total', 0),
+                'Total Injuries': data.get('injuries', 0),
+                'Critical': data.get('injury_critical', 0),
+                'High': data.get('injury_high', 0),
+                'Medium': data.get('injury_medium', 0),
+                'Injury Rate': (data.get('injuries', 0) / data.get('total', 1) * 100)
+            })
+        
+        injury_df = pd.DataFrame(injury_products_df).sort_values('Total Injuries', ascending=False)
+        
+        for idx, product in injury_df.iterrows():
+            severity_text = []
+            if product['Critical'] > 0:
+                severity_text.append(f"<span class='injury-severity-critical'>CRITICAL: {product['Critical']}</span>")
+            if product['High'] > 0:
+                severity_text.append(f"<span class='injury-severity-high'>HIGH: {product['High']}</span>")
+            if product['Medium'] > 0:
+                severity_text.append(f"<span class='injury-severity-medium'>MEDIUM: {product['Medium']}</span>")
+            
+            st.markdown(f"""
+            <div class="injury-case-card">
+                <div style="display: flex; justify-content: space-between;">
+                    <div>
+                        <strong>ASIN: {product['ASIN']}</strong>
+                        <div style="margin-top: 0.5rem;">
+                            {' '.join(severity_text)}
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: {COLORS['injury']};">
+                            {product['Total Injuries']} injuries
+                        </div>
+                        <div style="color: {COLORS['injury']}; font-size: 0.9rem;">
+                            {product['Injury Rate']:.1f}% injury rate
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+    
+    # Filter products with quality issues
+    products_with_quality = []
+    
+    for asin, categories in st.session_state.product_analysis.items():
+        quality_count = sum(count for cat, count in categories.items() 
+                          if cat in QUALITY_CATEGORIES and cat != 'total' and not cat.startswith('injury'))
+        total = categories.get('total', 0)
+        
+        if quality_count > 0:
+            products_with_quality.append({
+                'ASIN': asin,
+                'Total Returns': total,
+                'Quality Issues': quality_count,
+                'Quality Rate': (quality_count / total * 100) if total > 0 else 0,
+                'Top Issue': max([(cat, count) for cat, count in categories.items() 
+                                if cat != 'total' and not cat.startswith('injury')], 
+                               key=lambda x: x[1])[0],
+                'Has Injuries': categories.get('injuries', 0) > 0
+            })
+    
+    if products_with_quality:
+        # Sort by quality issues
+        products_df = pd.DataFrame(products_with_quality).sort_values('Quality Issues', ascending=False)
+        
+        # Display top problematic products
+        st.markdown("#### 🔴 Products with Quality Issues")
+        
+        for idx, product in products_df.head(10).iterrows():
+            color = COLORS['danger'] if product['Quality Rate'] > 50 else COLORS['warning'] if product['Quality Rate'] > 25 else COLORS['primary']
+            injury_flag = " 🚨" if product['Has Injuries'] else ""
+            
+            st.markdown(f"""
+            <div class="category-card quality-issue-card">
+                <div style="display: flex; justify-content: space-between;">
+                    <div>
+                        <strong>ASIN: {product['ASIN']}{injury_flag}</strong>
+                        <div style="color: #666; font-size: 0.9rem;">Top Issue: {product['Top Issue']}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: {color};">
+                            {product['Quality Issues']} / {product['Total Returns']}
+                        </div>
+                        <div style="color: {color}; font-size: 0.9rem;">
+                            {product['Quality Rate']:.1f}% quality issues
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+def display_recommendations():
+    """Display quality improvement recommendations with injury priority"""
+    st.markdown("### 💡 Quality & Safety Improvement Recommendations")
+    
+    recommendations = generate_quality_recommendations()
+    
+    # Priority recommendations
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("#### 🎯 Priority Actions")
+        
+        for idx, rec in enumerate(recommendations['priority']):
+            priority_color = {
+                'IMMEDIATE': COLORS['critical'],
+                'HIGH': COLORS['warning'],
+                'MEDIUM': COLORS['primary']
+            }.get(rec['priority'], COLORS['primary'])
+            
+            st.markdown(f"""
+            <div class="category-card" style="border-left-color: {priority_color};">
+                <div style="display: flex; justify-content: space-between;">
+                    <div>
+                        <strong>{idx + 1}. {rec['action']}</strong>
+                        <div style="color: #666; font-size: 0.9rem; margin-top: 0.5rem;">
+                            {rec['reason']}
+                        </div>
+                    </div>
+                    <div>
+                        <span style="background: {priority_color}; color: white; padding: 0.3rem 0.8rem; 
+                                     border-radius: 15px; font-size: 0.8rem;">
+                            {rec['priority']}
+                        </span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("#### 📊 Quality Score")
+        
+        # Calculate overall quality score
+        quality_score = calculate_quality_score()
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Overall Quality Score</div>
+            <div class="metric-value" style="font-size: 3rem; color: {get_score_color(quality_score)};">
+                {quality_score}/100
+            </div>
+            <div class="quality-score" style="margin-top: 1rem;">
+                <div style="width: {quality_score}%; background: {get_score_color(quality_score)}; 
+                            height: 100%; border-radius: 5px;"></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Score breakdown
+        st.markdown("##### Score Factors:")
+        st.markdown(f"• Quality issue rate: -{st.session_state.quality_metrics['quality_rate']:.0f} pts")
+        if st.session_state.total_injuries > 0:
+            st.markdown(f"• Injury cases: -{20 if st.session_state.critical_injuries > 0 else 10} pts")
+        if st.session_state.fda_mdr_required:
+            st.markdown(f"• FDA MDR required: -10 pts")
+
+def generate_quality_recommendations():
+    """Generate specific quality improvement recommendations with injury focus"""
+    recommendations = {'priority': [], 'general': []}
+    
+    # Injury-based recommendations (highest priority)
+    if st.session_state.critical_injuries > 0:
+        recommendations['priority'].insert(0, {
+            'priority': 'IMMEDIATE',
+            'action': 'Address critical injury cases - FDA MDR reporting may be required',
+            'reason': f'{st.session_state.critical_injuries} critical injury case(s) detected requiring immediate investigation'
+        })
+    elif st.session_state.total_injuries > 0:
+        recommendations['priority'].append({
+            'priority': 'HIGH',
+            'action': 'Review all injury cases for safety improvements',
+            'reason': f'{st.session_state.total_injuries} injury cases indicate potential safety issues'
+        })
+    
+    # Based on quality rate
+    quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
+    if quality_rate > 30:
+        recommendations['priority'].append({
+            'priority': 'IMMEDIATE' if not st.session_state.critical_injuries else 'HIGH',
+            'action': 'Conduct emergency quality audit',
+            'reason': f'{quality_rate:.1f}% quality issue rate exceeds critical threshold'
+        })
+    elif quality_rate > 15:
+        recommendations['priority'].append({
+            'priority': 'HIGH',
+            'action': 'Review manufacturing QC processes',
+            'reason': f'{quality_rate:.1f}% quality issue rate is above target'
+        })
+    
+    # Based on specific categories
+    for category, count in sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True):
+        if category == 'Product Defects/Quality' and count > 10:
+            recommendations['priority'].append({
+                'priority': 'HIGH',
+                'action': 'Investigate defect patterns with manufacturer',
+                'reason': f'{count} defect-related returns require root cause analysis'
+            })
+            break
+        elif category == 'Size/Fit Issues' and count > 5:
+            recommendations['priority'].append({
+                'priority': 'MEDIUM',
+                'action': 'Update product dimensions and sizing guide',
+                'reason': f'{count} size-related returns indicate measurement issues'
+            })
+    
+    # Product-specific recommendations
+    if st.session_state.product_analysis:
+        products_with_injuries = [
+            asin for asin, data in st.session_state.product_analysis.items()
+            if data.get('injuries', 0) > 0
+        ]
+        
+        if len(products_with_injuries) > 0:
+            recommendations['priority'].append({
+                'priority': 'HIGH',
+                'action': f'Prioritize safety review for {len(products_with_injuries)} products with injury cases',
+                'reason': f'Products involved in injury cases: {", ".join(products_with_injuries[:3])}'
+            })
+    
+    return recommendations
+
+def calculate_quality_score():
+    """Calculate overall quality score with injury penalties"""
+    score = 100
+    
+    # Deduct for quality issue rate
+    quality_rate = st.session_state.quality_metrics.get('quality_rate', 0)
+    score -= min(quality_rate, 50)  # Max 50 point deduction
+    
+    # Deduct for injuries
+    if st.session_state.critical_injuries > 0:
+        score -= 30  # Severe penalty for critical injuries
+    elif st.session_state.total_injuries > 0:
+        score -= 15  # Moderate penalty for any injuries
+    
+    # Deduct for FDA MDR requirement
+    if st.session_state.fda_mdr_required:
+        score -= 10
+    
+    # Deduct for multiple products affected
+    products_affected = st.session_state.quality_metrics.get('products_with_quality_issues', 0)
+    if products_affected > 5:
+        score -= 10
+    elif products_affected > 3:
+        score -= 5
+    
+    return max(0, int(score))
+
+def get_score_color(score):
+    """Get color based on quality score"""
+    if score >= 90:
+        return COLORS['success']
+    elif score >= 70:
+        return COLORS['warning']
+    else:
+        return COLORS['danger']
+
+def export_analysis():
+    """Export analysis results with injury report"""
+    st.markdown("### 📥 Export Analysis Results")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🚨 Export Injury Report", use_container_width=True, key="export_injury_main"):
+            export_injury_report()
+    
+    with col2:
+        if st.button("📊 Export Full Report (Excel)", use_container_width=True):
+            export_excel_report()
+    
+    with col3:
+        if st.button("📋 Export Categorized Data (CSV)", use_container_width=True):
+            export_csv_data()
+    
+    with col4:
+        if st.button("📄 Export Executive Summary", use_container_width=True):
+            export_executive_summary()
+
+def export_excel_report():
+    """Export comprehensive Excel report with injury sheet"""
+    try:
+        output = io.BytesIO()
+        
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # Sheet 1: Categorized Returns
+            st.session_state.categorized_data.to_excel(
+                writer, sheet_name='Categorized_Returns', index=False
+            )
+            
+            # Sheet 2: Injury Cases (if any)
+            if st.session_state.total_injuries > 0:
+                injury_cases = []
+                for case in st.session_state.injury_cases:
+                    injury_cases.append({
+                        'Order ID': case.order_id,
+                        'ASIN': case.asin,
+                        'SKU': case.sku,
+                        'Date': case.return_date,
+                        'Severity': case.severity.upper(),
+                        'Reportable': 'Yes' if case.reportable else 'No',
+                        'Device Type': case.device_type,
+                        'Injury Keywords': ', '.join(case.injury_keywords),
+                        'Potential Causes': ', '.join(case.potential_causes),
+                        'Comment': case.full_comment,
+                        'Recommendation': case.recommendation
+                    })
+                
+                injury_df = pd.DataFrame(injury_cases)
+                injury_df.to_excel(writer, sheet_name='Injury_Cases', index=False)
+            
+            # Sheet 3: Category Summary
+            category_summary = pd.DataFrame(
+                list(st.session_state.category_analysis.items()),
+                columns=['Category', 'Count']
+            ).sort_values('Count', ascending=False)
+            category_summary['Percentage'] = (category_summary['Count'] / st.session_state.total_returns * 100).round(1)
+            category_summary.to_excel(writer, sheet_name='Category_Summary', index=False)
+            
+            # Sheet 4: Product Analysis
+            if st.session_state.product_analysis:
+                product_data = []
+                for asin, categories in st.session_state.product_analysis.items():
+                    row = {'ASIN': asin}
+                    for cat, count in categories.items():
+                        if cat != 'total' and not cat.startswith('injury'):
+                            row[cat] = count
+                    row['Total'] = categories.get('total', 0)
+                    row['Injuries'] = categories.get('injuries', 0)
+                    product_data.append(row)
+                
+                product_df = pd.DataFrame(product_data).fillna(0)
+                product_df.to_excel(writer, sheet_name='Product_Analysis', index=False)
+            
+            # Sheet 5: Quality Metrics
+            metrics_df = pd.DataFrame([st.session_state.quality_metrics])
+            metrics_df.to_excel(writer, sheet_name='Quality_Metrics', index=False)
+            
+            # Add formatting
+            workbook = writer.book
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#2C3E50',
+                'font_color': 'white',
+                'border': 1
+            })
+            
+            # Injury format for critical cases
+            critical_format = workbook.add_format({
+                'bg_color': '#DC143C',
+                'font_color': 'white',
+                'bold': True
+            })
+            
+            # Format headers
+            for sheet_name in writer.sheets:
+                worksheet = writer.sheets[sheet_name]
+                worksheet.set_row(0, 20, header_format)
+                
+                # Special formatting for injury sheet
+                if sheet_name == 'Injury_Cases' and st.session_state.total_injuries > 0:
+                    # Find rows with critical severity
+                    for row_num, severity in enumerate(injury_df['Severity'], 1):
+                        if severity == 'CRITICAL':
+                            worksheet.set_row(row_num, None, critical_format)
+        
+        output.seek(0)
+        
+        st.download_button(
+            label="Download Excel Report",
+            data=output.getvalue(),
+            file_name=f"amazon_returns_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+    except Exception as e:
+        st.error(f"Export error: {str(e)}")
+
+def export_csv_data():
+    """Export categorized data as CSV"""
+    csv = st.session_state.categorized_data.to_csv(index=False)
+    
+    st.download_button(
+        label="Download CSV",
+        data=csv,
+        file_name=f"categorized_returns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv"
+    )
+
+def export_executive_summary():
+    """Export executive summary with injury focus"""
+    summary = f"""
+AMAZON RETURNS QUALITY & SAFETY ANALYSIS - EXECUTIVE SUMMARY
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-EXECUTIVE SUMMARY
-================
-Total Injury Cases: {summary['total_injuries']}
-Critical Severity: {summary['critical']}
-High Severity: {summary['high']}
-Medium Severity: {summary['medium']}
-FDA MDR Required: {'YES' if summary['fda_mdr_required'] else 'NO'}
-Immediate Action Required: {'YES' if summary['immediate_action_required'] else 'NO'}
+CRITICAL ALERTS
+==============
+FDA MDR Required: {'YES' if st.session_state.fda_mdr_required else 'NO'}
+Critical Injuries: {st.session_state.critical_injuries}
+Total Injuries: {st.session_state.total_injuries}
 
-DETAILED INJURY CASES
+OVERVIEW
+========
+Total Returns Analyzed: {st.session_state.total_returns:,}
+Quality-Related Returns: {st.session_state.quality_issues:,} ({st.session_state.quality_metrics['quality_rate']:.1f}%)
+Injury Cases: {st.session_state.total_injuries} ({st.session_state.quality_metrics['injury_rate']:.1f}%)
+Unique Products Affected: {len(st.session_state.product_analysis) if st.session_state.product_analysis else 0}
+Products with Injuries: {st.session_state.quality_metrics.get('products_with_injuries', 0)}
+Overall Quality Score: {calculate_quality_score()}/100
+
+TOP RETURN CATEGORIES
 ====================
 """
-        
-        for idx, case in enumerate(summary['cases'], 1):
-            report += f"""
-Case #{idx}
---------
-Order ID: {case.order_id}
-ASIN: {case.asin}
-SKU: {case.sku}
-Date: {case.return_date}
-Severity: {case.severity.upper()}
-Device Type: {case.device_type}
-Reportable: {'YES' if case.reportable else 'NO'}
+    
+    for cat, count in sorted(st.session_state.category_analysis.items(), key=lambda x: x[1], reverse=True)[:5]:
+        percentage = (count / st.session_state.total_returns * 100)
+        quality_flag = " [QUALITY ISSUE]" if cat in QUALITY_CATEGORIES else ""
+        injury_flag = " [INJURY/SAFETY]" if cat == 'Medical/Health Concerns' else ""
+        summary += f"{cat}{quality_flag}{injury_flag}: {count} ({percentage:.1f}%)\n"
+    
+    summary += f"""
 
-Injury Keywords: {', '.join(case.injury_keywords)}
-Potential Causes: {', '.join(case.potential_causes)}
-
-Customer Comment:
-{case.full_comment}
-
-Recommendation:
-{case.recommendation}
-
----
+KEY FINDINGS
+============
 """
+    
+    insights = generate_category_insights()
+    for insight in insights[:5]:
+        summary += f"- {insight}\n"
+    
+    summary += f"""
+
+PRIORITY RECOMMENDATIONS
+=======================
+"""
+    
+    recommendations = generate_quality_recommendations()
+    for idx, rec in enumerate(recommendations['priority'][:5]):
+        summary += f"{idx + 1}. [{rec['priority']}] {rec['action']}\n   Reason: {rec['reason']}\n\n"
+    
+    # Add injury summary if available
+    if st.session_state.total_injuries > 0:
+        summary += f"""
+
+INJURY CASE SUMMARY
+==================
+Total Injury Cases: {st.session_state.total_injuries}
+- Critical Severity: {st.session_state.critical_injuries}
+- High Severity: {sum(1 for c in st.session_state.injury_cases if c.severity == 'high')}
+- Medium Severity: {sum(1 for c in st.session_state.injury_cases if c.severity == 'medium')}
+
+Products Involved in Injuries:
+"""
+        products_with_injuries = list(set(c.asin for c in st.session_state.injury_cases))
+        for asin in products_with_injuries[:10]:
+            injury_count = sum(1 for c in st.session_state.injury_cases if c.asin == asin)
+            summary += f"- {asin}: {injury_count} case(s)\n"
         
-        if summary['fda_mdr_required']:
-            report += """
+        if st.session_state.fda_mdr_required:
+            summary += """
+
 FDA MDR REPORTING REQUIREMENTS
 =============================
-You have reportable injury cases that may require FDA Medical Device Reporting (MDR).
+You have reportable injury cases that require FDA Medical Device Reporting.
 
-Timeline:
-- Death or Serious Injury: Report within 5 calendar days
-- Malfunction that could cause death/injury: Report within 30 calendar days
-
-Next Steps:
-1. Immediately notify regulatory affairs team
+IMMEDIATE ACTIONS REQUIRED:
+1. Notify regulatory affairs team immediately
 2. Preserve all complaint records and device samples
-3. Conduct root cause analysis
-4. Prepare MDR submission with required information
-5. Consider need for product recall or safety alert
+3. Conduct root cause analysis within 48 hours
+4. Prepare MDR submission (5 days for critical, 30 days for other)
+5. Evaluate need for product recall or safety alert
 """
-        
-        return report
     
-    def get_cost_summary(self) -> Dict[str, Any]:
-        """Get detailed cost summary including injury tracking"""
-        summary = self.cost_tracker.get_summary()
-        summary['injury_tracking'] = self.get_injury_summary()
-        return summary
-    
-    def __del__(self):
-        """Cleanup resources"""
-        if hasattr(self, 'executor'):
-            self.executor.shutdown(wait=False)
-        if hasattr(self, 'session') and self.session:
-            self.session.close()
+    st.download_button(
+        label="Download Summary",
+        data=summary,
+        file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+        mime="text/plain"
+    )
 
-# Export all components
-__all__ = [
-    'EnhancedAIAnalyzer',
-    'AIProvider',
-    'MEDICAL_DEVICE_CATEGORIES',
-    'FBA_REASON_MAP',
-    'detect_injury_severity',
-    'InjuryCase',
-    'CostEstimate',
-    'CostTracker',
-    'estimate_tokens',
-    'calculate_cost',
-    'INJURY_RISK_CATEGORIES',
-    'INJURY_KEYWORDS'
-]
+def main():
+    """Main application"""
+    initialize_session_state()
+    inject_professional_css()
+    
+    # Header
+    display_header()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("### ⚙️ Analysis Settings")
+        
+        # File type info
+        if st.session_state.file_type:
+            st.info(f"📁 Current file type: {st.session_state.file_type.upper()}")
+        
+        # Injury filter toggle
+        st.markdown("#### 🚨 Safety Filters")
+        st.session_state.show_injuries_only = st.checkbox(
+            "Show injury cases only",
+            value=st.session_state.show_injuries_only
+        )
+        
+        # Filters
+        st.markdown("#### 🔍 Filters")
+        
+        # ASIN filter
+        if st.session_state.product_analysis:
+            asin_options = ['ALL'] + list(st.session_state.product_analysis.keys())
+            st.session_state.selected_asin = st.selectbox(
+                "Select ASIN",
+                asin_options,
+                index=0
+            )
+        
+        # Category filter
+        if st.session_state.category_analysis:
+            category_options = ['All'] + list(st.session_state.category_analysis.keys())
+            st.session_state.category_filter = st.selectbox(
+                "Filter by Category",
+                category_options,
+                index=0
+            )
+        
+        st.markdown("---")
+        
+        # Quality thresholds
+        st.markdown("#### 📊 Quality Thresholds")
+        quality_threshold = st.slider(
+            "Quality issue alert threshold (%)",
+            10, 50, 30,
+            help="Alert when quality issues exceed this percentage"
+        )
+        
+        st.markdown("---")
+        
+        # Session stats
+        if st.session_state.processing_complete:
+            st.markdown("#### 📈 Session Statistics")
+            st.metric("Processing Time", f"{st.session_state.processing_time:.1f}s")
+            st.metric("Total Injuries", st.session_state.total_injuries)
+            
+            if st.session_state.ai_analyzer:
+                cost_summary = st.session_state.ai_analyzer.get_cost_summary()
+                st.metric("API Cost", f"${cost_summary['total_cost']:.4f}")
+                st.metric("API Calls", cost_summary['api_calls'])
+        
+        # Help
+        with st.expander("📖 How to Use"):
+            st.markdown("""
+            **For PDF files:**
+            1. Go to Seller Central → Manage Returns
+            2. Filter by date/ASIN as needed
+            3. Click Print → Save as PDF
+            4. Upload PDF here
+            
+            **For FBA Returns:**
+            1. Go to Reports → Fulfillment
+            2. Download FBA Returns Report
+            3. Upload .txt file here
+            
+            **Key Features:**
+            - **Automatic injury detection**
+            - FDA MDR compliance checks
+            - Quality issue identification
+            - Product-level insights
+            - Export for action planning
+            
+            **Injury Detection:**
+            System automatically flags:
+            - Critical: Hospital, emergency, severe injury
+            - High: Injury, bleeding, fracture
+            - Medium: Pain, fall, bruise
+            """)
+    
+    # Main content
+    if not st.session_state.analysis_ready:
+        upload_section()
+    else:
+        # Analysis tabs
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "📊 Dashboard",
+            "🚨 Injuries" if st.session_state.total_injuries > 0 else "📈 Categories",
+            "📈 Categories" if st.session_state.total_injuries > 0 else "📦 Products",
+            "📦 Products" if st.session_state.total_injuries > 0 else "💡 Recommendations",
+            "💡 Recommendations" if st.session_state.total_injuries > 0 else "📥 Export",
+            "📥 Export" if st.session_state.total_injuries > 0 else "🔄 New Analysis",
+            "🔄 New Analysis"
+        ])
+        
+        with tab1:
+            display_dashboard()
+        
+        if st.session_state.total_injuries > 0:
+            with tab2:
+                display_injury_summary()
+            with tab3:
+                display_category_analysis()
+            with tab4:
+                display_product_analysis()
+            with tab5:
+                display_recommendations()
+            with tab6:
+                export_analysis()
+            with tab7:
+                if st.button("🔄 Start New Analysis", type="primary", use_container_width=True):
+                    # Reset state
+                    for key in st.session_state:
+                        if key not in ['ai_analyzer', 'pdf_analyzer', 'injury_detector', 'file_detector']:
+                            st.session_state[key] = initialize_session_state.__defaults__[0].get(key)
+                    st.rerun()
+        else:
+            with tab2:
+                display_category_analysis()
+            with tab3:
+                display_product_analysis()
+            with tab4:
+                display_recommendations()
+            with tab5:
+                export_analysis()
+            with tab6:
+                if st.button("🔄 Start New Analysis", type="primary", use_container_width=True):
+                    # Reset state
+                    for key in st.session_state:
+                        if key not in ['ai_analyzer', 'pdf_analyzer', 'injury_detector', 'file_detector']:
+                            st.session_state[key] = initialize_session_state.__defaults__[0].get(key)
+                    st.rerun()
+
+if __name__ == "__main__":
+    main()
