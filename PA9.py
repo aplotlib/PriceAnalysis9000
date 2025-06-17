@@ -150,24 +150,6 @@ except ImportError:
             return mapped_df
 
 MODULES_AVAILABLE = all([PDF_AVAILABLE, AI_AVAILABLE])
-    # Define fallbacks
-    MEDICAL_DEVICE_CATEGORIES = [
-        'Size/Fit Issues',
-        'Comfort Issues',
-        'Product Defects/Quality',
-        'Performance/Effectiveness',
-        'Stability/Positioning Issues',
-        'Equipment Compatibility',
-        'Design/Material Issues',
-        'Wrong Product/Misunderstanding',
-        'Missing Components',
-        'Customer Error/Changed Mind',
-        'Shipping/Fulfillment Issues',
-        'Assembly/Usage Difficulty',
-        'Medical/Health Concerns',
-        'Price/Value',
-        'Other/Miscellaneous'
-    ]
 
 # App Configuration
 st.set_page_config(
@@ -179,16 +161,16 @@ st.set_page_config(
 
 # Professional color scheme
 COLORS = {
-    'primary': '#00D9FF',      # Cyan
-    'secondary': '#FF006E',    # Pink
-    'accent': '#FFB700',       # Gold
-    'success': '#00F5A0',      # Green
-    'warning': '#FF6B35',      # Orange
-    'danger': '#FF0054',       # Red
-    'critical': '#DC143C',     # Crimson
-    'dark': '#2C3E50',         # Dark blue
-    'light': '#ECF0F1',        # Light gray
-    'quality': '#9B59B6'       # Purple for quality issues
+    'primary': '#00D9FF',
+    'secondary': '#FF006E',
+    'accent': '#FFB700',
+    'success': '#00F5A0',
+    'warning': '#FF6B35',
+    'danger': '#FF0054',
+    'critical': '#DC143C',
+    'dark': '#2C3E50',
+    'light': '#ECF0F1',
+    'quality': '#9B59B6'
 }
 
 # Quality-focused categories
@@ -321,7 +303,7 @@ def initialize_session_state():
         'raw_data': None,
         'processed_data': None,
         'categorized_data': None,
-        'file_type': None,  # 'pdf' or 'structured'
+        'file_type': None,
         
         # Analysis results
         'category_analysis': {},
