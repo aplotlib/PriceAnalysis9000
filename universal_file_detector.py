@@ -15,12 +15,46 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-# Quality keywords for detection
-QUALITY_KEYWORDS = [
-    'defect', 'defective', 'broken', 'damaged', 'poor quality', 
-    'doesn\'t work', 'stopped working', 'malfunction', 'fell apart', 
-    'ripped', 'torn', 'dead on arrival', 'doa', 'faulty', 'failed'
-]
+# Medical Device Return Keywords - Based on Amazon Return Categories
+RETURN_KEYWORDS = {
+    'size_fit': ['too large', 'too big', 'too loose', 'too small', 'too tight', 'too thin', 
+                 'wrong size', 'doesn\'t fit', 'bad fit', 'didn\'t fit', 'doesn\'t fit well', 
+                 'too tall', 'too short', 'too wide', 'sizing issues'],
+    'comfort': ['uncomfortable', 'hurts customer', 'too firm', 'too hard', 'too stiff', 
+                'too soft', 'not enough padding', 'not enough cushion'],
+    'defects': ['defective', 'does not work properly', 'poor quality', 'ripped', 'torn', 
+                'bad velcro', 'velcro doesn\'t stick', 'defective handles', 'defective suction cups', 
+                'won\'t inflate', 'inflation issues', 'not working'],
+    'performance': ['ineffective', 'not as expected', 'does not meet expectations', 
+                    'not enough support', 'poor support', 'not enough compression', 
+                    'not cold enough', 'not hot enough', 'inaccurate'],
+    'stability': ['doesn\'t stay in place', 'doesn\'t stay fastened', 'slides around', 
+                  'slides off', 'slides up', 'slippery', 'unstable', 'flattens'],
+    'compatibility': ['doesn\'t fit walker', 'doesn\'t fit bariatric walker', 'doesn\'t fit knee walker',
+                      'doesn\'t fit wheelchair', 'doesn\'t fit toilet', 'doesn\'t fit shower', 
+                      'doesn\'t fit bed', 'doesn\'t fit machine', 'doesn\'t fit handle', 
+                      'doesn\'t fit finger', 'not compatible', 'does not work with compression stockings'],
+    'design': ['too bulky', 'too thick', 'too heavy', 'too thin', 'flimsy', 'small pulley', 
+               'grip too small', 'fingers too long', 'fingers too short'],
+    'wrong_product': ['wrong item', 'wrong color', 'not as advertised', 'different from website description',
+                      'thought it was something else', 'thought it was scooter', 'thought it was crutches',
+                      'thought pump was included', 'brace for wrong hand', 'immobilizer for wrong hand',
+                      'style not as expected'],
+    'missing': ['missing pieces', 'missing parts', 'missing accessories', 'no instructions', 
+                'thought pump was included'],
+    'customer_error': ['ordered wrong item', 'bought by mistake', 'changed mind', 'no longer needed',
+                       'unauthorized purchase', 'no issue', 'customer error'],
+    'shipping': ['arrived too late', 'received used item', 'received damaged item', 'item never arrived'],
+    'assembly': ['difficult to use', 'difficult to adjust', 'difficult to assemble', 
+                 'difficult to open valve', 'installation issues'],
+    'medical': ['doctor did not approve', 'allergic reaction', 'bad smell', 'bad odor'],
+    'price': ['better price available', 'found better price']
+}
+
+# Flatten all keywords for quick checking
+ALL_RETURN_KEYWORDS = []
+for category_keywords in RETURN_KEYWORDS.values():
+    ALL_RETURN_KEYWORDS.extend(category_keywords)
 
 @dataclass
 class ProcessedFile:
@@ -456,9 +490,8 @@ class UniversalFileDetector:
                 col_i = df.columns[8]
                 sample_values = df[col_i].dropna().head(10).astype(str)
                 
-                # Check if it looks like complaints using QUALITY_KEYWORDS
-                complaint_keywords = QUALITY_KEYWORDS + ['wrong', 'missing', 'issue', 'problem', 'return', 'uncomfortable']
-                if any(any(kw in str(val).lower() for kw in complaint_keywords) for val in sample_values):
+                # Check if it looks like complaints using return keywords
+                if any(any(kw in str(val).lower() for kw in ALL_RETURN_KEYWORDS) for val in sample_values):
                     column_mapping['complaint'] = col_i
                     
                     # Map other columns if available
