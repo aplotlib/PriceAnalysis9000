@@ -8,6 +8,7 @@ import os
 import logging
 import json
 import re
+import traceback
 from typing import Dict, List, Any, Optional, Tuple, Union
 from datetime import datetime
 import pandas as pd
@@ -47,6 +48,30 @@ try:
     PYPDF2_AVAILABLE = True
 except ImportError:
     PYPDF2_AVAILABLE = False
+
+# Try to import Amazon PDF parser
+try:
+    from amazon_pdf_parser import AmazonPDFParser
+    AMAZON_PARSER_AVAILABLE = True
+except ImportError:
+    AMAZON_PARSER_AVAILABLE = False
+    logger.warning("Amazon PDF parser not available")
+
+# Try to import Amazon PDF parser
+try:
+    from amazon_pdf_parser import AmazonPDFParser
+    AMAZON_PARSER_AVAILABLE = True
+except ImportError:
+    AMAZON_PARSER_AVAILABLE = False
+    logger.warning("Amazon PDF parser not available")
+
+# Try to import simple PDF processor
+try:
+    from simple_pdf_processor import read_pdf_simple
+    SIMPLE_PDF_AVAILABLE = True
+except ImportError:
+    SIMPLE_PDF_AVAILABLE = False
+    logger.warning("Simple PDF processor not available")
 
 # Medical device return categories
 MEDICAL_DEVICE_CATEGORIES = [
@@ -138,6 +163,7 @@ class FileProcessor:
         """Read file and return DataFrame"""
         try:
             file_name = file.name if hasattr(file, 'name') else 'unknown'
+            logger.info(f"Reading file: {file_name}, type: {file_type}")
             
             # PDF files
             if 'pdf' in file_type.lower() or file_name.lower().endswith('.pdf'):
@@ -170,52 +196,169 @@ class FileProcessor:
                 
         except Exception as e:
             logger.error(f"Error reading file: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     @staticmethod
     def read_pdf(file) -> pd.DataFrame:
-        """Extract data from PDF file"""
+        """Extract data from PDF file with multiple fallback options"""
+        # Try simple PDF processor first (most robust)
+        if SIMPLE_PDF_AVAILABLE:
+            try:
+                logger.info("Trying simple PDF processor...")
+                df = read_pdf_simple(file)
+                if not df.empty:
+                    logger.info(f"Simple PDF processor succeeded: {df.shape}")
+                    return df
+            except Exception as e:
+                logger.error(f"Simple PDF processor failed: {e}")
+        
+        # Try pdfplumber with enhanced parsing
         if PDFPLUMBER_AVAILABLE:
-            return FileProcessor._read_pdf_with_pdfplumber(file)
+            try:
+                logger.info("Trying pdfplumber...")
+                return FileProcessor._read_pdf_with_pdfplumber(file)
+            except Exception as e:
+                logger.error(f"PDFPlumber failed: {e}")
+                if PYPDF2_AVAILABLE:
+                    logger.info("Falling back to PyPDF2")
+                    try:
+                        return FileProcessor._read_pdf_with_pypdf2(file)
+                    except Exception as e2:
+                        logger.error(f"PyPDF2 also failed: {e2}")
+                        # Return empty DataFrame instead of raising
+                        return pd.DataFrame(columns=['order-id', 'asin', 'reason', 'customer-comments'])
+        
+        # Try PyPDF2
         elif PYPDF2_AVAILABLE:
-            return FileProcessor._read_pdf_with_pypdf2(file)
+            try:
+                return FileProcessor._read_pdf_with_pypdf2(file)
+            except Exception as e:
+                logger.error(f"PyPDF2 failed: {e}")
+                return pd.DataFrame(columns=['order-id', 'asin', 'reason', 'customer-comments'])
+        
         else:
-            raise ImportError("No PDF library available. Install pdfplumber or PyPDF2")
+            logger.error("No PDF library available")
+            return pd.DataFrame(columns=['order-id', 'asin', 'reason', 'customer-comments'])
     
     @staticmethod
     def _read_pdf_with_pdfplumber(file) -> pd.DataFrame:
-        """Read PDF using pdfplumber"""
+        """Read PDF using pdfplumber with Amazon-specific parsing"""
         import pdfplumber
         
-        all_data = []
-        
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                # Extract text
-                text = page.extract_text()
-                
-                # Extract tables
-                tables = page.extract_tables()
-                
-                # Process tables
-                for table in tables:
-                    if table and len(table) > 1:
-                        # Convert to DataFrame
-                        df = pd.DataFrame(table[1:], columns=table[0])
-                        all_data.append(df)
-                
-                # If no tables, try to parse text
-                if not tables and text:
-                    lines = text.split('\n')
-                    # Parse Amazon return format
-                    data = FileProcessor._parse_amazon_return_text(lines)
-                    if data:
-                        all_data.extend(data)
-        
-        if all_data:
-            return pd.concat(all_data, ignore_index=True)
+        # Try Amazon-specific parser first
+        if AMAZON_PARSER_AVAILABLE:
+            parser = AmazonPDFParser()
         else:
+            parser = None
+        
+        all_tables = []
+        all_text = []
+        
+        try:
+            with pdfplumber.open(file) as pdf:
+                for page_num, page in enumerate(pdf.pages):
+                    try:
+                        # Extract text
+                        text = page.extract_text()
+                        if text:
+                            all_text.append(text)
+                        
+                        # Extract tables with better settings
+                        tables = page.extract_tables(
+                            table_settings={
+                                "vertical_strategy": "lines",
+                                "horizontal_strategy": "lines",
+                                "snap_tolerance": 3,
+                                "join_tolerance": 3,
+                                "edge_min_length": 3,
+                                "min_words_vertical": 1,
+                                "min_words_horizontal": 1
+                            }
+                        )
+                        
+                        if tables:
+                            all_tables.extend(tables)
+                    
+                    except Exception as e:
+                        logger.warning(f"Error processing page {page_num}: {e}")
+                        continue
+            
+            # If we have the Amazon parser, use it
+            if parser:
+                # Parse text
+                full_text = '\n'.join(all_text) if all_text else ''
+                text_returns = parser.parse_pdf_text(full_text)
+                
+                # Parse tables
+                table_df = parser.parse_pdf_tables(all_tables)
+                
+                # Combine results
+                result_df = parser.combine_results(text_returns, table_df)
+                
+                if not result_df.empty:
+                    return result_df
+            
+            # Fallback to generic parsing
+            # Process tables first
+            all_data = []
+            for table_idx, table in enumerate(all_tables):
+                if table and len(table) > 1:
+                    try:
+                        # Handle potential duplicate column names
+                        headers = table[0]
+                        if headers:
+                            # Make column names unique
+                            seen = {}
+                            unique_headers = []
+                            for header in headers:
+                                header_str = str(header).strip() if header else f"Column_{len(unique_headers)}"
+                                if not header_str:
+                                    header_str = f"Column_{len(unique_headers)}"
+                                
+                                if header_str in seen:
+                                    seen[header_str] += 1
+                                    unique_headers.append(f"{header_str}_{seen[header_str]}")
+                                else:
+                                    seen[header_str] = 0
+                                    unique_headers.append(header_str)
+                            
+                            # Create DataFrame with unique columns
+                            df = pd.DataFrame(table[1:], columns=unique_headers)
+                            
+                            # Remove empty rows
+                            df = df.dropna(how='all')
+                            df = df[df.astype(str).ne('').any(axis=1)]
+                            
+                            if not df.empty:
+                                all_data.append(df)
+                    except Exception as e:
+                        logger.warning(f"Error processing table {table_idx}: {e}")
+                        continue
+            
+            # If we have table data, use it
+            if all_data:
+                try:
+                    # Concatenate all dataframes
+                    combined_df = pd.concat(all_data, ignore_index=True, sort=False)
+                    return combined_df
+                except Exception as e:
+                    logger.error(f"Error combining table data: {e}")
+            
+            # Otherwise, try to parse text
+            if all_text:
+                full_text = '\n'.join(all_text)
+                lines = full_text.split('\n')
+                # Parse Amazon return format
+                data = FileProcessor._parse_amazon_return_text(lines)
+                if data:
+                    return pd.DataFrame(data)
+            
             return pd.DataFrame()
+            
+        except Exception as e:
+            logger.error(f"PDFPlumber error: {e}")
+            raise
     
     @staticmethod
     def _read_pdf_with_pypdf2(file) -> pd.DataFrame:
@@ -249,12 +392,20 @@ class FileProcessor:
         order_pattern = r'(\d{3}-\d{7}-\d{7})'
         asin_pattern = r'(B[A-Z0-9]{9})'
         
-        for line in lines:
+        # Also look for common headers/labels
+        return_indicators = ['return reason', 'reason:', 'customer comment', 'buyer comment', 
+                           'return request', 'order id', 'asin:', 'sku:']
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
             # Check for order ID
             order_match = re.search(order_pattern, line)
             if order_match:
                 # Save previous return if exists
-                if current_return:
+                if current_return and 'order-id' in current_return:
                     returns.append(current_return)
                 
                 current_return = {
@@ -268,22 +419,35 @@ class FileProcessor:
             if asin_match and current_return:
                 current_return['asin'] = asin_match.group(1)
             
-            # Look for return reason indicators
+            # Look for return reason and comments
             if current_return:
                 line_lower = line.lower()
-                if 'return reason' in line_lower or 'reason:' in line_lower:
-                    # Extract reason from next part
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        current_return['reason'] = parts[1].strip()
-                elif 'customer comment' in line_lower or 'buyer comment' in line_lower:
-                    # Extract comment
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        current_return['customer-comments'] = parts[1].strip()
+                
+                # Check if this line contains a label
+                for indicator in return_indicators:
+                    if indicator in line_lower:
+                        # Try to extract value after the indicator
+                        if ':' in line:
+                            parts = line.split(':', 1)
+                            if len(parts) > 1:
+                                value = parts[1].strip()
+                                
+                                if 'reason' in indicator and value:
+                                    current_return['reason'] = value
+                                elif 'comment' in indicator and value:
+                                    current_return['customer-comments'] = value
+                        
+                        # Also check next line for value
+                        elif i + 1 < len(lines):
+                            next_line = lines[i + 1].strip()
+                            if next_line and not any(ind in next_line.lower() for ind in return_indicators):
+                                if 'reason' in indicator:
+                                    current_return['reason'] = next_line
+                                elif 'comment' in indicator:
+                                    current_return['customer-comments'] = next_line
         
         # Don't forget the last return
-        if current_return:
+        if current_return and 'order-id' in current_return:
             returns.append(current_return)
         
         return returns
