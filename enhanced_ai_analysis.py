@@ -7,6 +7,9 @@ Critical: Identifies FDA MDR (Medical Device Reporting) candidates
 # IMPORTANT: This is a module file - DO NOT use st.set_page_config() here
 # st.set_page_config() should only be in the main app file
 
+# Import Streamlit but don't call set_page_config
+import streamlit as st
+
 import pandas as pd
 import numpy as np
 import logging
@@ -23,9 +26,6 @@ import traceback
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Import Streamlit but don't call set_page_config
-import streamlit as st
 
 # Optional imports for AI providers
 try:
@@ -149,7 +149,8 @@ def detect_fda_reportable_event(text: str) -> Dict[str, Any]:
             'is_reportable': False,
             'severity': None,
             'event_types': [],
-            'confidence': 0.0
+            'confidence': 0.0,
+            'requires_immediate_review': False
         }
     
     text_lower = text.lower()
@@ -200,13 +201,32 @@ class EnhancedAIAnalyzer:
         """Initialize AI provider"""
         try:
             if self.provider in [AIProvider.OPENAI, AIProvider.FASTEST] and OPENAI_AVAILABLE:
-                self.ai_client = openai.OpenAI()
-                self.model = "gpt-4o-mini" if self.provider == AIProvider.FASTEST else "gpt-4o"
+                # Check for API key
+                api_key = os.getenv('OPENAI_API_KEY')
+                if not api_key and hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+                    api_key = st.secrets['OPENAI_API_KEY']
+                
+                if api_key:
+                    self.ai_client = openai.OpenAI(api_key=api_key)
+                    self.model = "gpt-4o-mini" if self.provider == AIProvider.FASTEST else "gpt-4o"
+                else:
+                    logger.warning("OpenAI API key not found - using pattern matching only")
+                    self.ai_client = None
             elif self.provider == AIProvider.CLAUDE and CLAUDE_AVAILABLE:
-                self.ai_client = anthropic.Anthropic()
-                self.model = "claude-3-5-sonnet-20241022"
+                # Check for Anthropic API key
+                api_key = os.getenv('ANTHROPIC_API_KEY')
+                if not api_key and hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+                    api_key = st.secrets['ANTHROPIC_API_KEY']
+                
+                if api_key:
+                    self.ai_client = anthropic.Anthropic(api_key=api_key)
+                    self.model = "claude-3-5-sonnet-20241022"
+                else:
+                    logger.warning("Anthropic API key not found - using pattern matching only")
+                    self.ai_client = None
             else:
                 logger.warning("No AI provider available - using pattern matching only")
+                self.ai_client = None
         except Exception as e:
             logger.error(f"Failed to initialize AI: {e}")
             self.ai_client = None
@@ -226,9 +246,24 @@ class EnhancedAIAnalyzer:
             category = self._ai_categorize(full_text, product_name)
             confidence = 0.95
         else:
-            # Fallback to FBA mapping only as last resort
-            category = FBA_REASON_MAP.get(reason, 'Product Defects/Quality')
-            confidence = 0.7
+            # Fallback to FBA mapping and pattern matching
+            if reason in FBA_REASON_MAP:
+                category = FBA_REASON_MAP.get(reason, 'Product Defects/Quality')
+                confidence = 0.8
+            else:
+                # Basic pattern matching fallback
+                text_lower = full_text.lower()
+                if any(keyword in text_lower for keyword in ['too small', 'too large', 'size', 'fit']):
+                    category = 'Size/Fit Issues'
+                elif any(keyword in text_lower for keyword in ['broken', 'defective', 'damaged', 'quality']):
+                    category = 'Product Defects/Quality'
+                elif any(keyword in text_lower for keyword in ['wrong', 'incorrect', 'not as described']):
+                    category = 'Wrong Product/Labeling'
+                elif any(keyword in text_lower for keyword in ['mistake', 'accident', 'error']):
+                    category = 'Customer Error'
+                else:
+                    category = 'Product Defects/Quality'
+                confidence = 0.6
         
         # Override category if injury detected
         if fda_analysis['is_reportable'] and fda_analysis['severity'] in ['CRITICAL', 'HIGH']:
@@ -241,8 +276,8 @@ class EnhancedAIAnalyzer:
             'fda_reportable': fda_analysis['is_reportable'],
             'severity': fda_analysis['severity'],
             'event_types': fda_analysis['event_types'],
-            'requires_mdr': fda_analysis['severity'] in ['CRITICAL', 'HIGH'],
-            'requires_immediate_review': fda_analysis['requires_immediate_review'],
+            'requires_mdr': fda_analysis['severity'] in ['CRITICAL', 'HIGH'] if fda_analysis['severity'] else False,
+            'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
             'product_name': product_name,
             'asin': asin
         }
