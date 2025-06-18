@@ -195,6 +195,8 @@ class EnhancedAIAnalyzer:
         self.api_calls = 0
         self.total_cost = 0.0
         self.ai_client = None
+        self.model = None
+        self.ai_available = False
         self._initialize_ai()
         
     def _initialize_ai(self):
@@ -209,9 +211,12 @@ class EnhancedAIAnalyzer:
                 if api_key:
                     self.ai_client = openai.OpenAI(api_key=api_key)
                     self.model = "gpt-4o-mini" if self.provider == AIProvider.FASTEST else "gpt-4o"
+                    self.ai_available = True
+                    logger.info(f"OpenAI initialized successfully with model: {self.model}")
                 else:
                     logger.warning("OpenAI API key not found - using pattern matching only")
                     self.ai_client = None
+                    self.ai_available = False
             elif self.provider == AIProvider.CLAUDE and CLAUDE_AVAILABLE:
                 # Check for Anthropic API key
                 api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -221,15 +226,69 @@ class EnhancedAIAnalyzer:
                 if api_key:
                     self.ai_client = anthropic.Anthropic(api_key=api_key)
                     self.model = "claude-3-5-sonnet-20241022"
+                    self.ai_available = True
+                    logger.info(f"Claude initialized successfully with model: {self.model}")
                 else:
                     logger.warning("Anthropic API key not found - using pattern matching only")
                     self.ai_client = None
+                    self.ai_available = False
             else:
                 logger.warning("No AI provider available - using pattern matching only")
                 self.ai_client = None
+                self.ai_available = False
         except Exception as e:
             logger.error(f"Failed to initialize AI: {e}")
             self.ai_client = None
+            self.ai_available = False
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get analyzer status"""
+        return {
+            'ai_available': self.ai_available,
+            'provider': self.provider if self.ai_available else 'Pattern Matching',
+            'model': self.model if self.ai_available else None,
+            'api_calls': self.api_calls,
+            'total_cost': self.total_cost
+        }
+    
+    def test_ai_connection(self) -> Dict[str, Any]:
+        """Test AI connection and categorization"""
+        test_cases = [
+            ("Product is too small for my needs", "Size/Fit Issues"),
+            ("Item broke after 2 days", "Product Defects/Quality"),
+            ("Caused injury when it fell on my foot", "Injury/Adverse Event"),
+            ("Doesn't work with my existing equipment", "Compatibility Issues"),
+            ("Ordered the wrong size by mistake", "Customer Error")
+        ]
+        
+        if not self.ai_client:
+            return {
+                'status': 'No AI client available',
+                'results': None
+            }
+        
+        results = []
+        for test_text, expected in test_cases[:2]:  # Test first 2 cases
+            try:
+                category = self._ai_categorize(test_text, "Test Product")
+                results.append({
+                    'text': test_text,
+                    'expected': expected,
+                    'actual': category,
+                    'correct': category == expected
+                })
+            except Exception as e:
+                results.append({
+                    'text': test_text,
+                    'expected': expected,
+                    'actual': f"Error: {str(e)}",
+                    'correct': False
+                })
+        
+        return {
+            'status': 'AI connection successful' if results else 'AI test failed',
+            'results': results
+        }
     
     def categorize_return(self, reason: str, comment: str = "", 
                          product_name: str = "", asin: str = "") -> Dict[str, Any]:
@@ -245,6 +304,129 @@ class EnhancedAIAnalyzer:
         if self.ai_client:
             category = self._ai_categorize(full_text, product_name)
             confidence = 0.95
+        else:
+            # Enhanced pattern matching fallback
+            category, confidence = self._pattern_match_categorize(reason, full_text)
+        
+        # Override category if injury detected
+        if fda_analysis['is_reportable'] and fda_analysis['severity'] in ['CRITICAL', 'HIGH']:
+            category = 'Injury/Adverse Event'
+            confidence = 1.0
+        
+        return {
+            'category': category,
+            'confidence': confidence,
+            'fda_reportable': fda_analysis['is_reportable'],
+            'severity': fda_analysis['severity'],
+            'event_types': fda_analysis['event_types'],
+            'requires_mdr': fda_analysis['severity'] in ['CRITICAL', 'HIGH'] if fda_analysis['severity'] else False,
+            'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
+            'product_name': product_name,
+            'asin': asin
+        }
+    
+    def _pattern_match_categorize(self, reason: str, full_text: str) -> tuple[str, float]:
+        """Enhanced pattern matching for categorization when AI is not available"""
+        text_lower = full_text.lower()
+        
+        # First check FBA reason mapping
+        if reason in FBA_REASON_MAP:
+            return FBA_REASON_MAP[reason], 0.8
+        
+        # Enhanced keyword matching with multiple patterns per category
+        category_patterns = {
+            'Size/Fit Issues': {
+                'keywords': ['too small', 'too large', 'too big', 'size', 'fit', 'tight', 'loose', 
+                           'doesn\'t fit', 'does not fit', 'wrong size', 'smaller', 'larger', 'bigger'],
+                'confidence': 0.9
+            },
+            'Product Defects/Quality': {
+                'keywords': ['broken', 'defective', 'damaged', 'defect', 'quality', 'poor quality',
+                           'cheap', 'flimsy', 'broke', 'cracked', 'torn', 'ripped', 'faulty',
+                           'doesn\'t work', 'does not work', 'stopped working', 'malfunction'],
+                'confidence': 0.85
+            },
+            'Performance/Effectiveness': {
+                'keywords': ['not effective', 'ineffective', 'doesn\'t help', 'does not help',
+                           'not working as expected', 'poor performance', 'weak', 'useless'],
+                'confidence': 0.8
+            },
+            'Injury/Adverse Event': {
+                'keywords': ['injury', 'injured', 'hurt', 'pain', 'painful', 'hospital', 'doctor',
+                           'emergency', 'bleeding', 'wound', 'burn', 'reaction', 'allergic'],
+                'confidence': 0.95
+            },
+            'Stability/Safety Issues': {
+                'keywords': ['unstable', 'wobble', 'tip', 'fall', 'unsafe', 'dangerous', 'hazard',
+                           'not stable', 'tips over', 'fell over', 'collapsed'],
+                'confidence': 0.85
+            },
+            'Material/Component Failure': {
+                'keywords': ['material', 'fabric', 'plastic broke', 'metal bent', 'component',
+                           'part broke', 'piece broke', 'strap broke', 'buckle broke'],
+                'confidence': 0.8
+            },
+            'Comfort/Usability Issues': {
+                'keywords': ['uncomfortable', 'not comfortable', 'hard to use', 'difficult',
+                           'complicated', 'confusing', 'awkward', 'inconvenient'],
+                'confidence': 0.75
+            },
+            'Compatibility Issues': {
+                'keywords': ['not compatible', 'incompatible', 'doesn\'t fit with', 'does not fit with',
+                           'won\'t work with', 'not suitable for'],
+                'confidence': 0.85
+            },
+            'Wrong Product/Labeling': {
+                'keywords': ['wrong', 'incorrect', 'not as described', 'different', 'not what ordered',
+                           'wrong item', 'wrong product', 'mislabeled', 'not as advertised'],
+                'confidence': 0.9
+            },
+            'Missing Components': {
+                'keywords': ['missing', 'incomplete', 'parts missing', 'not included', 'forgot',
+                           'didn\'t come with', 'no instructions'],
+                'confidence': 0.85
+            },
+            'Customer Error': {
+                'keywords': ['my mistake', 'ordered wrong', 'accident', 'my fault', 'didn\'t realize',
+                           'misunderstood', 'wrong one', 'user error'],
+                'confidence': 0.9
+            },
+            'Non-Medical Issue': {
+                'keywords': ['price', 'cost', 'expensive', 'cheaper', 'no longer need',
+                           'changed mind', 'don\'t want', 'found better', 'duplicate'],
+                'confidence': 0.8
+            }
+        }
+        
+        # Score each category based on keyword matches
+        best_category = 'Product Defects/Quality'
+        best_score = 0
+        best_confidence = 0.6
+        
+        for category, data in category_patterns.items():
+            score = 0
+            for keyword in data['keywords']:
+                if keyword in text_lower:
+                    score += 1
+            
+            if score > best_score:
+                best_score = score
+                best_category = category
+                best_confidence = data['confidence']
+        
+        # If no keywords matched, try to use reason code patterns
+        if best_score == 0:
+            reason_upper = reason.upper()
+            if 'DEFECT' in reason_upper or 'QUALITY' in reason_upper:
+                return 'Product Defects/Quality', 0.7
+            elif 'COMPATIBLE' in reason_upper:
+                return 'Compatibility Issues', 0.7
+            elif 'WRONG' in reason_upper:
+                return 'Wrong Product/Labeling', 0.7
+            elif 'DAMAGED' in reason_upper:
+                return 'Product Defects/Quality', 0.7
+        
+        return best_category, best_confidence95
         else:
             # Fallback to FBA mapping and pattern matching
             if reason in FBA_REASON_MAP:
@@ -287,19 +469,25 @@ class EnhancedAIAnalyzer:
         if not self.ai_client:
             return 'Product Defects/Quality'
         
-        prompt = f"""
-        You are an FDA medical device expert analyzing return reasons for potential adverse events.
-        
-        Product: {product_name}
-        Return Text: {text}
-        
-        Categorize this return into ONE of these categories:
-        {', '.join(MEDICAL_DEVICE_CATEGORIES)}
-        
-        Focus on identifying potential injuries, malfunctions, or safety issues that may require FDA reporting.
-        
-        Return only the category name, nothing else.
-        """
+        prompt = f"""You are analyzing Amazon return reasons for medical devices. Categorize the following return into EXACTLY ONE of these categories:
+
+1. Product Defects/Quality - broken, defective, damaged, poor quality, doesn't work
+2. Size/Fit Issues - too small, too large, doesn't fit, wrong size
+3. Performance/Effectiveness - doesn't work as expected, ineffective, poor performance
+4. Injury/Adverse Event - injury, hurt, pain, hospital, medical attention
+5. Stability/Safety Issues - unstable, tips over, falls, unsafe
+6. Material/Component Failure - material defect, component broke, parts failed
+7. Comfort/Usability Issues - uncomfortable, hard to use, difficult
+8. Compatibility Issues - not compatible, doesn't fit with other products
+9. Wrong Product/Labeling - wrong item, not as described, incorrect product
+10. Missing Components - missing parts, incomplete
+11. Customer Error - user mistake, ordered wrong, misunderstood
+12. Non-Medical Issue - price, shipping, no longer needed, changed mind
+
+Product: {product_name if product_name else 'Unknown'}
+Return Reason: {text}
+
+Analyze the return reason and respond with ONLY the category name exactly as shown above. Nothing else."""
         
         try:
             if isinstance(self.ai_client, openai.OpenAI):
@@ -321,11 +509,53 @@ class EnhancedAIAnalyzer:
             
             self.api_calls += 1
             
-            # Validate category
-            if category in MEDICAL_DEVICE_CATEGORIES:
-                return category
-            else:
-                return 'Product Defects/Quality'
+            # Log the response for debugging
+            logger.info(f"AI categorized '{text[:50]}...' as: '{category}'")
+            
+            # Flexible matching - handle case variations and partial matches
+            category_lower = category.lower().strip()
+            
+            # Direct match check (case-insensitive)
+            for valid_category in MEDICAL_DEVICE_CATEGORIES:
+                if category_lower == valid_category.lower():
+                    return valid_category
+            
+            # Check if response contains a valid category
+            for valid_category in MEDICAL_DEVICE_CATEGORIES:
+                if valid_category.lower() in category_lower:
+                    return valid_category
+            
+            # Common variations mapping
+            category_mappings = {
+                'quality': 'Product Defects/Quality',
+                'defect': 'Product Defects/Quality',
+                'broken': 'Product Defects/Quality',
+                'size': 'Size/Fit Issues',
+                'fit': 'Size/Fit Issues',
+                'performance': 'Performance/Effectiveness',
+                'injury': 'Injury/Adverse Event',
+                'adverse': 'Injury/Adverse Event',
+                'safety': 'Stability/Safety Issues',
+                'stability': 'Stability/Safety Issues',
+                'material': 'Material/Component Failure',
+                'component': 'Material/Component Failure',
+                'comfort': 'Comfort/Usability Issues',
+                'usability': 'Comfort/Usability Issues',
+                'compatibility': 'Compatibility Issues',
+                'wrong': 'Wrong Product/Labeling',
+                'labeling': 'Wrong Product/Labeling',
+                'missing': 'Missing Components',
+                'customer error': 'Customer Error',
+                'non-medical': 'Non-Medical Issue'
+            }
+            
+            for key, mapped_category in category_mappings.items():
+                if key in category_lower:
+                    return mapped_category
+            
+            # If no match found, log warning and return default
+            logger.warning(f"AI returned unrecognized category: '{category}'. Defaulting to Product Defects/Quality")
+            return 'Product Defects/Quality'
                 
         except Exception as e:
             logger.error(f"AI categorization failed: {e}")
@@ -342,6 +572,35 @@ class EnhancedAIAnalyzer:
         results = []
         total = len(df)
         
+        # Log available columns for debugging
+        logger.info(f"Available columns: {list(df.columns)}")
+        
+        # Flexible column detection
+        # Try to find columns even if they don't match exactly
+        actual_reason_col = None
+        actual_comment_col = None
+        actual_product_col = None
+        actual_asin_col = None
+        
+        for col in df.columns:
+            col_lower = col.lower()
+            if not actual_reason_col and ('reason' in col_lower or 'issue' in col_lower):
+                actual_reason_col = col
+            elif not actual_comment_col and ('comment' in col_lower or 'feedback' in col_lower or 'notes' in col_lower):
+                actual_comment_col = col
+            elif not actual_product_col and ('product' in col_lower or 'item' in col_lower or 'title' in col_lower):
+                actual_product_col = col
+            elif not actual_asin_col and 'asin' in col_lower:
+                actual_asin_col = col
+        
+        # Use found columns or defaults
+        reason_col = actual_reason_col or reason_col
+        comment_col = actual_comment_col or comment_col
+        product_col = actual_product_col or product_col
+        asin_col = actual_asin_col or asin_col
+        
+        logger.info(f"Using columns - Reason: {reason_col}, Comment: {comment_col}, Product: {product_col}, ASIN: {asin_col}")
+        
         # Create progress placeholder
         progress_placeholder = st.empty()
         status_placeholder = st.empty()
@@ -349,6 +608,11 @@ class EnhancedAIAnalyzer:
         # Track FDA reportable events
         reportable_count = 0
         critical_count = 0
+        
+        # Show sample of data being processed
+        if total > 0 and reason_col in df.columns:
+            sample_reasons = df[reason_col].dropna().head(3).tolist()
+            st.info(f"Processing {total} returns. Sample reasons: {sample_reasons}")
         
         for idx, row in df.iterrows():
             # Update progress
@@ -363,12 +627,28 @@ class EnhancedAIAnalyzer:
                         f"({critical_count} critical)"
                     )
             
-            reason = str(row.get(reason_col, ''))
-            comment = str(row.get(comment_col, ''))
-            product = str(row.get(product_col, ''))
-            asin = str(row.get(asin_col, ''))
+            # Extract data with fallbacks
+            reason = str(row.get(reason_col, '')) if reason_col in df.columns else ''
+            comment = str(row.get(comment_col, '')) if comment_col in df.columns else ''
+            product = str(row.get(product_col, '')) if product_col in df.columns else ''
+            asin = str(row.get(asin_col, '')) if asin_col in df.columns else ''
             
-            result = self.categorize_return(reason, comment, product, asin)
+            # Skip empty rows
+            if not reason and not comment:
+                result = {
+                    'category': 'Product Defects/Quality',
+                    'confidence': 0.1,
+                    'fda_reportable': False,
+                    'severity': None,
+                    'event_types': [],
+                    'requires_mdr': False,
+                    'requires_immediate_review': False,
+                    'product_name': product,
+                    'asin': asin
+                }
+            else:
+                result = self.categorize_return(reason, comment, product, asin)
+            
             results.append(result)
             
             # Track reportable events
@@ -388,6 +668,10 @@ class EnhancedAIAnalyzer:
         df['event_types'] = [r['event_types'] for r in results]
         df['requires_mdr'] = [r['requires_mdr'] for r in results]
         df['requires_immediate_review'] = [r['requires_immediate_review'] for r in results]
+        
+        # Show category distribution
+        category_counts = df['category'].value_counts()
+        st.info(f"Categorization complete! Top categories: {dict(category_counts.head(5))}")
         
         # Final status
         if reportable_count > 0:
@@ -478,11 +762,154 @@ class FileProcessor:
     """Universal file processor for multiple formats"""
     
     @staticmethod
+    def _standardize_amazon_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize column names for Amazon return data"""
+        # Common column name mappings
+        column_mappings = {
+            # Order ID variations
+            'order id': 'order-id',
+            'order_id': 'order-id',
+            'order-id': 'order-id',
+            'orderid': 'order-id',
+            'order number': 'order-id',
+            'order #': 'order-id',
+            'order': 'order-id',
+            'orderId': 'order-id',
+            
+            # ASIN variations
+            'asin': 'asin',
+            'product asin': 'asin',
+            'item asin': 'asin',
+            'product-asin': 'asin',
+            
+            # Return reason variations
+            'return reason': 'reason',
+            'reason': 'reason',
+            'return_reason': 'reason',
+            'return-reason': 'reason',
+            'reason for return': 'reason',
+            'issue': 'reason',
+            'return type': 'reason',
+            
+            # Customer comments variations
+            'customer comments': 'customer-comments',
+            'customer comment': 'customer-comments',
+            'customer-comments': 'customer-comments',
+            'buyer comments': 'customer-comments',
+            'buyer comment': 'customer-comments',
+            'comments': 'customer-comments',
+            'feedback': 'customer-comments',
+            'notes': 'customer-comments',
+            'customer feedback': 'customer-comments',
+            'buyer_comments': 'customer-comments',
+            'customer_comments': 'customer-comments',
+            'buyer-comments': 'customer-comments',
+            
+            # Product name variations
+            'product name': 'product-name',
+            'product-name': 'product-name',
+            'product': 'product-name',
+            'item name': 'product-name',
+            'product title': 'product-name',
+            'title': 'product-name',
+            'description': 'product-name',
+            'product_name': 'product-name',
+            'item': 'product-name',
+            
+            # SKU variations
+            'sku': 'sku',
+            'seller sku': 'sku',
+            'merchant sku': 'sku',
+            'seller-sku': 'sku',
+            'merchant-sku': 'sku',
+            
+            # Date variations
+            'return date': 'return-date',
+            'return-date': 'return-date',
+            'date': 'return-date',
+            'return_date': 'return-date',
+            'returned date': 'return-date',
+            'date returned': 'return-date',
+            'returned-date': 'return-date',
+            
+            # Quantity variations
+            'quantity': 'quantity',
+            'qty': 'quantity',
+            'units': 'quantity',
+            'amount': 'quantity',
+        }
+        
+        # Create a copy of the dataframe
+        result = df.copy()
+        
+        # First pass: collect all columns and their mappings
+        new_column_names = {}
+        seen_targets = set()
+        
+        for col in result.columns:
+            col_lower = str(col).lower().strip()
+            mapped = False
+            
+            # Check if it matches any known mapping
+            for key, value in column_mappings.items():
+                if col_lower == key:
+                    # Check if we've already mapped to this target
+                    if value in seen_targets:
+                        # Add a suffix to make it unique
+                        suffix = 1
+                        new_name = f"{value}_{suffix}"
+                        while new_name in seen_targets:
+                            suffix += 1
+                            new_name = f"{value}_{suffix}"
+                        new_column_names[col] = new_name
+                        seen_targets.add(new_name)
+                    else:
+                        new_column_names[col] = value
+                        seen_targets.add(value)
+                    mapped = True
+                    break
+            
+            if not mapped:
+                # Keep original but ensure uniqueness
+                new_col = col_lower.replace(' ', '-').replace('_', '-')
+                if new_col in seen_targets:
+                    suffix = 1
+                    unique_col = f"{new_col}_{suffix}"
+                    while unique_col in seen_targets:
+                        suffix += 1
+                        unique_col = f"{new_col}_{suffix}"
+                    new_column_names[col] = unique_col
+                    seen_targets.add(unique_col)
+                else:
+                    new_column_names[col] = new_col
+                    seen_targets.add(new_col)
+        
+        # Apply the new column names
+        result.rename(columns=new_column_names, inplace=True)
+        
+        # Ensure required columns exist (even if empty)
+        required_columns = ['order-id', 'asin', 'reason', 'customer-comments', 'product-name']
+        for col in required_columns:
+            if col not in result.columns:
+                result[col] = ''
+        
+        # Log the column mapping for debugging
+        logger.info(f"Column mapping applied: {new_column_names}")
+        
+        return result
+    
+    @staticmethod
     def read_file(file, file_type: str) -> pd.DataFrame:
         """Read various file formats and return DataFrame"""
+        logger.info(f"Attempting to read file: {getattr(file, 'name', 'unknown')} as type: {file_type}")
+        
         try:
+            # Reset file pointer
+            if hasattr(file, 'seek'):
+                file.seek(0)
+            
             # Handle PDF
-            if 'pdf' in file_type.lower() or file_type == 'application/pdf':
+            if 'pdf' in file_type.lower() or file_type == 'application/pdf' or (hasattr(file, 'name') and file.name.lower().endswith('.pdf')):
                 # Check for PDF libraries
                 pdf_library = None
                 try:
@@ -506,34 +933,177 @@ class FileProcessor:
                     import pdfplumber
                     
                     all_data = []
-                    text_data = []
+                    all_text = []
                     
                     with pdfplumber.open(file) as pdf:
-                        for i, page in enumerate(pdf.pages):
-                            # Try to extract tables first
-                            tables = page.extract_tables()
-                            if tables:
-                                for table in tables:
-                                    if table and len(table) > 1:
-                                        # Use first row as header if it looks like headers
-                                        df = pd.DataFrame(table[1:], columns=table[0])
-                                        all_data.append(df)
-                            else:
-                                # Fall back to text extraction
+                        for page_num, page in enumerate(pdf.pages):
+                            try:
+                                # Extract text first
                                 text = page.extract_text()
                                 if text:
-                                    lines = text.split('\n')
-                                    for line in lines:
-                                        if '\t' in line or '|' in line:
-                                            text_data.append(line)
+                                    all_text.append(text)
+                                
+                                # Try to extract tables
+                                tables = page.extract_tables()
+                                if tables:
+                                    for table_idx, table in enumerate(tables):
+                                        if table and len(table) > 1:
+                                            # Process table headers
+                                            headers = []
+                                            seen_headers = {}
+                                            
+                                            # Clean and make headers unique
+                                            for col_idx, h in enumerate(table[0]):
+                                                if h:
+                                                    h_str = str(h).strip()
+                                                else:
+                                                    h_str = f'Column_{col_idx}'
+                                                
+                                                # Ensure uniqueness
+                                                original_h = h_str
+                                                counter = 1
+                                                while h_str in seen_headers:
+                                                    h_str = f"{original_h}_{counter}"
+                                                    counter += 1
+                                                seen_headers[h_str] = True
+                                                headers.append(h_str)
+                                            
+                                            # Create DataFrame with unique headers
+                                            try:
+                                                # Filter out empty rows
+                                                data_rows = [row for row in table[1:] if any(cell for cell in row if cell)]
+                                                if data_rows:
+                                                    df = pd.DataFrame(data_rows, columns=headers)
+                                                    all_data.append(df)
+                                            except Exception as e:
+                                                logger.warning(f"Error creating DataFrame from table on page {page_num}: {e}")
+                                                
+                            except Exception as e:
+                                logger.warning(f"Error processing page {page_num}: {e}")
+                                continue
+                    
+                    # Try to process collected data
+                    if all_data:
+                        try:
+                            # Combine all dataframes
+                            if len(all_data) == 1:
+                                result = all_data[0]
+                            else:
+                                # Stack dataframes vertically
+                                result = pd.DataFrame()
+                                for df in all_data:
+                                    if result.empty:
+                                        result = df
+                                    else:
+                                        # Try to align columns
+                                        common_cols = set(result.columns) & set(df.columns)
+                                        if common_cols:
+                                            # Use only common columns
+                                            result = pd.concat([result[list(common_cols)], df[list(common_cols)]], 
+                                                             ignore_index=True, sort=False)
+                                        else:
+                                            # No common columns, append as new columns
+                                            for col in df.columns:
+                                                if col not in result.columns:
+                                                    result[col] = None
+                                            result = pd.concat([result, df], ignore_index=True, sort=False)
+                        except Exception as e:
+                            logger.warning(f"Error combining DataFrames: {e}")
+                            # Use the largest table
+                            result = max(all_data, key=len)
+                    
+                    # If no tables found, try to parse text
+                    elif all_text:
+                        logger.info("No tables found in PDF, attempting text parsing")
+                        full_text = '\n'.join(all_text)
+                        
+                        # Look for Amazon return patterns
+                        lines = full_text.split('\n')
+                        data_rows = []
+                        
+                        # Try to identify data patterns
+                        for line in lines:
+                            # Skip empty lines
+                            if not line.strip():
+                                continue
+                            
+                            # Look for lines that might contain order IDs (XXX-XXXXXXX-XXXXXXX)
+                            if re.search(r'\d{3}-\d{7}-\d{7}', line):
+                                # Split by multiple spaces or tabs
+                                parts = re.split(r'\s{2,}|\t', line.strip())
+                                if len(parts) >= 3:  # Need at least order ID, ASIN, and reason
+                                    data_rows.append(parts)
+                        
+                        if data_rows:
+                            # Create DataFrame from parsed rows
+                            max_cols = max(len(row) for row in data_rows)
+                            
+                            # Pad rows to have same number of columns
+                            for row in data_rows:
+                                while len(row) < max_cols:
+                                    row.append('')
+                            
+                            # Create generic column names
+                            columns = [f'Column_{i}' for i in range(max_cols)]
+                            result = pd.DataFrame(data_rows, columns=columns)
+                        else:
+                            raise ValueError("No structured data found in PDF")
+                    else:
+                        raise ValueError("No data could be extracted from PDF")
+                    
+                    # Clean and standardize the result
+                    if 'result' in locals() and not result.empty:
+                        # Remove completely empty rows
+                        result = result.dropna(how='all')
+                        # Clean string columns
+                        result = result.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+                        # Standardize column names
+                        result = FileProcessor._standardize_amazon_columns(result)
+                        return result
+                    else:
+                        raise ValueError("Failed to extract data from PDF")
                     
                     # Combine all extracted data
                     if all_data:
-                        result = pd.concat(all_data, ignore_index=True)
+                        # Concatenate DataFrames more carefully
+                        try:
+                            if len(all_data) == 1:
+                                result = all_data[0]
+                            else:
+                                # Ensure no duplicate columns before concatenation
+                                result = pd.DataFrame()
+                                for df_idx, df in enumerate(all_data):
+                                    # Make all column names unique for this dataframe
+                                    df.columns = [f"{col}_{df_idx}" if col in result.columns else col for col in df.columns]
+                                    if result.empty:
+                                        result = df
+                                    else:
+                                        result = pd.concat([result, df], axis=0, ignore_index=True, sort=False)
+                        except Exception as e:
+                            logger.warning(f"Error concatenating PDF data: {e}")
+                            # If concatenation fails, just use the first table
+                            if all_data:
+                                result = all_data[0]
+                            else:
+                                raise ValueError("Could not process PDF tables")
                     elif text_data:
                         # Parse text data
                         if '\t' in text_data[0]:
-                            result = pd.DataFrame([line.split('\t') for line in text_data])
+                            data_rows = []
+                            for line in text_data:
+                                data_rows.append(line.split('\t'))
+                            
+                            # Find max columns
+                            max_cols = max(len(row) for row in data_rows)
+                            
+                            # Pad rows to have same number of columns
+                            for row in data_rows:
+                                while len(row) < max_cols:
+                                    row.append('')
+                            
+                            # Create DataFrame with generic column names
+                            col_names = [f'Column_{i}' for i in range(max_cols)]
+                            result = pd.DataFrame(data_rows, columns=col_names)
                         else:
                             result = pd.DataFrame([line.split('|') for line in text_data])
                     else:
@@ -541,6 +1111,10 @@ class FileProcessor:
                     
                     # Clean up the dataframe
                     result = result.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+                    
+                    # Try to identify and standardize column names for Amazon returns
+                    result = FileProcessor._standardize_amazon_columns(result)
+                    
                     return result
                 
                 else:  # PyPDF2
@@ -551,24 +1125,23 @@ class FileProcessor:
                         text += page.extract_text() + "\n"
                     
                     # Try to parse as structured data
-                    lines = text.split('\n')
+                    lines = [line for line in text.split('\n') if line.strip()]
                     data = []
                     headers = None
                     
                     for line in lines:
-                        if line.strip():
-                            # Try tab-separated first
-                            if '\t' in line:
-                                parts = line.split('\t')
+                        # Try tab-separated first
+                        if '\t' in line:
+                            parts = line.split('\t')
+                        else:
+                            # Try multiple spaces as separator
+                            parts = [p.strip() for p in line.split('  ') if p.strip()]
+                        
+                        if parts and len(parts) > 2:  # Need at least 3 columns for meaningful data
+                            if not headers and any(col in ' '.join(parts).lower() for col in ['order', 'asin', 'reason', 'return']):
+                                headers = parts
                             else:
-                                # Try multiple spaces as separator
-                                parts = [p.strip() for p in line.split('  ') if p.strip()]
-                            
-                            if parts:
-                                if not headers and len(parts) > 3:
-                                    headers = parts
-                                else:
-                                    data.append(parts)
+                                data.append(parts)
                     
                     if data:
                         if headers:
@@ -581,29 +1154,63 @@ class FileProcessor:
                                 elif len(row) > max_cols:
                                     row = row[:max_cols]
                                 cleaned_data.append(row)
-                            return pd.DataFrame(cleaned_data, columns=headers)
+                            
+                            # Make headers unique
+                            unique_headers = []
+                            header_counts = {}
+                            for h in headers:
+                                if h in header_counts:
+                                    header_counts[h] += 1
+                                    unique_headers.append(f"{h}_{header_counts[h]}")
+                                else:
+                                    header_counts[h] = 0
+                                    unique_headers.append(h)
+                            
+                            result = pd.DataFrame(cleaned_data, columns=unique_headers)
                         else:
-                            return pd.DataFrame(data)
+                            result = pd.DataFrame(data)
+                        
+                        result = FileProcessor._standardize_amazon_columns(result)
+                        return result
                     else:
                         raise ValueError("Could not extract structured data from PDF")
             
             # CSV handling
-            elif file_type in ['csv', 'text/csv']:
+            elif file_type in ['csv', 'text/csv'] or file.name.lower().endswith('.csv'):
                 # Try different encodings
-                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16']
+                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16', 'windows-1252', 'utf-8-sig']
                 last_error = None
                 
                 for encoding in encodings:
                     try:
                         file.seek(0)
-                        df = pd.read_csv(file, encoding=encoding, low_memory=False)
+                        # First try to read a sample to detect issues
+                        sample = file.read(10000)
+                        file.seek(0)
+                        
+                        # Try to decode the sample
+                        try:
+                            sample.decode(encoding)
+                        except:
+                            continue
+                        
+                        # If sample decodes successfully, read the full file
+                        df = pd.read_csv(file, encoding=encoding, low_memory=False, on_bad_lines='skip')
                         if len(df) > 0:
+                            df = FileProcessor._standardize_amazon_columns(df)
                             return df
                     except Exception as e:
                         last_error = e
                         continue
                 
-                raise ValueError(f"Could not decode CSV file. Last error: {last_error}")
+                # If all encodings fail, try with error replacement
+                try:
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding='utf-8', errors='replace', low_memory=False, on_bad_lines='skip')
+                    df = FileProcessor._standardize_amazon_columns(df)
+                    return df
+                except:
+                    raise ValueError(f"Could not decode CSV file. Last error: {last_error}")
             
             # Excel handling
             elif file_type in ['xlsx', 'xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -625,73 +1232,167 @@ class FileProcessor:
                     )
             
             # TSV handling
-            elif file_type in ['tsv', 'text/tab-separated-values']:
-                file.seek(0)
-                return pd.read_csv(file, sep='\t', low_memory=False)
+            elif file_type in ['tsv', 'text/tab-separated-values'] or (file_type == 'text/plain' and file.name.lower().endswith('.tsv')):
+                # Try different encodings for TSV files
+                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16', 'windows-1252']
+                last_error = None
+                
+                for encoding in encodings:
+                    try:
+                        file.seek(0)
+                        df = pd.read_csv(file, sep='\t', encoding=encoding, low_memory=False, on_bad_lines='skip')
+                        if len(df) > 0:
+                            # Standardize columns
+                            df = FileProcessor._standardize_amazon_columns(df)
+                            return df
+                    except Exception as e:
+                        last_error = e
+                        continue
+                
+                # If all encodings fail, try with error handling
+                try:
+                    file.seek(0)
+                    df = pd.read_csv(file, sep='\t', encoding='utf-8', errors='replace', low_memory=False, on_bad_lines='skip')
+                    df = FileProcessor._standardize_amazon_columns(df)
+                    return df
+                except:
+                    raise ValueError(f"Could not decode TSV file. Last error: {last_error}")
             
             # TXT handling with delimiter detection
             elif file_type in ['txt', 'text/plain']:
                 file.seek(0)
-                # Read first few lines to detect delimiter
-                sample_lines = []
-                for _ in range(min(10, 5)):  # Read up to 10 lines
-                    line = file.readline()
-                    if not line:
-                        break
-                    if isinstance(line, bytes):
-                        line = line.decode('utf-8', errors='ignore')
-                    sample_lines.append(line)
-                file.seek(0)
                 
-                if not sample_lines:
-                    raise ValueError("Empty text file")
+                # Check if it's actually a TSV file
+                if file.name.lower().endswith('.tsv'):
+                    # Handle as TSV with encoding detection
+                    encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16', 'windows-1252']
+                    last_error = None
+                    
+                    for encoding in encodings:
+                        try:
+                            file.seek(0)
+                            df = pd.read_csv(file, sep='\t', encoding=encoding, low_memory=False, on_bad_lines='skip')
+                            if len(df) > 0:
+                                df = FileProcessor._standardize_amazon_columns(df)
+                                return df
+                        except Exception as e:
+                            last_error = e
+                            continue
+                    
+                    # If all encodings fail, try with error handling
+                    try:
+                        file.seek(0)
+                        df = pd.read_csv(file, sep='\t', encoding='utf-8', errors='replace', low_memory=False, on_bad_lines='skip')
+                        df = FileProcessor._standardize_amazon_columns(df)
+                        return df
+                    except:
+                        raise ValueError(f"Could not decode TSV file. Last error: {last_error}")
                 
-                # Detect delimiter
-                delimiters = ['\t', '|', ',', ';']
-                delimiter_counts = {}
-                
-                for delim in delimiters:
-                    counts = [line.count(delim) for line in sample_lines]
-                    # Check if delimiter appears consistently
-                    if counts and all(c > 0 for c in counts):
-                        avg_count = sum(counts) / len(counts)
-                        delimiter_counts[delim] = (avg_count, min(counts), max(counts))
-                
-                # Choose delimiter with most consistent count
-                if delimiter_counts:
-                    # Sort by consistency (smallest difference between min and max)
-                    best_delimiter = min(delimiter_counts.items(), 
-                                       key=lambda x: x[1][2] - x[1][1])[0]
                 else:
-                    # Default to comma if no clear delimiter found
-                    best_delimiter = ','
-                
-                try:
-                    return pd.read_csv(file, sep=best_delimiter, low_memory=False)
-                except Exception as e:
-                    # Try with spaces as delimiter
+                    # Regular text file processing
+                    # Read first few lines to detect delimiter
+                    sample_lines = []
+                    for _ in range(min(10, 5)):  # Read up to 10 lines
+                        line = file.readline()
+                        if not line:
+                            break
+                        if isinstance(line, bytes):
+                            line = line.decode('utf-8', errors='ignore')
+                        sample_lines.append(line)
                     file.seek(0)
-                    return pd.read_csv(file, delim_whitespace=True, low_memory=False)
+                    
+                    if not sample_lines:
+                        raise ValueError("Empty text file")
+                    
+                    # Detect delimiter
+                    delimiters = ['\t', '|', ',', ';']
+                    delimiter_counts = {}
+                    
+                    for delim in delimiters:
+                        counts = [line.count(delim) for line in sample_lines]
+                        # Check if delimiter appears consistently
+                        if counts and all(c > 0 for c in counts):
+                            avg_count = sum(counts) / len(counts)
+                            delimiter_counts[delim] = (avg_count, min(counts), max(counts))
+                    
+                    # Choose delimiter with most consistent count
+                    if delimiter_counts:
+                        # Sort by consistency (smallest difference between min and max)
+                        best_delimiter = min(delimiter_counts.items(), 
+                                           key=lambda x: x[1][2] - x[1][1])[0]
+                    else:
+                        # Default to tab for .txt files
+                        best_delimiter = '\t'
+                    
+                    try:
+                        df = pd.read_csv(file, sep=best_delimiter, low_memory=False, encoding='utf-8', errors='replace')
+                        df = FileProcessor._standardize_amazon_columns(df)
+                        return df
+                    except Exception as e:
+                        # Try with spaces as delimiter
+                        file.seek(0)
+                        df = pd.read_csv(file, delim_whitespace=True, low_memory=False, encoding='utf-8', errors='replace')
+                        df = FileProcessor._standardize_amazon_columns(df)
+                        return df
             
             else:
                 # Try to read as CSV as last resort
-                file.seek(0)
-                return pd.read_csv(file, low_memory=False)
+                try:
+                    file.seek(0)
+                    # Try with different encodings
+                    for encoding in ['utf-8', 'latin-1', 'cp1252', 'utf-8-sig']:
+                        try:
+                            file.seek(0)
+                            df = pd.read_csv(file, encoding=encoding, low_memory=False, on_bad_lines='skip')
+                            if not df.empty:
+                                df = FileProcessor._standardize_amazon_columns(df)
+                                return df
+                        except:
+                            continue
+                    
+                    # Final attempt with error replacement
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding='utf-8', errors='replace', low_memory=False, on_bad_lines='skip')
+                    df = FileProcessor._standardize_amazon_columns(df)
+                    return df
+                except Exception as e:
+                    raise ValueError(f"Could not read file as any known format: {str(e)}")
                 
         except Exception as e:
             logger.error(f"Error reading file: {e}")
+            logger.error(f"File type: {file_type}, File name: {getattr(file, 'name', 'unknown')}")
             error_msg = str(e)
             
             # Provide helpful error messages
-            if "PDF" in error_msg:
+            if "PDF" in error_msg or "pdf" in file_type.lower():
                 raise Exception(
                     "PDF file processing failed. Please ensure your PDF contains tabular data, "
-                    "or export your Amazon returns as CSV/Excel format instead."
+                    "or export your Amazon returns as CSV/Excel format instead.\n"
+                    "Error: " + error_msg
                 )
-            elif "Excel" in error_msg:
+            elif "Excel" in error_msg or "xlsx" in file_type.lower():
                 raise Exception(
                     "Excel file processing failed. Try saving as CSV format, "
-                    "or install openpyxl with: pip install openpyxl"
+                    "or install openpyxl with: pip install openpyxl\n"
+                    "Error: " + error_msg
+                )
+            elif "codec" in error_msg or "decode" in error_msg:
+                raise Exception(
+                    "File encoding issue detected. The file contains special characters that couldn't be read.\n"
+                    "Solutions:\n"
+                    "1. Save the file as UTF-8 encoded CSV\n"
+                    "2. Remove special characters (like ™, ®, –) from the file\n"
+                    "3. Open in Excel and save as CSV (UTF-8)\n"
+                    "Error: " + error_msg
+                )
+            elif "Reindexing" in error_msg:
+                raise Exception(
+                    "File structure issue - duplicate column names detected.\n"
+                    "Solutions:\n"
+                    "1. Export from Amazon as CSV format (recommended)\n"
+                    "2. Check that column headers are unique\n"
+                    "3. Remove any merged cells or complex formatting\n"
+                    "Error: " + error_msg
                 )
             else:
                 raise Exception(f"Failed to read file: {error_msg}")
