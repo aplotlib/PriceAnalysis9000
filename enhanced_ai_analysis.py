@@ -11,6 +11,7 @@ import re
 from typing import Dict, List, Any, Optional, Tuple, Union
 from datetime import datetime
 import pandas as pd
+import io
 import time
 from collections import Counter
 
@@ -34,22 +35,30 @@ try:
 except ImportError:
     logger.warning("Anthropic library not available")
 
+# Try to import PDF libraries
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
+
+try:
+    import PyPDF2
+    PYPDF2_AVAILABLE = True
+except ImportError:
+    PYPDF2_AVAILABLE = False
+
 # Medical device return categories
 MEDICAL_DEVICE_CATEGORIES = [
-    'Product Defects/Quality',
-    'Injury/Adverse Event',
-    'Performance/Effectiveness',
-    'Size/Fit Issues',
-    'Stability/Safety Issues',
-    'Material/Component Failure',
-    'Design Issues',
-    'Comfort/Usability Issues',
-    'Compatibility Issues',
-    'Assembly/Installation Issues',
-    'Wrong Product/Labeling',
-    'Missing Components',
-    'Customer Error',
-    'Non-Medical Issue'
+    'QUALITY_DEFECTS',
+    'FUNCTIONALITY_ISSUES', 
+    'SIZE_FIT_ISSUES',
+    'COMPATIBILITY_ISSUES',
+    'WRONG_PRODUCT',
+    'BUYER_MISTAKE',
+    'NO_LONGER_NEEDED',
+    'INJURY_RISK',
+    'OTHER'
 ]
 
 # Enhanced injury detection patterns
@@ -121,6 +130,164 @@ QUALITY_PATTERNS = {
     'mechanical': ['jammed', 'stuck', 'won\'t move', 'grinding', 'noise', 'vibration']
 }
 
+class FileProcessor:
+    """Process various file types for return analysis"""
+    
+    @staticmethod
+    def read_file(file, file_type: str) -> pd.DataFrame:
+        """Read file and return DataFrame"""
+        try:
+            file_name = file.name if hasattr(file, 'name') else 'unknown'
+            
+            # PDF files
+            if 'pdf' in file_type.lower() or file_name.lower().endswith('.pdf'):
+                return FileProcessor.read_pdf(file)
+            
+            # Excel files
+            elif any(ext in file_name.lower() for ext in ['.xlsx', '.xls']) or 'excel' in file_type:
+                return pd.read_excel(file)
+            
+            # TSV/TXT files (FBA returns format)
+            elif file_name.lower().endswith('.txt') or file_name.lower().endswith('.tsv'):
+                # Read file content
+                if hasattr(file, 'read'):
+                    content = file.read()
+                    if isinstance(content, bytes):
+                        content = content.decode('utf-8')
+                    file.seek(0)  # Reset file pointer
+                else:
+                    content = str(file)
+                
+                # Check if it's tab-delimited
+                if '\t' in content[:1000]:
+                    return pd.read_csv(file, sep='\t')
+                else:
+                    return pd.read_csv(file)
+            
+            # Default to CSV
+            else:
+                return pd.read_csv(file)
+                
+        except Exception as e:
+            logger.error(f"Error reading file: {e}")
+            raise
+    
+    @staticmethod
+    def read_pdf(file) -> pd.DataFrame:
+        """Extract data from PDF file"""
+        if PDFPLUMBER_AVAILABLE:
+            return FileProcessor._read_pdf_with_pdfplumber(file)
+        elif PYPDF2_AVAILABLE:
+            return FileProcessor._read_pdf_with_pypdf2(file)
+        else:
+            raise ImportError("No PDF library available. Install pdfplumber or PyPDF2")
+    
+    @staticmethod
+    def _read_pdf_with_pdfplumber(file) -> pd.DataFrame:
+        """Read PDF using pdfplumber"""
+        import pdfplumber
+        
+        all_data = []
+        
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                # Extract text
+                text = page.extract_text()
+                
+                # Extract tables
+                tables = page.extract_tables()
+                
+                # Process tables
+                for table in tables:
+                    if table and len(table) > 1:
+                        # Convert to DataFrame
+                        df = pd.DataFrame(table[1:], columns=table[0])
+                        all_data.append(df)
+                
+                # If no tables, try to parse text
+                if not tables and text:
+                    lines = text.split('\n')
+                    # Parse Amazon return format
+                    data = FileProcessor._parse_amazon_return_text(lines)
+                    if data:
+                        all_data.extend(data)
+        
+        if all_data:
+            return pd.concat(all_data, ignore_index=True)
+        else:
+            return pd.DataFrame()
+    
+    @staticmethod
+    def _read_pdf_with_pypdf2(file) -> pd.DataFrame:
+        """Read PDF using PyPDF2"""
+        import PyPDF2
+        
+        all_text = []
+        
+        pdf_reader = PyPDF2.PdfReader(file)
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            all_text.append(text)
+        
+        # Parse combined text
+        full_text = '\n'.join(all_text)
+        lines = full_text.split('\n')
+        
+        data = FileProcessor._parse_amazon_return_text(lines)
+        if data:
+            return pd.DataFrame(data)
+        else:
+            return pd.DataFrame()
+    
+    @staticmethod
+    def _parse_amazon_return_text(lines: List[str]) -> List[Dict[str, Any]]:
+        """Parse Amazon return text format"""
+        returns = []
+        current_return = {}
+        
+        # Patterns for Amazon return data
+        order_pattern = r'(\d{3}-\d{7}-\d{7})'
+        asin_pattern = r'(B[A-Z0-9]{9})'
+        
+        for line in lines:
+            # Check for order ID
+            order_match = re.search(order_pattern, line)
+            if order_match:
+                # Save previous return if exists
+                if current_return:
+                    returns.append(current_return)
+                
+                current_return = {
+                    'order-id': order_match.group(1),
+                    'reason': '',
+                    'customer-comments': ''
+                }
+            
+            # Check for ASIN
+            asin_match = re.search(asin_pattern, line)
+            if asin_match and current_return:
+                current_return['asin'] = asin_match.group(1)
+            
+            # Look for return reason indicators
+            if current_return:
+                line_lower = line.lower()
+                if 'return reason' in line_lower or 'reason:' in line_lower:
+                    # Extract reason from next part
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        current_return['reason'] = parts[1].strip()
+                elif 'customer comment' in line_lower or 'buyer comment' in line_lower:
+                    # Extract comment
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        current_return['customer-comments'] = parts[1].strip()
+        
+        # Don't forget the last return
+        if current_return:
+            returns.append(current_return)
+        
+        return returns
+
 class AIProvider:
     """AI Provider options"""
     OPENAI = "openai"
@@ -175,23 +342,29 @@ class EnhancedAIAnalyzer:
     
     def _check_openai_key(self) -> bool:
         """Check if OpenAI API key is available"""
-        import streamlit as st
-        if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
-            return True
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+                return True
+        except ImportError:
+            pass
         return bool(os.getenv('OPENAI_API_KEY'))
     
     def _check_anthropic_key(self) -> bool:
         """Check if Anthropic API key is available"""
-        import streamlit as st
-        if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
-            return True
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+                return True
+        except ImportError:
+            pass
         return bool(os.getenv('ANTHROPIC_API_KEY'))
     
     def _initialize_ai(self):
         """Initialize AI provider with proper error handling"""
-        import streamlit as st
-        
         try:
+            import streamlit as st
+            
             if self.provider == AIProvider.OPENAI and OPENAI_AVAILABLE:
                 # Get OpenAI key
                 api_key = None
@@ -242,45 +415,38 @@ class EnhancedAIAnalyzer:
         logger.info("Falling back to pattern matching mode")
     
     def test_ai_connection(self) -> Dict[str, Any]:
-        """Test AI connection with actual categorization"""
-        test_cases = [
-            ("Product broke after first use", "Product Defects/Quality"),
-            ("Caused severe injury to my hand", "Injury/Adverse Event"),
-            ("Too small for intended use", "Size/Fit Issues")
-        ]
-        
-        results = []
-        
+        """Test AI connection"""
         if self.ai_available and self.ai_client:
             try:
-                # Test with a simple query first
-                test_response = self._call_ai("Test connection", max_tokens=10)
-                if test_response:
-                    # Run categorization tests
-                    for text, expected in test_cases[:2]:
-                        category = self.categorize_return(text, "")
-                        results.append({
-                            'text': text,
-                            'expected': expected,
-                            'actual': category.get('category', 'Error'),
-                            'correct': category.get('category') == expected
-                        })
-                    
+                # Test with a simple categorization
+                test_result = self.categorize_return("Product is defective", "Item broke on first use")
+                
+                if test_result and 'category' in test_result:
                     return {
                         'status': 'AI connection successful',
                         'provider': self.provider,
                         'model': self.model,
-                        'results': results
+                        'test_category': test_result['category']
+                    }
+                else:
+                    return {
+                        'status': 'AI test failed',
+                        'provider': self.provider,
+                        'model': self.model
                     }
             except Exception as e:
                 logger.error(f"AI test failed: {e}")
-        
-        return {
-            'status': 'Pattern matching mode (no AI)',
-            'provider': 'pattern',
-            'model': None,
-            'results': None
-        }
+                return {
+                    'status': f'AI error: {str(e)}',
+                    'provider': self.provider,
+                    'model': self.model
+                }
+        else:
+            return {
+                'status': 'Pattern matching mode (no AI)',
+                'provider': 'pattern',
+                'model': None
+            }
     
     def _call_ai(self, prompt: str, max_tokens: int = 100) -> Optional[str]:
         """Call AI provider with error handling"""
@@ -292,7 +458,7 @@ class EnhancedAIAnalyzer:
                 response = self.ai_client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "You are a medical device quality analyst. Categorize returns accurately."},
+                        {"role": "system", "content": "You are a medical device quality analyst specializing in return categorization. Categorize returns into these exact categories: QUALITY_DEFECTS, FUNCTIONALITY_ISSUES, SIZE_FIT_ISSUES, COMPATIBILITY_ISSUES, WRONG_PRODUCT, BUYER_MISTAKE, NO_LONGER_NEEDED, INJURY_RISK, OTHER."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.1,
@@ -315,12 +481,16 @@ class EnhancedAIAnalyzer:
             logger.error(f"AI call failed: {e}")
             return None
     
-    def categorize_return(self, reason: str, comment: str = "", 
-                         product_name: str = "", asin: str = "") -> Dict[str, Any]:
-        """Categorize return with injury detection"""
-        full_text = f"{reason} {comment}".strip()
+    def categorize_return(self, complaint: str = "", return_reason: str = "", 
+                         fba_reason: str = "", return_data: Dict = None) -> Dict[str, Any]:
+        """Categorize return with all available information"""
+        # Combine all text
+        full_text = f"{complaint} {return_reason} {fba_reason}".strip()
         
-        # First check for injuries
+        if not full_text:
+            return {'category': 'OTHER', 'confidence': 0.0}
+        
+        # Check for injuries first
         injury_analysis = self.detect_injuries(full_text)
         
         # Get category
@@ -329,58 +499,48 @@ class EnhancedAIAnalyzer:
         else:
             category = self._pattern_categorize(full_text)
         
-        # Override category if injury detected
+        # Override if injury detected
         if injury_analysis['has_injury'] and injury_analysis['severity'] in ['CRITICAL', 'HIGH']:
-            category = 'Injury/Adverse Event'
-        
-        # Check for quality issues
-        quality_issues = self._detect_quality_issues(full_text)
+            category = 'INJURY_RISK'
         
         return {
             'category': category,
             'has_injury': injury_analysis['has_injury'],
-            'injury_type': injury_analysis['injury_type'],
             'severity': injury_analysis['severity'],
-            'fda_reportable': injury_analysis['fda_reportable'],
-            'quality_issues': quality_issues,
-            'confidence': 0.95 if self.ai_available else 0.7,
-            'product_name': product_name,
-            'asin': asin
+            'confidence': 0.95 if self.ai_available else 0.7
         }
     
     def _ai_categorize(self, text: str) -> str:
         """Use AI to categorize return"""
         if not text:
-            return 'Non-Medical Issue'
+            return 'OTHER'
         
-        prompt = f"""Categorize this medical device return into EXACTLY ONE category:
-
-Categories:
-- Product Defects/Quality
-- Injury/Adverse Event
-- Performance/Effectiveness
-- Size/Fit Issues
-- Stability/Safety Issues
-- Material/Component Failure
-- Design Issues
-- Comfort/Usability Issues
-- Compatibility Issues
-- Assembly/Installation Issues
-- Wrong Product/Labeling
-- Missing Components
-- Customer Error
-- Non-Medical Issue
+        prompt = f"""Categorize this medical device return into EXACTLY ONE of these categories:
+- QUALITY_DEFECTS: defective, broken, damaged, doesn't work, poor quality
+- FUNCTIONALITY_ISSUES: not comfortable, hard to use, unstable
+- SIZE_FIT_ISSUES: too small, too large, doesn't fit, wrong size
+- COMPATIBILITY_ISSUES: doesn't fit toilet, not compatible
+- WRONG_PRODUCT: wrong item, not as described
+- BUYER_MISTAKE: bought by mistake, accidentally ordered
+- NO_LONGER_NEEDED: no longer needed, changed mind
+- INJURY_RISK: injury, hurt, pain, hospital
+- OTHER: anything else
 
 Return text: "{text}"
 
 Respond with ONLY the category name, nothing else."""
         
-        response = self._call_ai(prompt, max_tokens=50)
+        response = self._call_ai(prompt, max_tokens=30)
         
         if response:
             # Validate response
-            for category in MEDICAL_DEVICE_CATEGORIES:
-                if category.lower() in response.lower():
+            response_upper = response.upper().strip()
+            valid_categories = ['QUALITY_DEFECTS', 'FUNCTIONALITY_ISSUES', 'SIZE_FIT_ISSUES', 
+                               'COMPATIBILITY_ISSUES', 'WRONG_PRODUCT', 'BUYER_MISTAKE', 
+                               'NO_LONGER_NEEDED', 'INJURY_RISK', 'OTHER']
+            
+            for category in valid_categories:
+                if category in response_upper:
                     return category
         
         # Fallback to pattern matching
@@ -391,79 +551,65 @@ Respond with ONLY the category name, nothing else."""
         text_lower = text.lower()
         
         # Priority order categorization
-        if any(word in text_lower for word in ['injury', 'injured', 'hurt', 'hospital', 'emergency']):
-            return 'Injury/Adverse Event'
+        if any(word in text_lower for word in ['injury', 'injured', 'hurt', 'hospital', 'emergency', 'pain', 'bleeding']):
+            return 'INJURY_RISK'
         
-        elif any(word in text_lower for word in ['defect', 'broken', 'damaged', 'malfunction', 'not working']):
-            return 'Product Defects/Quality'
+        elif any(word in text_lower for word in ['defect', 'broken', 'damaged', 'malfunction', 'not working', 'poor quality', 'faulty']):
+            return 'QUALITY_DEFECTS'
         
-        elif any(word in text_lower for word in ['too small', 'too large', 'too big', 'size', 'fit']):
-            return 'Size/Fit Issues'
+        elif any(word in text_lower for word in ['too small', 'too large', 'too big', 'size', 'fit', "doesn't fit", 'wrong size']):
+            return 'SIZE_FIT_ISSUES'
         
-        elif any(word in text_lower for word in ['unstable', 'wobble', 'tip', 'fall over']):
-            return 'Stability/Safety Issues'
+        elif any(word in text_lower for word in ['not comfortable', 'uncomfortable', 'hard to use', 'difficult', 'unstable', 'wobble']):
+            return 'FUNCTIONALITY_ISSUES'
         
-        elif any(word in text_lower for word in ['material', 'fabric', 'plastic', 'metal', 'component']):
-            return 'Material/Component Failure'
+        elif any(word in text_lower for word in ['compatible', 'compatibility', "doesn't fit toilet", "won't fit", 'not compatible']):
+            return 'COMPATIBILITY_ISSUES'
         
-        elif any(word in text_lower for word in ['uncomfortable', 'comfort', 'hard to use']):
-            return 'Comfort/Usability Issues'
+        elif any(word in text_lower for word in ['wrong', 'incorrect', 'not as described', 'different']):
+            return 'WRONG_PRODUCT'
         
-        elif any(word in text_lower for word in ['compatible', 'fit with', 'work with']):
-            return 'Compatibility Issues'
+        elif any(word in text_lower for word in ['mistake', 'accident', 'accidentally', 'error', 'my fault']):
+            return 'BUYER_MISTAKE'
         
-        elif any(word in text_lower for word in ['wrong', 'incorrect', 'not as described']):
-            return 'Wrong Product/Labeling'
-        
-        elif any(word in text_lower for word in ['missing', 'incomplete', 'not included']):
-            return 'Missing Components'
-        
-        elif any(word in text_lower for word in ['mistake', 'accident', 'my fault', 'ordered wrong']):
-            return 'Customer Error'
+        elif any(word in text_lower for word in ['no longer needed', 'changed mind', "don't need", 'not needed']):
+            return 'NO_LONGER_NEEDED'
         
         else:
-            return 'Non-Medical Issue'
+            return 'OTHER'
     
     def detect_injuries(self, text: str) -> Dict[str, Any]:
-        """Comprehensive injury detection"""
+        """Detect potential injuries in text"""
         if not text:
             return {
                 'has_injury': False,
                 'injury_type': None,
                 'severity': None,
-                'fda_reportable': False,
-                'keywords_found': []
+                'fda_reportable': False
             }
         
         text_lower = text.lower()
         injuries_found = []
-        keywords_found = []
         max_severity = None
         fda_reportable = False
         
         # Check each injury pattern
         for injury_type, pattern_data in INJURY_PATTERNS.items():
-            found_keywords = [kw for kw in pattern_data['keywords'] if kw in text_lower]
-            
-            if found_keywords:
+            if any(keyword in text_lower for keyword in pattern_data['keywords']):
                 injuries_found.append(injury_type)
-                keywords_found.extend(found_keywords)
                 
                 # Update severity
                 if not max_severity or self._compare_severity(pattern_data['severity'], max_severity) > 0:
                     max_severity = pattern_data['severity']
                 
-                # Check FDA reportability
                 if pattern_data['fda_reportable']:
                     fda_reportable = True
         
         return {
             'has_injury': len(injuries_found) > 0,
             'injury_type': injuries_found[0] if injuries_found else None,
-            'all_types': injuries_found,
             'severity': max_severity,
-            'fda_reportable': fda_reportable,
-            'keywords_found': list(set(keywords_found))
+            'fda_reportable': fda_reportable
         }
     
     def _compare_severity(self, sev1: str, sev2: str) -> int:
@@ -471,155 +617,66 @@ Respond with ONLY the category name, nothing else."""
         severity_order = {'LOW': 0, 'MODERATE': 1, 'HIGH': 2, 'CRITICAL': 3}
         return severity_order.get(sev1, 0) - severity_order.get(sev2, 0)
     
-    def _detect_quality_issues(self, text: str) -> List[str]:
-        """Detect specific quality issues"""
-        text_lower = text.lower()
-        issues_found = []
-        
-        for issue_type, keywords in QUALITY_PATTERNS.items():
-            if any(keyword in text_lower for keyword in keywords):
-                issues_found.append(issue_type)
-        
-        return issues_found
-    
     def check_for_injury(self, text: str) -> bool:
-        """Simple injury check for compatibility"""
+        """Simple injury check"""
         result = self.detect_injuries(text)
         return result['has_injury']
     
-    def batch_categorize(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Batch process returns with progress tracking"""
-        import streamlit as st
+    def generate_insights(self, category_analysis: Dict, product_analysis: Dict) -> str:
+        """Generate insights from analysis"""
+        insights = []
         
-        # Add result columns
-        df['category'] = 'Uncategorized'
-        df['has_injury'] = False
-        df['injury_type'] = ''
-        df['severity'] = ''
-        df['fda_reportable'] = False
-        df['quality_issues'] = ''
-        
-        total = len(df)
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # Find relevant columns
-        reason_col = None
-        comment_col = None
-        
-        for col in df.columns:
-            col_lower = col.lower()
-            if not reason_col and 'reason' in col_lower:
-                reason_col = col
-            elif not comment_col and ('comment' in col_lower or 'feedback' in col_lower):
-                comment_col = col
-        
-        # Process each row
-        injury_count = 0
-        quality_count = 0
-        
-        for idx, row in df.iterrows():
-            # Update progress
-            if idx % 10 == 0:
-                progress = idx / total
-                progress_bar.progress(progress)
-                status_text.text(f"Processing returns... {idx}/{total} ({injury_count} injuries found)")
+        if category_analysis:
+            total = sum(category_analysis.values())
             
-            # Get text
-            reason = str(row[reason_col]) if reason_col and pd.notna(row.get(reason_col)) else ''
-            comment = str(row[comment_col]) if comment_col and pd.notna(row.get(comment_col)) else ''
+            # Find top categories
+            top_categories = sorted(category_analysis.items(), key=lambda x: x[1], reverse=True)[:3]
             
-            # Categorize
-            result = self.categorize_return(reason, comment)
+            insights.append("## Return Analysis Summary\n")
+            insights.append(f"**Total Returns Analyzed:** {total}\n")
             
-            # Update row
-            df.at[idx, 'category'] = result['category']
-            df.at[idx, 'has_injury'] = result['has_injury']
-            df.at[idx, 'injury_type'] = result.get('injury_type', '')
-            df.at[idx, 'severity'] = result.get('severity', '')
-            df.at[idx, 'fda_reportable'] = result.get('fda_reportable', False)
-            df.at[idx, 'quality_issues'] = ', '.join(result.get('quality_issues', []))
+            insights.append("### Top Return Categories:")
+            for cat, count in top_categories:
+                pct = (count / total * 100) if total > 0 else 0
+                insights.append(f"- **{cat}**: {count} returns ({pct:.1f}%)")
             
-            # Count issues
-            if result['has_injury']:
-                injury_count += 1
-            if result['quality_issues']:
-                quality_count += 1
+            # Quality concerns
+            quality_issues = category_analysis.get('QUALITY_DEFECTS', 0)
+            if quality_issues > 0:
+                quality_pct = (quality_issues / total * 100)
+                insights.append(f"\n### ⚠️ Quality Alert")
+                insights.append(f"{quality_issues} quality defects detected ({quality_pct:.1f}% of returns)")
+            
+            # Injury concerns
+            injury_issues = category_analysis.get('INJURY_RISK', 0)
+            if injury_issues > 0:
+                insights.append(f"\n### 🚨 Safety Alert")
+                insights.append(f"{injury_issues} potential injury cases requiring immediate review")
         
-        progress_bar.empty()
-        status_text.empty()
-        
-        # Show summary
-        if injury_count > 0:
-            st.warning(f"⚠️ Found {injury_count} potential injury cases requiring review")
-        
-        st.info(f"✅ Categorized {total} returns: {quality_count} quality issues, {injury_count} injuries")
-        
-        return df
+        return '\n'.join(insights)
     
-    def generate_fda_report(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Generate FDA-focused report"""
-        reportable_df = df[df['fda_reportable'] == True]
-        
-        report = {
-            'summary': {
-                'total_returns': len(df),
-                'reportable_events': len(reportable_df),
-                'critical_events': len(df[df['severity'] == 'CRITICAL']),
-                'high_severity': len(df[df['severity'] == 'HIGH']),
-                'injury_cases': len(df[df['has_injury'] == True])
-            },
-            'by_category': df['category'].value_counts().to_dict(),
-            'by_injury_type': df[df['has_injury']]['injury_type'].value_counts().to_dict() if len(df[df['has_injury']]) > 0 else {},
-            'recommendations': []
+    def get_cost_summary(self) -> Dict[str, Any]:
+        """Get API usage summary"""
+        return {
+            'api_calls': self.api_calls,
+            'total_cost': self.total_cost,
+            'provider': self.provider,
+            'model': self.model
         }
-        
-        # Generate recommendations
-        if report['summary']['critical_events'] > 0:
-            report['recommendations'].append(
-                "IMMEDIATE ACTION: Critical events detected. Initiate FDA MDR process immediately."
-            )
-        
-        if report['summary']['injury_cases'] > 5:
-            report['recommendations'].append(
-                "Multiple injury cases detected. Consider product safety review and potential recall."
-            )
-        
-        return report
-    
-    def export_fda_summary(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Create FDA summary export"""
-        fda_df = df[df['fda_reportable'] == True].copy()
-        
-        if len(fda_df) > 0:
-            # Select key columns
-            export_cols = ['order-id', 'asin', 'product-name', 'reason', 'customer-comments',
-                          'category', 'injury_type', 'severity', 'fda_reportable']
-            
-            available_cols = [col for col in export_cols if col in fda_df.columns]
-            return fda_df[available_cols].sort_values('severity', ascending=False)
-        
-        return pd.DataFrame()
 
 # Legacy function for compatibility
-def detect_fda_reportable_event(text: str) -> Dict[str, Any]:
-    """Legacy function for FDA event detection"""
-    analyzer = EnhancedAIAnalyzer(AIProvider.PATTERN)
-    injury_result = analyzer.detect_injuries(text)
-    
-    return {
-        'is_reportable': injury_result['fda_reportable'],
-        'severity': injury_result['severity'],
-        'event_types': injury_result.get('all_types', []),
-        'confidence': 0.8 if injury_result['has_injury'] else 0.0,
-        'requires_immediate_review': injury_result['severity'] in ['CRITICAL', 'HIGH'] if injury_result['severity'] else False
-    }
+def categorize_amazon_return(reason: str, comment: str = "") -> str:
+    """Legacy function for categorization"""
+    analyzer = EnhancedAIAnalyzer(AIProvider.AUTO)
+    result = analyzer.categorize_return(reason, comment)
+    return result['category']
 
 # Export all necessary components
 __all__ = [
     'EnhancedAIAnalyzer',
     'AIProvider',
+    'FileProcessor',
     'MEDICAL_DEVICE_CATEGORIES',
     'INJURY_PATTERNS',
-    'detect_fda_reportable_event'
+    'categorize_amazon_return'
 ]
