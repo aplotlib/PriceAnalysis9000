@@ -323,6 +323,26 @@ class EnhancedAIAnalyzer:
             'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
             'product_name': product_name,
             'asin': asin
+        }95
+        else:
+            # Enhanced pattern matching fallback
+            category, confidence = self._pattern_match_categorize(reason, full_text)
+        
+        # Override category if injury detected
+        if fda_analysis['is_reportable'] and fda_analysis['severity'] in ['CRITICAL', 'HIGH']:
+            category = 'Injury/Adverse Event'
+            confidence = 1.0
+        
+        return {
+            'category': category,
+            'confidence': confidence,
+            'fda_reportable': fda_analysis['is_reportable'],
+            'severity': fda_analysis['severity'],
+            'event_types': fda_analysis['event_types'],
+            'requires_mdr': fda_analysis['severity'] in ['CRITICAL', 'HIGH'] if fda_analysis['severity'] else False,
+            'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
+            'product_name': product_name,
+            'asin': asin
         }
     
     def _pattern_match_categorize(self, reason: str, full_text: str) -> tuple[str, float]:
