@@ -1,1039 +1,768 @@
 """
-FDA Medical Device Return Analyzer - Multi-File Support
-Version: 9.0 - Complete Return Categorization + FDA Event Detection
-Purpose: Categorize ALL returns AND identify FDA reportable events
+PA9.py - Medical Device Return Analyzer
+Enhanced version with full AI support and injury detection
+Supports multiple files up to 1GB+ with comprehensive analysis
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import logging
-from datetime import datetime
-import io
-import os
-from typing import Dict, List, Any, Optional, Union
-import plotly.express as px
-import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import json
 import time
+import os
+import sys
+import re
+import io
+import base64
+from typing import Dict, List, Tuple, Optional, Any, Union
+import logging
+import traceback
 import gc
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Configure page - MUST BE FIRST STREAMLIT COMMAND
+# Configure page first
 st.set_page_config(
-    page_title="FDA Medical Device Return Analyzer",
+    page_title="PriceAnalysis9000 - Medical Device Return Analyzer",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Import enhanced AI analysis module
-try:
-    from enhanced_ai_analysis import (
-        EnhancedAIAnalyzer, AIProvider, MEDICAL_DEVICE_CATEGORIES,
-        FDA_MDR_TRIGGERS, detect_fda_reportable_event, FileProcessor
-    )
-    AI_AVAILABLE = True
-except ImportError as e:
-    AI_AVAILABLE = False
-    logger.error(f"Enhanced AI analysis not available: {e}")
-    st.error("Critical module missing. Please check installation.")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# App styling
-def apply_custom_css():
-    """Apply custom CSS for professional appearance"""
-    st.markdown("""
-    <style>
-    /* Main theme */
-    .stApp {
-        background-color: #f5f5f5;
-    }
+# Increase upload size limit
+st._config.set_option('server.maxUploadSize', 1200)  # 1.2GB limit
+
+# Import modules with error handling
+modules_status = {}
+
+try:
+    from enhanced_ai_analysis import EnhancedAIAnalyzer, AIProvider, FileProcessor
+    AI_AVAILABLE = True
+    modules_status['AI Analysis'] = "✅ Available"
+except ImportError as e:
+    logger.error(f"Failed to import AI module: {e}")
+    AI_AVAILABLE = False
+    modules_status['AI Analysis'] = "❌ Not Available"
     
-    /* Headers */
-    h1, h2, h3 {
-        color: #1e3a8a;
-    }
-    
-    /* FDA Alert styling */
-    .fda-alert {
-        background-color: #dc2626;
-        color: white;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-        font-weight: bold;
-    }
-    
-    /* Category card */
-    .category-card {
-        background-color: #f3f4f6;
-        border: 1px solid #e5e7eb;
-        padding: 0.75rem;
-        border-radius: 0.5rem;
-        margin: 0.25rem 0;
-    }
-    
-    /* Reportable event card */
-    .reportable-event {
-        background-color: #fee2e2;
-        border: 2px solid #dc2626;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    
-    /* Metrics */
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-        text-align: center;
-    }
-    
-    .metric-value {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1e3a8a;
-    }
-    
-    .metric-label {
-        color: #6b7280;
-        font-size: 0.875rem;
-        text-transform: uppercase;
-    }
-    
-    /* Critical events */
-    .critical {
-        color: #dc2626;
-        font-weight: bold;
-    }
-    
-    /* Progress bars */
-    .stProgress > div > div > div {
-        background-color: #1e3a8a;
-    }
-    
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
-    """, unsafe_allow_html=True)
+    # Define FileProcessor fallback
+    class FileProcessor:
+        @staticmethod
+        def read_file(file, file_type):
+            # Basic fallback implementation
+            if 'csv' in file_type:
+                return pd.read_csv(file)
+            elif 'excel' in file_type or 'xlsx' in file_type:
+                return pd.read_excel(file)
+            else:
+                return pd.read_csv(file, sep='\t')
+
+try:
+    from injury_detector import InjuryDetector
+    INJURY_AVAILABLE = True
+    modules_status['Injury Detection'] = "✅ Available"
+except ImportError as e:
+    logger.error(f"Failed to import injury detector: {e}")
+    INJURY_AVAILABLE = False
+    modules_status['Injury Detection'] = "❌ Not Available"
+
+try:
+    from pdf_analyzer import PDFAnalyzer
+    PDF_AVAILABLE = True
+    modules_status['PDF Analysis'] = "✅ Available"
+except ImportError as e:
+    logger.error(f"Failed to import PDF analyzer: {e}")
+    PDF_AVAILABLE = False
+    modules_status['PDF Analysis'] = "❌ Not Available"
+
+try:
+    from smart_column_mapper import SmartColumnMapper
+    MAPPER_AVAILABLE = True
+    modules_status['Smart Mapping'] = "✅ Available"
+except ImportError as e:
+    logger.error(f"Failed to import column mapper: {e}")
+    MAPPER_AVAILABLE = False
+    modules_status['Smart Mapping'] = "❌ Not Available"
+
+# Category definitions for quality analysis
+QUALITY_CATEGORIES = [
+    'QUALITY_DEFECTS',
+    'FUNCTIONALITY_ISSUES',
+    'COMPATIBILITY_ISSUES',
+    'INJURY_RISK',
+    'SIZE_FIT_ISSUES',
+    'WRONG_PRODUCT',
+    'BUYER_MISTAKE',
+    'OTHER'
+]
+
+# Injury keywords for detection
+INJURY_KEYWORDS = {
+    'critical': ['death', 'died', 'fatal', 'emergency', 'hospital', 'severe injury', 'surgery'],
+    'high': ['injury', 'injured', 'hurt', 'wound', 'bleeding', 'broken', 'fracture', 'burn', 'fall', 'fell'],
+    'medium': ['pain', 'discomfort', 'allergic', 'reaction', 'rash', 'swelling']
+}
+
+# Enhanced session state defaults
+SESSION_DEFAULTS = {
+    'uploaded_files': [],
+    'combined_data': None,
+    'processed_data': None,
+    'analysis_complete': False,
+    'ai_analyzer': None,
+    'injury_detector': None,
+    'pdf_analyzer': None,
+    'column_mapper': None,
+    'quality_metrics': {},
+    'injury_report': {},
+    'api_status': {},
+    'processing_stats': {},
+    'total_files': 0,
+    'total_rows': 0,
+    'api_provider': 'auto'
+}
 
 def initialize_session_state():
     """Initialize session state variables"""
-    defaults = {
-        'uploaded_files': [],
-        'combined_data': None,
-        'processed_data': None,
-        'categorization_complete': False,
-        'fda_report': None,
-        'file_upload_complete': False,
-        'processing_complete': False,
-        'ai_analyzer': None,
-        'total_rows': 0,
-        'reportable_events': 0,
-        'critical_events': 0,
-        'processing_stats': {},
-        'api_keys_available': False
-    }
-    
-    for key, value in defaults.items():
+    for key, value in SESSION_DEFAULTS.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
+def check_api_keys():
+    """Check and validate API keys"""
+    api_status = {
+        'openai': {'available': False, 'key_found': False, 'tested': False},
+        'anthropic': {'available': False, 'key_found': False, 'tested': False}
+    }
+    
+    # Check OpenAI
+    openai_key = None
+    if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+        openai_key = st.secrets['OPENAI_API_KEY']
+    elif os.getenv('OPENAI_API_KEY'):
+        openai_key = os.getenv('OPENAI_API_KEY')
+    
+    if openai_key:
+        api_status['openai']['key_found'] = True
+        try:
+            import openai
+            # Test the key
+            client = openai.OpenAI(api_key=openai_key)
+            # Simple test call
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
+            api_status['openai']['available'] = True
+            api_status['openai']['tested'] = True
+        except Exception as e:
+            logger.error(f"OpenAI test failed: {e}")
+    
+    # Check Anthropic
+    anthropic_key = None
+    if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+        anthropic_key = st.secrets['ANTHROPIC_API_KEY']
+    elif os.getenv('ANTHROPIC_API_KEY'):
+        anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+    
+    if anthropic_key:
+        api_status['anthropic']['key_found'] = True
+        try:
+            import anthropic
+            # Test the key
+            client = anthropic.Anthropic(api_key=anthropic_key)
+            response = client.messages.create(
+                model="claude-3-haiku-20240307",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
+            api_status['anthropic']['available'] = True
+            api_status['anthropic']['tested'] = True
+        except Exception as e:
+            logger.error(f"Anthropic test failed: {e}")
+    
+    st.session_state.api_status = api_status
+    return api_status
+
+def initialize_analyzers():
+    """Initialize all analyzer components"""
+    # Initialize AI analyzer with selected provider
+    if AI_AVAILABLE and not st.session_state.ai_analyzer:
+        try:
+            provider = st.session_state.api_provider
+            if provider == 'auto':
+                # Auto-select based on availability
+                if st.session_state.api_status['openai']['available']:
+                    provider = AIProvider.OPENAI
+                elif st.session_state.api_status['anthropic']['available']:
+                    provider = AIProvider.CLAUDE
+                else:
+                    provider = AIProvider.FASTEST  # Pattern matching fallback
+            
+            st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
+            logger.info(f"AI analyzer initialized with provider: {provider}")
+        except Exception as e:
+            logger.error(f"Failed to initialize AI analyzer: {e}")
+            st.warning(f"AI initialization failed: {str(e)}")
+    
+    # Initialize injury detector
+    if INJURY_AVAILABLE and not st.session_state.injury_detector:
+        try:
+            st.session_state.injury_detector = InjuryDetector(st.session_state.ai_analyzer)
+            logger.info("Injury detector initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize injury detector: {e}")
+    
+    # Initialize PDF analyzer
+    if PDF_AVAILABLE and not st.session_state.pdf_analyzer:
+        try:
+            st.session_state.pdf_analyzer = PDFAnalyzer()
+            logger.info("PDF analyzer initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize PDF analyzer: {e}")
+    
+    # Initialize column mapper
+    if MAPPER_AVAILABLE and not st.session_state.column_mapper:
+        try:
+            st.session_state.column_mapper = SmartColumnMapper(st.session_state.ai_analyzer)
+            logger.info("Column mapper initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize column mapper: {e}")
+
 def display_header():
-    """Display app header"""
-    col1, col2 = st.columns([3, 1])
+    """Display application header"""
+    col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        st.title("🏥 FDA Medical Device Return Analyzer")
-        st.markdown("""
-        **Complete Return Analysis**: Categorizes ALL returns + Identifies FDA reportable events
-        
-        **Categories**: Size/Fit, Quality Defects, Performance, Injuries, Falls, and more
-        """)
+        st.title("🏥 PriceAnalysis9000")
+        st.markdown("**Medical Device Return Analyzer**")
+        st.caption("Quality Management & Injury Detection System")
     
     with col2:
-        st.info("""
-        **Multi-File Support**
-        - Up to 7 files
-        - 1GB+ capacity
-        - All formats supported
-        """)
+        # Display module status
+        status_cols = st.columns(2)
+        with status_cols[0]:
+            for module, status in list(modules_status.items())[:2]:
+                st.markdown(f"{status} {module}")
+        with status_cols[1]:
+            for module, status in list(modules_status.items())[2:]:
+                st.markdown(f"{status} {module}")
+    
+    with col3:
+        # API status indicator
+        if st.session_state.api_status:
+            if st.session_state.api_status['openai']['available']:
+                st.success("🟢 OpenAI Active")
+            elif st.session_state.api_status['anthropic']['available']:
+                st.success("🟢 Claude Active")
+            else:
+                st.warning("🟡 Pattern Mode")
 
-def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
-    """Process multiple uploaded files and combine them"""
-    all_dataframes = []
-    file_stats = {}
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for idx, file in enumerate(uploaded_files):
-        try:
-            status_text.text(f"Processing file {idx + 1}/{len(uploaded_files)}: {file.name}")
-            progress_bar.progress((idx + 1) / len(uploaded_files))
-            
-            # Get file type
-            file_type = file.type if hasattr(file, 'type') else 'text/csv'
-            if file.name.lower().endswith('.pdf'):
-                file_type = 'application/pdf'
-            elif file.name.lower().endswith('.txt'):
-                file_type = 'text/plain'
-            elif file.name.lower().endswith('.tsv'):
-                file_type = 'text/tab-separated-values'
-            elif file.name.lower().endswith('.xlsx'):
-                file_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            elif file.name.lower().endswith('.xls'):
-                file_type = 'application/vnd.ms-excel'
-            
-            logger.info(f"Processing {file.name} as {file_type}")
-            
-            # Process file
+def process_file(file) -> Optional[pd.DataFrame]:
+    """Process a single file and return DataFrame"""
+    try:
+        file_type = file.type if hasattr(file, 'type') else 'unknown'
+        file_name = file.name if hasattr(file, 'name') else 'unknown'
+        
+        # Use FileProcessor to read the file
+        if AI_AVAILABLE:
             df = FileProcessor.read_file(file, file_type)
-            
-            # Add source file column
-            df['source_file'] = file.name
-            
-            # Log column information
-            logger.info(f"File {file.name} has columns: {list(df.columns)}")
-            
-            # Show detailed preview for first file
-            if idx == 0:
-                with st.expander(f"📄 Detailed Preview of {file.name}", expanded=True):
-                    st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
-                    st.write("**Columns:**")
-                    
-                    # Show column info in a nice format
-                    col_info = []
-                    for col in df.columns[:20]:  # Show first 20 columns
-                        non_null = df[col].notna().sum()
-                        sample_val = df[col].dropna().iloc[0] if non_null > 0 else "N/A"
-                        col_info.append({
-                            'Column': col,
-                            'Non-Null': f"{non_null}/{len(df)}",
-                            'Sample': str(sample_val)[:50]
-                        })
-                    st.dataframe(pd.DataFrame(col_info), use_container_width=True)
-                    
-                    st.write("**Data Preview:**")
-                    st.dataframe(df.head(10), use_container_width=True)
+        else:
+            # Fallback file reading
+            if file_name.lower().endswith('.pdf') or 'pdf' in file_type:
+                st.error("PDF processing requires enhanced_ai_analysis module")
+                return None
+            elif file_name.lower().endswith(('.xlsx', '.xls')):
+                df = pd.read_excel(file)
+            elif file_name.lower().endswith('.tsv') or '\t' in file.read(1000).decode('utf-8', errors='ignore'):
+                file.seek(0)
+                df = pd.read_csv(file, sep='\t')
             else:
-                # Shorter preview for other files
-                with st.expander(f"📄 Preview of {file.name}"):
-                    st.write(f"Shape: {df.shape}")
-                    st.dataframe(df.head(5))
-            
-            all_dataframes.append(df)
-            file_stats[file.name] = {
-                'rows': len(df), 
-                'status': 'Success', 
-                'columns': len(df.columns),
-                'key_columns': {
-                    'order-id': 'order-id' in df.columns,
-                    'reason': 'reason' in df.columns,
-                    'customer-comments': 'customer-comments' in df.columns,
-                    'asin': 'asin' in df.columns
-                }
-            }
-            
-            # Clear memory for large files
-            if len(df) > 10000:
-                gc.collect()
-                
-        except Exception as e:
-            error_msg = str(e)
-            file_stats[file.name] = {'rows': 0, 'status': f'Error: {error_msg}', 'columns': 0}
-            logger.error(f"Error processing {file.name}: {error_msg}")
-            
-            # Show specific error messages with solutions
-            if "PDF" in error_msg and "pdfplumber" in error_msg:
-                st.error(f"""
-                ❌ Cannot process PDF file: {file.name}
-                
-                **Solution Options:**
-                1. Export your Amazon returns as CSV format (recommended)
-                2. Export as Excel format (.xlsx)
-                3. Install PDF support: `pip install pdfplumber`
-                
-                **How to export from Amazon Seller Central:**
-                - Go to Reports > Fulfillment > Customer Returns
-                - Click "Download" and select "CSV" format
-                """)
-            elif "Excel" in error_msg and "openpyxl" in error_msg:
-                st.error(f"""
-                ❌ Cannot process Excel file: {file.name}
-                
-                **Solution Options:**
-                1. Export as CSV format instead (recommended)
-                2. Install Excel support: `pip install openpyxl`
-                3. Save as .csv in Excel: File > Save As > CSV
-                """)
-            elif "Reindexing" in error_msg:
-                st.error(f"""
-                ❌ PDF structure issue in {file.name}
-                
-                This PDF has duplicate column names or complex formatting.
-                
-                **Solutions:**
-                1. Export returns as CSV from Amazon (recommended)
-                2. Try printing the PDF with "Print as Table" option
-                3. Copy data from PDF to Excel and save as CSV
-                """)
-            elif "codec" in error_msg or "decode" in error_msg:
-                st.error(f"""
-                ❌ File encoding issue in {file.name}
-                
-                The file contains special characters that couldn't be read.
-                
-                **Solutions:**
-                1. Open in Excel and save as "CSV UTF-8" format
-                2. Remove special characters (™, ®, –) from the file
-                3. Use "Save As" with UTF-8 encoding option
-                """)
-            else:
-                st.warning(f"Error processing {file.name}: {error_msg}")
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Combine all dataframes
-    if all_dataframes:
-        # Concatenate with outer join to preserve all columns
-        combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+                df = pd.read_csv(file)
         
-        # Fill NaN values with empty strings for text columns
-        text_columns = ['order-id', 'asin', 'sku', 'reason', 'customer-comments', 'product-name']
-        for col in text_columns:
-            if col in combined_df.columns:
-                combined_df[col] = combined_df[col].fillna('')
-        
-        # Display processing stats
-        st.success(f"✅ Successfully processed {len(all_dataframes)} file(s) with {len(combined_df):,} total rows")
-        
-        # Show file stats with key column detection
-        with st.expander("📊 File Processing Summary", expanded=True):
-            summary_data = []
-            for filename, stats in file_stats.items():
-                if stats['status'] == 'Success':
-                    key_cols = stats.get('key_columns', {})
-                    col_status = []
-                    for col_name, found in key_cols.items():
-                        col_status.append(f"{'✓' if found else '✗'} {col_name}")
-                    
-                    summary_data.append({
-                        'File': filename,
-                        'Rows': f"{stats['rows']:,}",
-                        'Columns': stats['columns'],
-                        'Key Columns': ' | '.join(col_status),
-                        'Status': '✅ Success'
-                    })
-                else:
-                    summary_data.append({
-                        'File': filename,
-                        'Rows': 0,
-                        'Columns': 0,
-                        'Key Columns': 'N/A',
-                        'Status': f"❌ {stats['status']}"
-                    })
+        return df
             
-            st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
-        
-        # Show combined data preview
-        with st.expander("🔍 Combined Data Preview"):
-            st.write(f"**Total Shape:** {combined_df.shape[0]} rows × {combined_df.shape[1]} columns")
-            
-            # Show which columns are available
-            st.write("**Available Columns:**")
-            cols_per_row = 4
-            cols = st.columns(cols_per_row)
-            for idx, col in enumerate(combined_df.columns[:20]):
-                with cols[idx % cols_per_row]:
-                    non_null_pct = (combined_df[col].notna().sum() / len(combined_df) * 100)
-                    st.write(f"• {col} ({non_null_pct:.0f}%)")
-            
-            if len(combined_df.columns) > 20:
-                st.write(f"... and {len(combined_df.columns) - 20} more columns")
-            
-            st.write("**Data Sample:**")
-            st.dataframe(combined_df.head(10), use_container_width=True)
-        
-        return combined_df
-    else:
-        st.error("""
-        ❌ No files could be processed successfully
-        
-        **Recommended formats:**
-        - CSV (best compatibility)
-        - TXT (tab or comma delimited)  
-        - TSV (tab-separated values)
-        
-        **If using PDF or Excel:**
-        Please export your data as CSV from Amazon Seller Central
-        """)
+    except Exception as e:
+        logger.error(f"Error processing file {file.name}: {e}")
+        st.error(f"Error processing {file.name}: {str(e)}")
         return None
 
-def display_categorization_analysis(df: pd.DataFrame):
-    """Display comprehensive return categorization analysis"""
-    st.header("📊 Return Categorization Analysis")
+def detect_quality_issues(df: pd.DataFrame) -> Dict[str, Any]:
+    """Detect quality issues in returns data"""
+    quality_issues = {
+        'total_returns': len(df),
+        'quality_defects': 0,
+        'injury_cases': 0,
+        'categories': {},
+        'high_risk_products': []
+    }
     
-    # Overview metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    total_returns = len(df)
-    quality_defects = len(df[df['category'] == 'Product Defects/Quality'])
-    injury_events = len(df[df['category'] == 'Injury/Adverse Event'])
-    unique_products = df['asin'].nunique() if 'asin' in df.columns else 0
-    
-    with col1:
-        st.metric("Total Returns", f"{total_returns:,}")
-    
-    with col2:
-        st.metric("Quality Defects", f"{quality_defects:,}", 
-                 f"{quality_defects/total_returns*100:.1f}%")
-    
-    with col3:
-        st.metric("Injury Events", f"{injury_events:,}",
-                 f"{injury_events/total_returns*100:.1f}%")
-    
-    with col4:
-        st.metric("Unique Products", f"{unique_products:,}")
-    
-    # Category distribution
-    st.subheader("📈 Category Distribution")
-    
-    category_counts = df['category'].value_counts()
-    
-    # Create two columns for visualizations
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Pie chart
-        fig_pie = px.pie(
-            values=category_counts.values,
-            names=category_counts.index,
-            title="Return Categories Distribution",
-            color_discrete_sequence=px.colors.qualitative.Set3
-        )
-        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig_pie, use_container_width=True)
-    
-    with col2:
-        # Bar chart
-        fig_bar = px.bar(
-            x=category_counts.values,
-            y=category_counts.index,
-            orientation='h',
-            title="Returns by Category",
-            labels={'x': 'Count', 'y': 'Category'},
-            color=category_counts.values,
-            color_continuous_scale='Blues'
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
-    
-    # Top products by category
-    st.subheader("🏷️ Top Products by Return Category")
-    
-    selected_category = st.selectbox(
-        "Select a category to view top products:",
-        options=category_counts.index.tolist()
-    )
-    
-    if 'product-name' in df.columns:
-        category_products = df[df['category'] == selected_category]['product-name'].value_counts().head(10)
-        
-        if not category_products.empty:
-            fig_products = px.bar(
-                x=category_products.values,
-                y=category_products.index,
-                orientation='h',
-                title=f"Top 10 Products - {selected_category}",
-                labels={'x': 'Returns', 'y': 'Product'}
-            )
-            st.plotly_chart(fig_products, use_container_width=True)
-    
-    # Time trend if date available
-    if 'return-date' in df.columns:
+    # Use AI analyzer if available
+    if st.session_state.ai_analyzer and AI_AVAILABLE:
         try:
-            df['return-date'] = pd.to_datetime(df['return-date'])
-            daily_returns = df.groupby([df['return-date'].dt.date, 'category']).size().reset_index(name='count')
+            # Process returns with AI
+            for idx, row in df.iterrows():
+                # Get return reason and comments
+                reason = ''
+                comment = ''
+                
+                # Try different column names
+                reason_cols = ['reason', 'return_reason', 'Return Reason', 'issue']
+                comment_cols = ['customer-comments', 'customer_comment', 'Customer Comments', 'comments']
+                
+                for col in reason_cols:
+                    if col in row and pd.notna(row[col]):
+                        reason = str(row[col])
+                        break
+                
+                for col in comment_cols:
+                    if col in row and pd.notna(row[col]):
+                        comment = str(row[col])
+                        break
+                
+                full_text = f"{reason} {comment}".strip()
+                
+                if full_text:
+                    # AI categorization
+                    result = st.session_state.ai_analyzer.categorize_return(reason, comment)
+                    category = result.get('category', 'OTHER')
+                    
+                    # Update counts
+                    quality_issues['categories'][category] = quality_issues['categories'].get(category, 0) + 1
+                    
+                    if category in ['QUALITY_DEFECTS', 'FUNCTIONALITY_ISSUES']:
+                        quality_issues['quality_defects'] += 1
+                    
+                    # Check for injuries
+                    if st.session_state.injury_detector:
+                        injury_check = st.session_state.injury_detector.check_for_injury(full_text)
+                        if injury_check:
+                            quality_issues['injury_cases'] += 1
+        
+        except Exception as e:
+            logger.error(f"AI analysis error: {e}")
+            st.warning("AI analysis failed, using pattern matching")
+    
+    # Fallback to pattern matching
+    else:
+        for idx, row in df.iterrows():
+            text = ' '.join([str(val) for val in row.values if pd.notna(val)]).lower()
             
-            fig_trend = px.line(
-                daily_returns,
-                x='return-date',
-                y='count',
-                color='category',
-                title='Return Trends by Category Over Time'
-            )
-            st.plotly_chart(fig_trend, use_container_width=True)
-        except:
-            pass
+            # Check for quality keywords
+            quality_keywords = ['defect', 'broken', 'damaged', 'quality', 'malfunction']
+            if any(keyword in text for keyword in quality_keywords):
+                quality_issues['quality_defects'] += 1
+            
+            # Check for injury keywords
+            injury_keywords = ['injury', 'hurt', 'pain', 'hospital', 'emergency']
+            if any(keyword in text for keyword in injury_keywords):
+                quality_issues['injury_cases'] += 1
+    
+    # Calculate percentages
+    if quality_issues['total_returns'] > 0:
+        quality_issues['quality_rate'] = (quality_issues['quality_defects'] / quality_issues['total_returns']) * 100
+        quality_issues['injury_rate'] = (quality_issues['injury_cases'] / quality_issues['total_returns']) * 100
+    else:
+        quality_issues['quality_rate'] = 0
+        quality_issues['injury_rate'] = 0
+    
+    return quality_issues
 
-def display_fda_analysis(df: pd.DataFrame, report: Dict[str, Any]):
-    """Display FDA reportable events analysis"""
-    st.header("🚨 FDA Reportable Events Analysis")
+def generate_structured_export(df: pd.DataFrame, analysis: Dict[str, Any]) -> pd.DataFrame:
+    """Generate structured export with analysis results"""
+    export_df = df.copy()
     
-    if report['summary']['reportable_events'] > 0:
-        st.markdown("""
-        <div class="fda-alert">
-        ⚠️ FDA REPORTABLE EVENTS DETECTED - IMMEDIATE REVIEW REQUIRED
-        </div>
-        """, unsafe_allow_html=True)
+    # Add analysis columns
+    export_df['Analysis_Date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    export_df['Quality_Issue'] = False
+    export_df['Injury_Case'] = False
+    export_df['Category'] = 'UNCATEGORIZED'
+    export_df['Risk_Level'] = 'LOW'
     
-    # FDA metrics
-    col1, col2, col3, col4 = st.columns(4)
+    # Process each row
+    for idx, row in export_df.iterrows():
+        text = ' '.join([str(val) for val in row.values if pd.notna(val)]).lower()
+        
+        # Quality detection
+        quality_keywords = ['defect', 'broken', 'damaged', 'quality', 'malfunction', 'faulty']
+        if any(keyword in text for keyword in quality_keywords):
+            export_df.at[idx, 'Quality_Issue'] = True
+            export_df.at[idx, 'Risk_Level'] = 'MEDIUM'
+        
+        # Injury detection
+        for severity, keywords in INJURY_KEYWORDS.items():
+            if any(keyword in text for keyword in keywords):
+                export_df.at[idx, 'Injury_Case'] = True
+                export_df.at[idx, 'Risk_Level'] = severity.upper()
+                break
+        
+        # Categorization
+        if 'too small' in text or 'too large' in text or 'fit' in text:
+            export_df.at[idx, 'Category'] = 'SIZE_FIT_ISSUES'
+        elif any(word in text for word in ['defect', 'broken', 'quality']):
+            export_df.at[idx, 'Category'] = 'QUALITY_DEFECTS'
+        elif any(word in text for word in ['wrong', 'incorrect', 'different']):
+            export_df.at[idx, 'Category'] = 'WRONG_PRODUCT'
+        elif any(word in text for word in ['mistake', 'accident', 'error']):
+            export_df.at[idx, 'Category'] = 'BUYER_MISTAKE'
     
-    with col1:
-        st.metric("Reportable Events", 
-                 f"{report['summary']['reportable_events']:,}",
-                 f"{report['summary']['reportable_events']/len(df)*100:.1f}% of returns")
+    # Add summary statistics
+    summary_row = {
+        'Analysis_Date': 'SUMMARY',
+        'Quality_Issue': f"Total: {export_df['Quality_Issue'].sum()}",
+        'Injury_Case': f"Total: {export_df['Injury_Case'].sum()}",
+        'Category': f"Total Returns: {len(export_df)}",
+        'Risk_Level': f"High Risk: {len(export_df[export_df['Risk_Level'].isin(['HIGH', 'CRITICAL'])])}"
+    }
     
-    with col2:
-        st.metric("Critical Severity", 
-                 f"{report['summary']['critical_events']:,}",
-                 "Immediate action")
+    # Append summary as last row
+    summary_df = pd.DataFrame([summary_row])
+    export_df = pd.concat([export_df, summary_df], ignore_index=True)
     
-    with col3:
-        st.metric("High Severity",
-                 f"{report['summary']['high_severity']:,}",
-                 "30-day deadline")
-    
-    with col4:
-        st.metric("MDR Required",
-                 f"{report['summary']['mdr_required']:,}",
-                 "File with FDA")
-    
-    # Event type breakdown
-    if report['by_event_type']:
-        st.subheader("📊 Reportable Events by Type")
-        
-        event_df = pd.DataFrame(
-            list(report['by_event_type'].items()),
-            columns=['Event Type', 'Count']
-        ).sort_values('Count', ascending=False)
-        
-        # Create visual alert for fall-related events
-        if 'falls' in report['by_event_type']:
-            st.warning(f"⚠️ {report['by_event_type']['falls']} fall-related incidents detected!")
-        
-        fig_events = px.bar(
-            event_df,
-            x='Event Type',
-            y='Count',
-            title='FDA Reportable Events by Type',
-            color='Count',
-            color_continuous_scale=['#fee2e2', '#dc2626']
-        )
-        st.plotly_chart(fig_events, use_container_width=True)
-    
-    # Show detailed reportable events
-    if report['summary']['reportable_events'] > 0:
-        st.subheader("📋 Detailed Reportable Events")
-        
-        reportable_df = df[df['fda_reportable'] == True].copy()
-        
-        # Sort by severity
-        severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MODERATE': 2, 'LOW': 3}
-        reportable_df['severity_rank'] = reportable_df['severity'].map(severity_order)
-        reportable_df = reportable_df.sort_values('severity_rank')
-        
-        # Display key columns
-        display_cols = ['order-id', 'asin', 'product-name', 'reason', 
-                       'customer-comments', 'category', 'severity', 'event_types']
-        
-        available_cols = [col for col in display_cols if col in reportable_df.columns]
-        
-        st.dataframe(
-            reportable_df[available_cols],
-            use_container_width=True,
-            height=400
-        )
+    return export_df
 
 def main():
-    """Main application flow"""
-    # Initialize
+    """Main application"""
     initialize_session_state()
-    apply_custom_css()
+    
+    # Check API keys on startup
+    check_api_keys()
+    
+    # Display header
     display_header()
     
-    # Check for API keys and show appropriate warnings
-    if AI_AVAILABLE:
-        openai_key = (hasattr(st, 'secrets') and st.secrets.get('OPENAI_API_KEY')) or os.getenv('OPENAI_API_KEY')
-        anthropic_key = (hasattr(st, 'secrets') and st.secrets.get('ANTHROPIC_API_KEY')) or os.getenv('ANTHROPIC_API_KEY')
-        st.session_state.api_keys_available = bool(openai_key or anthropic_key)
-        
-        if not st.session_state.api_keys_available:
-            st.warning("""
-            ⚠️ **AI API Keys Not Found** - Using Pattern Matching Mode
-            
-            The tool will still categorize returns using pattern matching, but AI-powered categorization provides better accuracy.
-            
-            To enable AI features, add your API key to Streamlit secrets:
-            - OpenAI: `OPENAI_API_KEY`
-            - Anthropic: `ANTHROPIC_API_KEY`
-            """)
-    
-    # Sidebar
+    # Sidebar configuration
     with st.sidebar:
-        st.header("📁 File Upload")
-        st.markdown("Upload up to 7 files (1GB+ supported)")
+        st.header("⚙️ Configuration")
         
-        # Check for missing dependencies
-        missing_deps = []
-        try:
-            import pdfplumber
-        except ImportError:
-            missing_deps.append("PDF")
+        # API Provider selection
+        st.subheader("🤖 AI Provider")
         
-        try:
-            import openpyxl
-        except ImportError:
-            missing_deps.append("Excel")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.session_state.api_status['openai']['available']:
+                st.success("✅ OpenAI")
+            else:
+                st.error("❌ OpenAI")
         
-        if missing_deps:
-            st.warning(f"""
-            ⚠️ Limited file support detected
-            
-            Missing support for: {', '.join(missing_deps)}
-            
-            **Quick fix:**
-            ```bash
-            pip install pdfplumber openpyxl
-            ```
-            
-            **For now, please use CSV format**
-            """)
+        with col2:
+            if st.session_state.api_status['anthropic']['available']:
+                st.success("✅ Claude")
+            else:
+                st.error("❌ Claude")
         
-        uploaded_files = st.file_uploader(
-            "Choose files",
-            type=['csv', 'xlsx', 'xls', 'tsv', 'txt', 'pdf'],
-            accept_multiple_files=True,
-            help="Upload return data from Amazon Seller Central"
+        # Provider selection
+        providers = ['auto']
+        if st.session_state.api_status['openai']['available']:
+            providers.append('openai')
+        if st.session_state.api_status['anthropic']['available']:
+            providers.append('claude')
+        
+        st.session_state.api_provider = st.selectbox(
+            "Select AI Provider",
+            providers,
+            help="Auto selects the best available provider"
         )
         
-        if uploaded_files:
-            if len(uploaded_files) > 7:
-                st.error("Maximum 7 files allowed")
-                uploaded_files = uploaded_files[:7]
-            
-            st.success(f"{len(uploaded_files)} file(s) uploaded")
-            for file in uploaded_files:
-                # Show file info
-                file_size = file.size / (1024 * 1024)  # Convert to MB
-                st.write(f"• {file.name} ({file_size:.1f} MB)")
-            
-            st.session_state.uploaded_files = uploaded_files
-            st.session_state.file_upload_complete = True
-        
-        st.divider()
-        
-        # AI Provider selection
-        if AI_AVAILABLE:
-            st.subheader("🤖 AI Settings")
-            if st.session_state.api_keys_available:
-                provider = st.selectbox(
-                    "AI Provider",
-                    options=[AIProvider.FASTEST, AIProvider.QUALITY, AIProvider.OPENAI, AIProvider.CLAUDE],
-                    help="Select AI provider for categorization"
-                )
-                
-                # Test AI connection button
-                if st.button("🧪 Test AI Connection"):
-                    with st.spinner("Testing AI..."):
-                        test_analyzer = EnhancedAIAnalyzer(provider)
-                        test_results = test_analyzer.test_ai_connection()
-                        
-                        if test_results['status'] == 'AI connection successful':
-                            st.success("✅ AI is working!")
-                            if test_results.get('results'):
-                                for result in test_results['results']:
-                                    if not result['actual'].startswith('Error:'):
-                                        st.write(f"✓ '{result['text']}' → {result['actual']}")
-                                    else:
-                                        st.write(f"✗ '{result['text']}' → {result['actual']}")
-                        else:
-                            st.error(f"❌ {test_results['status']}")
-                            if test_results.get('results'):
-                                for result in test_results['results']:
-                                    st.write(f"• '{result['text']}' → {result['actual']}")
-            else:
-                st.info("🔌 AI providers require API keys")
-                provider = AIProvider.FASTEST  # Default value
-                
-                # Show how to add API key
-                with st.expander("How to add API key"):
-                    st.markdown("""
-                    **Option 1: Streamlit Secrets (Recommended)**
-                    1. Create `.streamlit/secrets.toml` in your app directory
-                    2. Add your key:
-                    ```toml
-                    OPENAI_API_KEY = "sk-..."
-                    ```
-                    
-                    **Option 2: Environment Variable**
-                    ```bash
-                    export OPENAI_API_KEY="sk-..."
-                    ```
-                    
-                    **Get API Keys:**
-                    - OpenAI: https://platform.openai.com/api-keys
-                    - Anthropic: https://console.anthropic.com/
-                    """)
-        else:
-            st.warning("⚠️ AI module not available")
-            provider = None
+        # Test AI button
+        if st.button("🧪 Test AI Connection"):
+            with st.spinner("Testing AI..."):
+                initialize_analyzers()
+                if st.session_state.ai_analyzer:
+                    test_result = st.session_state.ai_analyzer.test_ai_connection()
+                    if test_result['status'] == 'AI connection successful':
+                        st.success("✅ AI is working!")
+                    else:
+                        st.error(f"❌ {test_result['status']}")
+                else:
+                    st.error("❌ AI analyzer not initialized")
         
         st.divider()
         
         # Processing options
-        st.subheader("⚙️ Processing Options")
+        st.subheader("📊 Processing Options")
         
-        chunk_size = st.select_slider(
-            "Batch Size",
-            options=[100, 500, 1000, 5000, 10000],
-            value=1000,
-            help="Larger batches process faster but use more memory"
-        )
+        enable_injury_detection = st.checkbox("Enable Injury Detection", value=True)
+        enable_quality_analysis = st.checkbox("Enable Quality Analysis", value=True)
+        enable_ai_categorization = st.checkbox("Enable AI Categorization", value=True)
         
         st.divider()
         
-        # File format guide
-        with st.expander("📄 File Format Guide"):
-            st.markdown("""
-            **Best Compatibility:**
-            - ✅ CSV - Always works
-            - ✅ TXT - Tab/comma delimited
-            - ✅ TSV - Tab-separated
-            
-            **Requires Libraries:**
-            - ⚠️ Excel - Needs openpyxl
-            - ⚠️ PDF - Needs pdfplumber
-            
-            **From Amazon Seller Central:**
-            1. Go to Reports > Fulfillment
-            2. Select "Customer Returns"
-            3. Download as CSV (recommended)
-            
-            **Required Columns:**
-            - reason / return-reason
-            - customer-comments
-            - product-name (optional)
-            - asin (optional)
-            """)
+        # File info
+        st.subheader("📁 Supported Files")
+        st.markdown("""
+        - **PDF**: Amazon Seller Central exports
+        - **Excel**: .xlsx, .xls files
+        - **CSV**: Comma-separated values
+        - **TXT**: Tab-delimited FBA returns
         
-        st.divider()
+        **Max file size**: 1.2GB per file
+        **Multiple files**: ✅ Supported
+        """)
         
-        # FDA event types
-        with st.expander("🚨 FDA Events Detected"):
+        # API Key help
+        with st.expander("🔑 API Key Setup"):
             st.markdown("""
-            **Deaths & Injuries:**
-            - Falls (fall, fell, fallen)
-            - Injuries requiring medical care
-            - Hospitalizations
+            **Option 1: Streamlit Secrets**
+            ```toml
+            # .streamlit/secrets.toml
+            OPENAI_API_KEY = "sk-..."
+            ANTHROPIC_API_KEY = "sk-ant-..."
+            ```
             
-            **Product Issues:**
-            - Malfunctions causing harm
-            - Sharp edges/exposed parts
-            - Electrical hazards
+            **Option 2: Environment Variables**
+            ```bash
+            export OPENAI_API_KEY="sk-..."
+            export ANTHROPIC_API_KEY="sk-ant-..."
+            ```
             
-            **Medical Reactions:**
-            - Allergic reactions
-            - Infections
-            - Skin reactions
+            **Get API Keys:**
+            - [OpenAI](https://platform.openai.com/api-keys)
+            - [Anthropic](https://console.anthropic.com/)
             """)
-    
     
     # Main content area
-    if st.session_state.file_upload_complete and uploaded_files:
+    st.header("📤 Upload Return Data")
+    
+    # File uploader
+    uploaded_files = st.file_uploader(
+        "Choose files (PDF, Excel, CSV, TXT)",
+        type=['pdf', 'xlsx', 'xls', 'csv', 'txt', 'tsv'],
+        accept_multiple_files=True,
+        help="Upload up to 1.2GB per file. Multiple files supported."
+    )
+    
+    if uploaded_files:
+        st.session_state.uploaded_files = uploaded_files
+        st.session_state.total_files = len(uploaded_files)
+        
+        # Display file info
+        total_size = sum(file.size for file in uploaded_files) / (1024 * 1024)  # MB
+        st.info(f"📁 {len(uploaded_files)} file(s) uploaded | Total size: {total_size:.1f} MB")
         
         # Process button
-        if st.button("🔍 Analyze Returns & Detect FDA Events", 
-                     type="primary", 
-                     use_container_width=True):
+        if st.button("🔍 Analyze Returns", type="primary", use_container_width=True):
+            # Initialize analyzers
+            initialize_analyzers()
             
-            start_time = time.time()
+            # Process files
+            all_dataframes = []
+            processing_errors = []
             
-            # Clear any previous errors
-            st.session_state.processing_complete = False
-            st.session_state.processed_data = None
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            with st.spinner("Processing files and categorizing returns..."):
-                # Process all files
-                combined_df = process_multiple_files(uploaded_files)
+            for idx, file in enumerate(uploaded_files):
+                status_text.text(f"Processing {file.name}...")
+                progress_bar.progress((idx + 1) / len(uploaded_files))
                 
-                if combined_df is not None and not combined_df.empty:
-                    st.session_state.combined_data = combined_df
-                    st.session_state.total_rows = len(combined_df)
-                    
-                    # Initialize AI analyzer
-                    try:
-                        if AI_AVAILABLE and not st.session_state.ai_analyzer:
-                            if 'provider' in locals() and provider:
-                                st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
-                            else:
-                                st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
-                    except Exception as e:
-                        logger.error(f"Failed to initialize analyzer: {e}")
-                        st.warning("Using pattern matching mode due to initialization error")
-                        st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
-                    
-                    # Categorize returns with progress tracking
-                    if st.session_state.ai_analyzer:
-                        try:
-                            # Get analyzer status - check if method exists
-                            if hasattr(st.session_state.ai_analyzer, 'get_status'):
-                                analyzer_status = st.session_state.ai_analyzer.get_status()
-                                
-                                if analyzer_status['ai_available']:
-                                    st.info(f"🤖 Categorizing {len(combined_df):,} returns using {analyzer_status['provider']} AI (Model: {analyzer_status['model']})...")
-                                else:
-                                    st.info(f"🔍 Categorizing {len(combined_df):,} returns using enhanced pattern matching...")
-                                    st.warning("""
-                                    💡 **Tip**: For better categorization accuracy, add an API key:
-                                    - OpenAI: Add `OPENAI_API_KEY` to Streamlit secrets
-                                    - Claude: Add `ANTHROPIC_API_KEY` to Streamlit secrets
-                                    """)
-                            else:
-                                # Fallback for older analyzer versions
-                                if st.session_state.api_keys_available:
-                                    st.info(f"🤖 Categorizing {len(combined_df):,} returns using AI...")
-                                else:
-                                    st.info(f"🔍 Categorizing {len(combined_df):,} returns using pattern matching...")
-                            
-                            # Process in chunks for large datasets
-                            if len(combined_df) > chunk_size:
-                                processed_chunks = []
-                                total_chunks = len(combined_df) // chunk_size + 1
-                                
-                                progress_bar = st.progress(0)
-                                for i in range(0, len(combined_df), chunk_size):
-                                    chunk = combined_df.iloc[i:i+chunk_size].copy()
-                                    processed_chunk = st.session_state.ai_analyzer.batch_categorize(chunk)
-                                    processed_chunks.append(processed_chunk)
-                                    
-                                    progress = (i + chunk_size) / len(combined_df)
-                                    progress_bar.progress(min(progress, 1.0))
-                                
-                                progress_bar.empty()
-                                processed_df = pd.concat(processed_chunks, ignore_index=True)
-                            else:
-                                processed_df = st.session_state.ai_analyzer.batch_categorize(combined_df.copy())
-                            
-                            st.session_state.processed_data = processed_df
-                            st.session_state.categorization_complete = True
-                            
-                            # Generate FDA report
-                            fda_report = st.session_state.ai_analyzer.generate_fda_report(processed_df)
-                            st.session_state.fda_report = fda_report
-                            st.session_state.processing_complete = True
-                            
-                            # Processing stats
-                            processing_time = time.time() - start_time
-                            st.session_state.processing_stats = {
-                                'time': processing_time,
-                                'rows_per_second': len(combined_df) / processing_time if processing_time > 0 else 0,
-                                'api_calls': getattr(st.session_state.ai_analyzer, 'api_calls', 0)
-                            }
-                            
-                            st.success(f"""
-                            ✅ Processing Complete!
-                            - Total returns: {len(processed_df):,}
-                            - Processing time: {processing_time:.1f} seconds
-                            - Speed: {len(combined_df) / processing_time:.0f} returns/second
-                            """)
-                            
-                        except Exception as e:
-                            logger.error(f"Error during categorization: {e}")
-                            st.error(f"Error during categorization: {str(e)}")
-                            st.info("Please check your data format and try again")
-                    else:
-                        st.error("AI analyzer not available")
+                df = process_file(file)
+                if df is not None:
+                    df['source_file'] = file.name
+                    all_dataframes.append(df)
                 else:
-                    st.error("No data to process. Please check your files and try again.")
-    
-    # Display results
-    if st.session_state.processing_complete:
-        # Create tabs for different views
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📊 Categorization Analysis",
-            "🚨 FDA Reportable Events", 
-            "📋 Full Data View",
-            "💾 Export Results"
-        ])
-        
-        with tab1:
-            display_categorization_analysis(st.session_state.processed_data)
-        
-        with tab2:
-            display_fda_analysis(st.session_state.processed_data, st.session_state.fda_report)
-        
-        with tab3:
-            st.header("📋 Complete Processed Data")
+                    processing_errors.append(file.name)
+                
+                # Clear memory for large files
+                if file.size > 100 * 1024 * 1024:  # 100MB
+                    gc.collect()
             
-            if st.session_state.processed_data is not None and not st.session_state.processed_data.empty:
-                # Filters
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Combine all dataframes
+            if all_dataframes:
+                combined_df = pd.concat(all_dataframes, ignore_index=True)
+                st.session_state.combined_data = combined_df
+                st.session_state.total_rows = len(combined_df)
+                
+                # Analyze data
+                with st.spinner("Analyzing for quality issues and injuries..."):
+                    analysis_results = detect_quality_issues(combined_df)
+                    st.session_state.quality_metrics = analysis_results
+                    
+                    # Generate structured export
+                    export_df = generate_structured_export(combined_df, analysis_results)
+                    st.session_state.processed_data = export_df
+                    st.session_state.analysis_complete = True
+                
+                # Show results
+                st.success(f"✅ Analysis complete! Processed {len(combined_df):,} returns from {len(all_dataframes)} files")
+                
+                if processing_errors:
+                    st.warning(f"⚠️ Failed to process: {', '.join(processing_errors)}")
+                
+                # Display metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Returns", f"{analysis_results['total_returns']:,}")
+                
+                with col2:
+                    st.metric(
+                        "Quality Defects",
+                        f"{analysis_results['quality_defects']:,}",
+                        f"{analysis_results['quality_rate']:.1f}%"
+                    )
+                
+                with col3:
+                    injury_color = "🔴" if analysis_results['injury_cases'] > 0 else "🟢"
+                    st.metric(
+                        f"{injury_color} Injury Cases",
+                        f"{analysis_results['injury_cases']:,}",
+                        f"{analysis_results['injury_rate']:.1f}%"
+                    )
+                
+                with col4:
+                    high_risk = len(export_df[export_df['Risk_Level'].isin(['HIGH', 'CRITICAL'])])
+                    st.metric("High Risk Items", f"{high_risk:,}")
+                
+                # Show injury alert if needed
+                if analysis_results['injury_cases'] > 0:
+                    st.error(f"""
+                    🚨 **INJURY CASES DETECTED**
+                    
+                    Found {analysis_results['injury_cases']} potential injury cases requiring immediate review.
+                    These may require FDA MDR reporting or other regulatory actions.
+                    
+                    Please review the detailed export for specific cases.
+                    """)
+                
+                # Data preview
+                st.subheader("📊 Data Preview")
+                
+                # Filter options
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    category_filter = st.multiselect(
-                        "Filter by Category",
-                        options=st.session_state.processed_data['category'].unique().tolist() if 'category' in st.session_state.processed_data.columns else [],
-                        default=[]
+                    show_quality_only = st.checkbox("Quality Issues Only")
+                
+                with col2:
+                    show_injuries_only = st.checkbox("Injury Cases Only")
+                
+                with col3:
+                    show_high_risk_only = st.checkbox("High Risk Only")
+                
+                # Apply filters
+                display_df = export_df.copy()
+                
+                if show_quality_only:
+                    display_df = display_df[display_df['Quality_Issue'] == True]
+                
+                if show_injuries_only:
+                    display_df = display_df[display_df['Injury_Case'] == True]
+                
+                if show_high_risk_only:
+                    display_df = display_df[display_df['Risk_Level'].isin(['HIGH', 'CRITICAL'])]
+                
+                # Display filtered data
+                st.dataframe(display_df, use_container_width=True, height=400)
+                
+                # Export options
+                st.subheader("💾 Export Options")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    # CSV export
+                    csv = export_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Full Analysis (CSV)",
+                        data=csv,
+                        file_name=f"return_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
                     )
                 
                 with col2:
-                    if 'severity' in st.session_state.processed_data.columns:
-                        severity_filter = st.multiselect(
-                            "Filter by Severity",
-                            options=[x for x in st.session_state.processed_data['severity'].dropna().unique().tolist() if x],
-                            default=[]
-                        )
-                    else:
-                        severity_filter = []
-                
-                with col3:
-                    show_fda_only = st.checkbox("Show FDA Reportable Only", value=False)
-                
-                # Apply filters
-                filtered_df = st.session_state.processed_data.copy()
-                
-                if category_filter and 'category' in filtered_df.columns:
-                    filtered_df = filtered_df[filtered_df['category'].isin(category_filter)]
-                
-                if severity_filter and 'severity' in filtered_df.columns:
-                    filtered_df = filtered_df[filtered_df['severity'].isin(severity_filter)]
-                
-                if show_fda_only and 'fda_reportable' in filtered_df.columns:
-                    filtered_df = filtered_df[filtered_df['fda_reportable'] == True]
-                
-                st.dataframe(filtered_df, use_container_width=True, height=600)
-            else:
-                st.info("No processed data available yet. Please run the analysis first.")
-        
-        with tab4:
-            st.header("💾 Export Options")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📊 Full Categorized Data")
-                csv_full = st.session_state.processed_data.to_csv(index=False)
-                st.download_button(
-                    "⬇️ Download Full Analysis (CSV)",
-                    data=csv_full,
-                    file_name=f"return_analysis_categorized_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-                
-                # Excel export if available
-                try:
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        st.session_state.processed_data.to_excel(writer, sheet_name='All Returns', index=False)
+                    # Excel export
+                    try:
+                        buffer = io.BytesIO()
+                        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                            # Main data
+                            export_df.to_excel(writer, sheet_name='Return Analysis', index=False)
+                            
+                            # Summary sheet
+                            summary_data = {
+                                'Metric': ['Total Returns', 'Quality Defects', 'Injury Cases', 'High Risk Items'],
+                                'Count': [
+                                    analysis_results['total_returns'],
+                                    analysis_results['quality_defects'],
+                                    analysis_results['injury_cases'],
+                                    high_risk
+                                ],
+                                'Percentage': [
+                                    '100%',
+                                    f"{analysis_results['quality_rate']:.1f}%",
+                                    f"{analysis_results['injury_rate']:.1f}%",
+                                    f"{(high_risk/analysis_results['total_returns']*100):.1f}%"
+                                ]
+                            }
+                            summary_df = pd.DataFrame(summary_data)
+                            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                            
+                            # Category breakdown if available
+                            if analysis_results.get('categories'):
+                                cat_df = pd.DataFrame(
+                                    list(analysis_results['categories'].items()),
+                                    columns=['Category', 'Count']
+                                )
+                                cat_df.to_excel(writer, sheet_name='Categories', index=False)
                         
-                        # Add category summary
-                        category_summary = st.session_state.processed_data['category'].value_counts().reset_index()
-                        category_summary.columns = ['Category', 'Count']
-                        category_summary.to_excel(writer, sheet_name='Category Summary', index=False)
-                        
-                        # Add FDA summary if events exist
-                        if st.session_state.fda_report['summary']['reportable_events'] > 0:
-                            fda_df = st.session_state.ai_analyzer.export_fda_summary(st.session_state.processed_data)
-                            fda_df.to_excel(writer, sheet_name='FDA Reportable', index=False)
-                    
-                    buffer.seek(0)
-                    st.download_button(
-                        "⬇️ Download Full Analysis (Excel)",
-                        data=buffer,
-                        file_name=f"return_analysis_complete_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                except:
-                    st.info("Excel export requires openpyxl")
-            
-            with col2:
-                st.subheader("🚨 FDA Report Only")
-                
-                if st.session_state.fda_report['summary']['reportable_events'] > 0:
-                    fda_summary = st.session_state.ai_analyzer.export_fda_summary(st.session_state.processed_data)
-                    
-                    if not fda_summary.empty:
-                        csv_fda = fda_summary.to_csv(index=False)
+                        buffer.seek(0)
                         st.download_button(
-                            "⬇️ Download FDA Summary (CSV)",
-                            data=csv_fda,
-                            file_name=f"fda_reportable_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv",
+                            "📥 Download Full Analysis (Excel)",
+                            data=buffer,
+                            file_name=f"return_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-                        
-                        # MDR template info
-                        st.info("""
-                        **Next Steps for FDA Reporting:**
-                        1. Review all CRITICAL severity events immediately
-                        2. Submit MDR within 30 days for serious injuries
-                        3. Document corrective actions taken
-                        4. Consider voluntary recall if pattern emerges
-                        """)
-                else:
-                    st.success("✅ No FDA reportable events detected")
-            
-            # Processing statistics
-            st.divider()
-            st.subheader("📈 Processing Statistics")
-            
-            stats = st.session_state.processing_stats
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Processing Time", f"{stats['time']:.1f} seconds")
-            
-            with col2:
-                st.metric("Processing Speed", f"{stats['rows_per_second']:.0f} rows/sec")
-            
-            with col3:
-                if 'api_calls' in stats:
-                    st.metric("AI API Calls", f"{stats['api_calls']:,}")
+                    except Exception as e:
+                        st.error(f"Excel export failed: {str(e)}")
+                
+                with col3:
+                    # JSON export for further processing
+                    json_data = {
+                        'analysis_date': datetime.now().isoformat(),
+                        'summary': analysis_results,
+                        'processing_stats': {
+                            'files_processed': len(all_dataframes),
+                            'total_rows': st.session_state.total_rows,
+                            'errors': processing_errors
+                        }
+                    }
+                    json_str = json.dumps(json_data, indent=2)
+                    st.download_button(
+                        "📥 Download Analysis Report (JSON)",
+                        data=json_str,
+                        file_name=f"return_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                
+            else:
+                st.error("❌ No files could be processed successfully")
     
     else:
-        # Show instructions
-        st.markdown("""
-        ### 🚀 Getting Started
+        # Show instructions when no files uploaded
+        st.info("""
+        👆 **Upload your return data files to begin analysis**
         
-        1. **Upload Files** - Use the sidebar to upload up to 7 return files (CSV, Excel, PDF, etc.)
-        2. **Click Analyze** - Process all files to categorize returns and detect FDA events
-        3. **Review Results** - See complete categorization + FDA reportable events
-        4. **Export Data** - Download categorized data with FDA flags
+        This tool will:
+        - 🔍 Detect quality defects and issues
+        - 🚨 Identify potential injury cases
+        - 📊 Categorize returns automatically
+        - 📈 Provide structured data for analysis
+        - 💾 Export results in multiple formats
         
-        ### 📊 What This Tool Does
-        
-        **Return Categorization** (ALL returns are categorized):
-        - Size/Fit Issues
-        - Product Defects/Quality  
-        - Performance/Effectiveness
-        - Injury/Adverse Events
-        - Stability/Safety Issues
-        - Material/Component Failures
-        - And 8+ more categories
-        
-        **FDA Event Detection**:
-        - Deaths & Serious Injuries
-        - Falls (fall, fell, fallen, slip, trip)
-        - Product Malfunctions
-        - Allergic Reactions
-        - Infections
-        
-        ### 💡 Tips for Quality Managers
-        
-        - Process FBA return reports (.txt) AND PDF exports together for complete analysis
-        - Filter by "Injury/Adverse Event" category to focus on safety issues
-        - Export FDA summary for immediate MDR filing
-        - Track category trends over time to identify quality improvement opportunities
+        **Supported file types:**
+        - PDF exports from Amazon Seller Central
+        - Excel files with return data
+        - CSV/TXT files from FBA reports
+        - Multiple files up to 1.2GB each
         """)
 
 if __name__ == "__main__":
