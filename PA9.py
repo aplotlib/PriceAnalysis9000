@@ -179,6 +179,14 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
             
             # Get file type
             file_type = file.type if hasattr(file, 'type') else 'text/csv'
+            if file.name.lower().endswith('.pdf'):
+                file_type = 'application/pdf'
+            elif file.name.lower().endswith('.txt'):
+                file_type = 'text/plain'
+            elif file.name.lower().endswith('.tsv'):
+                file_type = 'text/tab-separated-values'
+            
+            logger.info(f"Processing {file.name} as {file_type}")
             
             # Process file
             df = FileProcessor.read_file(file, file_type)
@@ -186,11 +194,15 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
             # Add source file column
             df['source_file'] = file.name
             
-            # Standardize column names
-            df.columns = df.columns.str.lower().str.strip().str.replace(' ', '-')
+            # Log column information
+            logger.info(f"File {file.name} has columns: {list(df.columns)}")
+            
+            # Show sample of data
+            if len(df) > 0:
+                st.expander(f"📄 Preview of {file.name}").dataframe(df.head(5))
             
             all_dataframes.append(df)
-            file_stats[file.name] = {'rows': len(df), 'status': 'Success'}
+            file_stats[file.name] = {'rows': len(df), 'status': 'Success', 'columns': len(df.columns)}
             
             # Clear memory for large files
             if len(df) > 10000:
@@ -198,7 +210,8 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
                 
         except Exception as e:
             error_msg = str(e)
-            file_stats[file.name] = {'rows': 0, 'status': f'Error: {error_msg}'}
+            file_stats[file.name] = {'rows': 0, 'status': f'Error: {error_msg}', 'columns': 0}
+            logger.error(f"Error processing {file.name}: {error_msg}")
             
             # Show specific error messages with solutions
             if "PDF" in error_msg and "pdfplumber" in error_msg:
@@ -223,6 +236,17 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
                 2. Install Excel support: `pip install openpyxl`
                 3. Save as .csv in Excel: File > Save As > CSV
                 """)
+            elif "Reindexing" in error_msg:
+                st.error(f"""
+                ❌ PDF structure issue in {file.name}
+                
+                This PDF has duplicate column names or complex formatting.
+                
+                **Solutions:**
+                1. Export returns as CSV from Amazon (recommended)
+                2. Try printing the PDF with "Print as Table" option
+                3. Copy data from PDF to Excel and save as CSV
+                """)
             else:
                 st.warning(f"Error processing {file.name}: {error_msg}")
     
@@ -231,18 +255,24 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
     
     # Combine all dataframes
     if all_dataframes:
-        combined_df = pd.concat(all_dataframes, ignore_index=True)
+        combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
         
         # Display processing stats
-        st.success(f"✅ Successfully processed {len(all_dataframes)} files")
+        st.success(f"✅ Successfully processed {len(all_dataframes)} file(s) with {len(combined_df):,} total rows")
         
         # Show file stats
         with st.expander("📊 File Processing Summary"):
             for filename, stats in file_stats.items():
                 if stats['status'] == 'Success':
-                    st.write(f"✅ {filename}: {stats['rows']:,} rows")
+                    st.write(f"✅ {filename}: {stats['rows']:,} rows, {stats['columns']} columns")
                 else:
                     st.write(f"❌ {filename}: {stats['status']}")
+        
+        # Show combined data preview
+        with st.expander("🔍 Combined Data Preview"):
+            st.write(f"Total rows: {len(combined_df):,}")
+            st.write(f"Columns: {list(combined_df.columns)}")
+            st.dataframe(combined_df.head(10))
         
         return combined_df
     else:
@@ -251,7 +281,7 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
         
         **Recommended formats:**
         - CSV (best compatibility)
-        - TXT (tab or comma delimited)
+        - TXT (tab or comma delimited)  
         - TSV (tab-separated values)
         
         **If using PDF or Excel:**
@@ -522,9 +552,45 @@ def main():
                     options=[AIProvider.FASTEST, AIProvider.QUALITY, AIProvider.OPENAI, AIProvider.CLAUDE],
                     help="Select AI provider for categorization"
                 )
+                
+                # Test AI connection button
+                if st.button("🧪 Test AI Connection"):
+                    with st.spinner("Testing AI..."):
+                        test_analyzer = EnhancedAIAnalyzer(provider)
+                        test_results = test_analyzer.test_ai_connection()
+                        
+                        if test_results['results']:
+                            st.success("✅ AI is working!")
+                            for result in test_results['results']:
+                                if result['correct']:
+                                    st.write(f"✓ '{result['text']}' → {result['actual']}")
+                                else:
+                                    st.write(f"✗ '{result['text']}' → Expected: {result['expected']}, Got: {result['actual']}")
+                        else:
+                            st.error("❌ AI test failed")
             else:
                 st.info("🔌 AI providers require API keys")
                 provider = AIProvider.FASTEST  # Default value
+                
+                # Show how to add API key
+                with st.expander("How to add API key"):
+                    st.markdown("""
+                    **Option 1: Streamlit Secrets (Recommended)**
+                    1. Create `.streamlit/secrets.toml` in your app directory
+                    2. Add your key:
+                    ```toml
+                    OPENAI_API_KEY = "sk-..."
+                    ```
+                    
+                    **Option 2: Environment Variable**
+                    ```bash
+                    export OPENAI_API_KEY="sk-..."
+                    ```
+                    
+                    **Get API Keys:**
+                    - OpenAI: https://platform.openai.com/api-keys
+                    - Anthropic: https://console.anthropic.com/
+                    """)
         else:
             st.warning("⚠️ AI module not available")
             provider = None
@@ -616,10 +682,18 @@ def main():
                     
                     # Categorize returns with progress tracking
                     if st.session_state.ai_analyzer:
-                        if st.session_state.api_keys_available:
-                            st.info(f"🤖 Categorizing {len(combined_df):,} returns using AI...")
+                        # Get analyzer status
+                        analyzer_status = st.session_state.ai_analyzer.get_status()
+                        
+                        if analyzer_status['ai_available']:
+                            st.info(f"🤖 Categorizing {len(combined_df):,} returns using {analyzer_status['provider']} AI (Model: {analyzer_status['model']})...")
                         else:
-                            st.info(f"🔍 Categorizing {len(combined_df):,} returns using pattern matching...")
+                            st.info(f"🔍 Categorizing {len(combined_df):,} returns using enhanced pattern matching...")
+                            st.warning("""
+                            💡 **Tip**: For better categorization accuracy, add an API key:
+                            - OpenAI: Add `OPENAI_API_KEY` to Streamlit secrets
+                            - Claude: Add `ANTHROPIC_API_KEY` to Streamlit secrets
+                            """)
                         
                         # Process in chunks for large datasets
                         if len(combined_df) > chunk_size:
