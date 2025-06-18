@@ -204,9 +204,11 @@ class EnhancedAIAnalyzer:
         try:
             if self.provider in [AIProvider.OPENAI, AIProvider.FASTEST] and OPENAI_AVAILABLE:
                 # Check for API key
-                api_key = os.getenv('OPENAI_API_KEY')
-                if not api_key and hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+                api_key = None
+                if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
                     api_key = st.secrets['OPENAI_API_KEY']
+                elif os.getenv('OPENAI_API_KEY'):
+                    api_key = os.getenv('OPENAI_API_KEY')
                 
                 if api_key:
                     self.ai_client = openai.OpenAI(api_key=api_key)
@@ -219,9 +221,11 @@ class EnhancedAIAnalyzer:
                     self.ai_available = False
             elif self.provider == AIProvider.CLAUDE and CLAUDE_AVAILABLE:
                 # Check for Anthropic API key
-                api_key = os.getenv('ANTHROPIC_API_KEY')
-                if not api_key and hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+                api_key = None
+                if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
                     api_key = st.secrets['ANTHROPIC_API_KEY']
+                elif os.getenv('ANTHROPIC_API_KEY'):
+                    api_key = os.getenv('ANTHROPIC_API_KEY')
                 
                 if api_key:
                     self.ai_client = anthropic.Anthropic(api_key=api_key)
@@ -285,8 +289,11 @@ class EnhancedAIAnalyzer:
                     'correct': False
                 })
         
+        # Consider test successful if at least one categorization worked (even if not exact match)
+        success = len(results) > 0 and any(not r['actual'].startswith('Error:') for r in results)
+        
         return {
-            'status': 'AI connection successful' if results else 'AI test failed',
+            'status': 'AI connection successful' if success else 'AI test failed',
             'results': results
         }
     
@@ -332,23 +339,22 @@ class EnhancedAIAnalyzer:
         
         prompt = f"""You are analyzing Amazon return reasons for medical devices. Categorize the following return into EXACTLY ONE of these categories:
 
-1. Product Defects/Quality - broken, defective, damaged, poor quality, doesn't work
-2. Size/Fit Issues - too small, too large, doesn't fit, wrong size
-3. Performance/Effectiveness - doesn't work as expected, ineffective, poor performance
-4. Injury/Adverse Event - injury, hurt, pain, hospital, medical attention
-5. Stability/Safety Issues - unstable, tips over, falls, unsafe
-6. Material/Component Failure - material defect, component broke, parts failed
-7. Comfort/Usability Issues - uncomfortable, hard to use, difficult
-8. Compatibility Issues - not compatible, doesn't fit with other products
-9. Wrong Product/Labeling - wrong item, not as described, incorrect product
-10. Missing Components - missing parts, incomplete
-11. Customer Error - user mistake, ordered wrong, misunderstood
-12. Non-Medical Issue - price, shipping, no longer needed, changed mind
+Product Defects/Quality
+Size/Fit Issues
+Performance/Effectiveness
+Injury/Adverse Event
+Stability/Safety Issues
+Material/Component Failure
+Comfort/Usability Issues
+Compatibility Issues
+Wrong Product/Labeling
+Missing Components
+Customer Error
+Non-Medical Issue
 
-Product: {product_name if product_name else 'Unknown'}
 Return Reason: {text}
 
-Analyze the return reason and respond with ONLY the category name exactly as shown above. Nothing else."""
+Respond with ONLY the category name from the list above. Nothing else."""
         
         try:
             if isinstance(self.ai_client, openai.OpenAI):
@@ -373,48 +379,22 @@ Analyze the return reason and respond with ONLY the category name exactly as sho
             # Log the response for debugging
             logger.info(f"AI categorized '{text[:50]}...' as: '{category}'")
             
-            # Flexible matching - handle case variations and partial matches
-            category_lower = category.lower().strip()
+            # Direct match check first
+            if category in MEDICAL_DEVICE_CATEGORIES:
+                return category
             
-            # Direct match check (case-insensitive)
+            # Try case-insensitive match
+            category_lower = category.lower().strip()
             for valid_category in MEDICAL_DEVICE_CATEGORIES:
                 if category_lower == valid_category.lower():
                     return valid_category
             
             # Check if response contains a valid category
             for valid_category in MEDICAL_DEVICE_CATEGORIES:
-                if valid_category.lower() in category_lower:
+                if valid_category.lower() in category_lower or category_lower in valid_category.lower():
                     return valid_category
             
-            # Common variations mapping
-            category_mappings = {
-                'quality': 'Product Defects/Quality',
-                'defect': 'Product Defects/Quality',
-                'broken': 'Product Defects/Quality',
-                'size': 'Size/Fit Issues',
-                'fit': 'Size/Fit Issues',
-                'performance': 'Performance/Effectiveness',
-                'injury': 'Injury/Adverse Event',
-                'adverse': 'Injury/Adverse Event',
-                'safety': 'Stability/Safety Issues',
-                'stability': 'Stability/Safety Issues',
-                'material': 'Material/Component Failure',
-                'component': 'Material/Component Failure',
-                'comfort': 'Comfort/Usability Issues',
-                'usability': 'Comfort/Usability Issues',
-                'compatibility': 'Compatibility Issues',
-                'wrong': 'Wrong Product/Labeling',
-                'labeling': 'Wrong Product/Labeling',
-                'missing': 'Missing Components',
-                'customer error': 'Customer Error',
-                'non-medical': 'Non-Medical Issue'
-            }
-            
-            for key, mapped_category in category_mappings.items():
-                if key in category_lower:
-                    return mapped_category
-            
-            # If no match found, log warning and return default
+            # If no match found, return default
             logger.warning(f"AI returned unrecognized category: '{category}'. Defaulting to Product Defects/Quality")
             return 'Product Defects/Quality'
                 
