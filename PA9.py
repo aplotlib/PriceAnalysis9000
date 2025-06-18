@@ -10,6 +10,7 @@ import numpy as np
 import logging
 from datetime import datetime
 import io
+import os
 from typing import Dict, List, Any, Optional, Union
 import plotly.express as px
 import plotly.graph_objects as go
@@ -135,7 +136,8 @@ def initialize_session_state():
         'total_rows': 0,
         'reportable_events': 0,
         'critical_events': 0,
-        'processing_stats': {}
+        'processing_stats': {},
+        'api_keys_available': False
     }
     
     for key, value in defaults.items():
@@ -440,6 +442,23 @@ def main():
     apply_custom_css()
     display_header()
     
+    # Check for API keys and show appropriate warnings
+    if AI_AVAILABLE:
+        openai_key = os.getenv('OPENAI_API_KEY') or (hasattr(st, 'secrets') and st.secrets.get('OPENAI_API_KEY'))
+        anthropic_key = os.getenv('ANTHROPIC_API_KEY') or (hasattr(st, 'secrets') and st.secrets.get('ANTHROPIC_API_KEY'))
+        st.session_state.api_keys_available = bool(openai_key or anthropic_key)
+        
+        if not st.session_state.api_keys_available:
+            st.warning("""
+            ⚠️ **AI API Keys Not Found** - Using Pattern Matching Mode
+            
+            The tool will still categorize returns using pattern matching, but AI-powered categorization provides better accuracy.
+            
+            To enable AI features, add your API key to Streamlit secrets:
+            - OpenAI: `OPENAI_API_KEY`
+            - Anthropic: `ANTHROPIC_API_KEY`
+            """)
+    
     # Sidebar
     with st.sidebar:
         st.header("📁 File Upload")
@@ -497,13 +516,18 @@ def main():
         # AI Provider selection
         if AI_AVAILABLE:
             st.subheader("🤖 AI Settings")
-            provider = st.selectbox(
-                "AI Provider",
-                options=[AIProvider.FASTEST, AIProvider.QUALITY, AIProvider.OPENAI, AIProvider.CLAUDE],
-                help="Select AI provider for categorization"
-            )
+            if st.session_state.api_keys_available:
+                provider = st.selectbox(
+                    "AI Provider",
+                    options=[AIProvider.FASTEST, AIProvider.QUALITY, AIProvider.OPENAI, AIProvider.CLAUDE],
+                    help="Select AI provider for categorization"
+                )
+            else:
+                st.info("🔌 AI providers require API keys")
+                provider = AIProvider.FASTEST  # Default value
         else:
             st.warning("⚠️ AI module not available")
+            provider = None
         
         st.divider()
         
@@ -585,11 +609,17 @@ def main():
                     
                     # Initialize AI analyzer
                     if AI_AVAILABLE and not st.session_state.ai_analyzer:
-                        st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
+                        if 'provider' in locals() and provider:
+                            st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
+                        else:
+                            st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
                     
                     # Categorize returns with progress tracking
                     if st.session_state.ai_analyzer:
-                        st.info(f"🤖 Categorizing {len(combined_df):,} returns using AI...")
+                        if st.session_state.api_keys_available:
+                            st.info(f"🤖 Categorizing {len(combined_df):,} returns using AI...")
+                        else:
+                            st.info(f"🔍 Categorizing {len(combined_df):,} returns using pattern matching...")
                         
                         # Process in chunks for large datasets
                         if len(combined_df) > chunk_size:
