@@ -14,9 +14,9 @@ import sys
 import re
 import io
 import base64
+import traceback
 from typing import Dict, List, Tuple, Optional, Any, Union
 import logging
-import traceback
 import gc
 
 # Configure page first
@@ -310,18 +310,42 @@ def process_file(file) -> Optional[pd.DataFrame]:
         file_type = file.type if hasattr(file, 'type') else 'unknown'
         file_name = file.name if hasattr(file, 'name') else 'unknown'
         
+        # Log file info
+        logger.info(f"Processing file: {file_name}, type: {file_type}, size: {file.size if hasattr(file, 'size') else 'unknown'}")
+        
         # Use FileProcessor
         df = FileProcessor.read_file(file, file_type)
         
-        # Add source file column
-        if not df.empty:
-            df['source_file'] = file_name
+        # Check if DataFrame is valid
+        if df is None:
+            logger.error(f"FileProcessor returned None for {file_name}")
+            return None
         
+        if df.empty:
+            logger.warning(f"FileProcessor returned empty DataFrame for {file_name}")
+            # For PDFs, this might mean no data was extracted
+            if 'pdf' in file_type.lower() or file_name.lower().endswith('.pdf'):
+                st.warning(f"⚠️ No data extracted from {file_name}. The PDF might be image-based or have an unsupported format.")
+            return None
+        
+        # Add source file column
+        df['source_file'] = file_name
+        
+        logger.info(f"Successfully processed {file_name}: {df.shape}")
         return df
             
     except Exception as e:
         logger.error(f"Error processing file {file_name}: {e}")
-        st.error(f"Error processing {file_name}: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        
+        # Provide more specific error messages
+        if "Reindexing" in str(e):
+            st.error(f"❌ {file_name}: PDF has duplicate column headers. Please check the PDF format.")
+        elif "No module named" in str(e):
+            st.error(f"❌ {file_name}: Missing required library. Please install: pip install pdfplumber")
+        else:
+            st.error(f"❌ {file_name}: {str(e)}")
+        
         return None
 
 def detect_quality_issues(df: pd.DataFrame) -> Dict[str, Any]:
