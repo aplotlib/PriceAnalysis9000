@@ -185,6 +185,10 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
                 file_type = 'text/plain'
             elif file.name.lower().endswith('.tsv'):
                 file_type = 'text/tab-separated-values'
+            elif file.name.lower().endswith('.xlsx'):
+                file_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            elif file.name.lower().endswith('.xls'):
+                file_type = 'application/vnd.ms-excel'
             
             logger.info(f"Processing {file.name} as {file_type}")
             
@@ -197,12 +201,44 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
             # Log column information
             logger.info(f"File {file.name} has columns: {list(df.columns)}")
             
-            # Show sample of data
-            if len(df) > 0:
-                st.expander(f"📄 Preview of {file.name}").dataframe(df.head(5))
+            # Show detailed preview for first file
+            if idx == 0:
+                with st.expander(f"📄 Detailed Preview of {file.name}", expanded=True):
+                    st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
+                    st.write("**Columns:**")
+                    
+                    # Show column info in a nice format
+                    col_info = []
+                    for col in df.columns[:20]:  # Show first 20 columns
+                        non_null = df[col].notna().sum()
+                        sample_val = df[col].dropna().iloc[0] if non_null > 0 else "N/A"
+                        col_info.append({
+                            'Column': col,
+                            'Non-Null': f"{non_null}/{len(df)}",
+                            'Sample': str(sample_val)[:50]
+                        })
+                    st.dataframe(pd.DataFrame(col_info), use_container_width=True)
+                    
+                    st.write("**Data Preview:**")
+                    st.dataframe(df.head(10), use_container_width=True)
+            else:
+                # Shorter preview for other files
+                with st.expander(f"📄 Preview of {file.name}"):
+                    st.write(f"Shape: {df.shape}")
+                    st.dataframe(df.head(5))
             
             all_dataframes.append(df)
-            file_stats[file.name] = {'rows': len(df), 'status': 'Success', 'columns': len(df.columns)}
+            file_stats[file.name] = {
+                'rows': len(df), 
+                'status': 'Success', 
+                'columns': len(df.columns),
+                'key_columns': {
+                    'order-id': 'order-id' in df.columns,
+                    'reason': 'reason' in df.columns,
+                    'customer-comments': 'customer-comments' in df.columns,
+                    'asin': 'asin' in df.columns
+                }
+            }
             
             # Clear memory for large files
             if len(df) > 10000:
@@ -247,6 +283,17 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
                 2. Try printing the PDF with "Print as Table" option
                 3. Copy data from PDF to Excel and save as CSV
                 """)
+            elif "codec" in error_msg or "decode" in error_msg:
+                st.error(f"""
+                ❌ File encoding issue in {file.name}
+                
+                The file contains special characters that couldn't be read.
+                
+                **Solutions:**
+                1. Open in Excel and save as "CSV UTF-8" format
+                2. Remove special characters (™, ®, –) from the file
+                3. Use "Save As" with UTF-8 encoding option
+                """)
             else:
                 st.warning(f"Error processing {file.name}: {error_msg}")
     
@@ -255,24 +302,64 @@ def process_multiple_files(uploaded_files: List) -> pd.DataFrame:
     
     # Combine all dataframes
     if all_dataframes:
+        # Concatenate with outer join to preserve all columns
         combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+        
+        # Fill NaN values with empty strings for text columns
+        text_columns = ['order-id', 'asin', 'sku', 'reason', 'customer-comments', 'product-name']
+        for col in text_columns:
+            if col in combined_df.columns:
+                combined_df[col] = combined_df[col].fillna('')
         
         # Display processing stats
         st.success(f"✅ Successfully processed {len(all_dataframes)} file(s) with {len(combined_df):,} total rows")
         
-        # Show file stats
-        with st.expander("📊 File Processing Summary"):
+        # Show file stats with key column detection
+        with st.expander("📊 File Processing Summary", expanded=True):
+            summary_data = []
             for filename, stats in file_stats.items():
                 if stats['status'] == 'Success':
-                    st.write(f"✅ {filename}: {stats['rows']:,} rows, {stats['columns']} columns")
+                    key_cols = stats.get('key_columns', {})
+                    col_status = []
+                    for col_name, found in key_cols.items():
+                        col_status.append(f"{'✓' if found else '✗'} {col_name}")
+                    
+                    summary_data.append({
+                        'File': filename,
+                        'Rows': f"{stats['rows']:,}",
+                        'Columns': stats['columns'],
+                        'Key Columns': ' | '.join(col_status),
+                        'Status': '✅ Success'
+                    })
                 else:
-                    st.write(f"❌ {filename}: {stats['status']}")
+                    summary_data.append({
+                        'File': filename,
+                        'Rows': 0,
+                        'Columns': 0,
+                        'Key Columns': 'N/A',
+                        'Status': f"❌ {stats['status']}"
+                    })
+            
+            st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
         
         # Show combined data preview
         with st.expander("🔍 Combined Data Preview"):
-            st.write(f"Total rows: {len(combined_df):,}")
-            st.write(f"Columns: {list(combined_df.columns)}")
-            st.dataframe(combined_df.head(10))
+            st.write(f"**Total Shape:** {combined_df.shape[0]} rows × {combined_df.shape[1]} columns")
+            
+            # Show which columns are available
+            st.write("**Available Columns:**")
+            cols_per_row = 4
+            cols = st.columns(cols_per_row)
+            for idx, col in enumerate(combined_df.columns[:20]):
+                with cols[idx % cols_per_row]:
+                    non_null_pct = (combined_df[col].notna().sum() / len(combined_df) * 100)
+                    st.write(f"• {col} ({non_null_pct:.0f}%)")
+            
+            if len(combined_df.columns) > 20:
+                st.write(f"... and {len(combined_df.columns) - 20} more columns")
+            
+            st.write("**Data Sample:**")
+            st.dataframe(combined_df.head(10), use_container_width=True)
         
         return combined_df
     else:
@@ -474,8 +561,8 @@ def main():
     
     # Check for API keys and show appropriate warnings
     if AI_AVAILABLE:
-        openai_key = os.getenv('OPENAI_API_KEY') or (hasattr(st, 'secrets') and st.secrets.get('OPENAI_API_KEY'))
-        anthropic_key = os.getenv('ANTHROPIC_API_KEY') or (hasattr(st, 'secrets') and st.secrets.get('ANTHROPIC_API_KEY'))
+        openai_key = (hasattr(st, 'secrets') and st.secrets.get('OPENAI_API_KEY')) or os.getenv('OPENAI_API_KEY')
+        anthropic_key = (hasattr(st, 'secrets') and st.secrets.get('ANTHROPIC_API_KEY')) or os.getenv('ANTHROPIC_API_KEY')
         st.session_state.api_keys_available = bool(openai_key or anthropic_key)
         
         if not st.session_state.api_keys_available:
@@ -559,15 +646,19 @@ def main():
                         test_analyzer = EnhancedAIAnalyzer(provider)
                         test_results = test_analyzer.test_ai_connection()
                         
-                        if test_results['results']:
+                        if test_results['status'] == 'AI connection successful':
                             st.success("✅ AI is working!")
-                            for result in test_results['results']:
-                                if result['correct']:
-                                    st.write(f"✓ '{result['text']}' → {result['actual']}")
-                                else:
-                                    st.write(f"✗ '{result['text']}' → Expected: {result['expected']}, Got: {result['actual']}")
+                            if test_results.get('results'):
+                                for result in test_results['results']:
+                                    if not result['actual'].startswith('Error:'):
+                                        st.write(f"✓ '{result['text']}' → {result['actual']}")
+                                    else:
+                                        st.write(f"✗ '{result['text']}' → {result['actual']}")
                         else:
-                            st.error("❌ AI test failed")
+                            st.error(f"❌ {test_results['status']}")
+                            if test_results.get('results'):
+                                for result in test_results['results']:
+                                    st.write(f"• '{result['text']}' → {result['actual']}")
             else:
                 st.info("🔌 AI providers require API keys")
                 provider = AIProvider.FASTEST  # Default value
@@ -665,79 +756,103 @@ def main():
             
             start_time = time.time()
             
+            # Clear any previous errors
+            st.session_state.processing_complete = False
+            st.session_state.processed_data = None
+            
             with st.spinner("Processing files and categorizing returns..."):
                 # Process all files
                 combined_df = process_multiple_files(uploaded_files)
                 
-                if combined_df is not None:
+                if combined_df is not None and not combined_df.empty:
                     st.session_state.combined_data = combined_df
                     st.session_state.total_rows = len(combined_df)
                     
                     # Initialize AI analyzer
-                    if AI_AVAILABLE and not st.session_state.ai_analyzer:
-                        if 'provider' in locals() and provider:
-                            st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
-                        else:
-                            st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
+                    try:
+                        if AI_AVAILABLE and not st.session_state.ai_analyzer:
+                            if 'provider' in locals() and provider:
+                                st.session_state.ai_analyzer = EnhancedAIAnalyzer(provider)
+                            else:
+                                st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
+                    except Exception as e:
+                        logger.error(f"Failed to initialize analyzer: {e}")
+                        st.warning("Using pattern matching mode due to initialization error")
+                        st.session_state.ai_analyzer = EnhancedAIAnalyzer(AIProvider.FASTEST)
                     
                     # Categorize returns with progress tracking
                     if st.session_state.ai_analyzer:
-                        # Get analyzer status
-                        analyzer_status = st.session_state.ai_analyzer.get_status()
-                        
-                        if analyzer_status['ai_available']:
-                            st.info(f"🤖 Categorizing {len(combined_df):,} returns using {analyzer_status['provider']} AI (Model: {analyzer_status['model']})...")
-                        else:
-                            st.info(f"🔍 Categorizing {len(combined_df):,} returns using enhanced pattern matching...")
-                            st.warning("""
-                            💡 **Tip**: For better categorization accuracy, add an API key:
-                            - OpenAI: Add `OPENAI_API_KEY` to Streamlit secrets
-                            - Claude: Add `ANTHROPIC_API_KEY` to Streamlit secrets
-                            """)
-                        
-                        # Process in chunks for large datasets
-                        if len(combined_df) > chunk_size:
-                            processed_chunks = []
-                            total_chunks = len(combined_df) // chunk_size + 1
-                            
-                            progress_bar = st.progress(0)
-                            for i in range(0, len(combined_df), chunk_size):
-                                chunk = combined_df.iloc[i:i+chunk_size]
-                                processed_chunk = st.session_state.ai_analyzer.batch_categorize(chunk)
-                                processed_chunks.append(processed_chunk)
+                        try:
+                            # Get analyzer status - check if method exists
+                            if hasattr(st.session_state.ai_analyzer, 'get_status'):
+                                analyzer_status = st.session_state.ai_analyzer.get_status()
                                 
-                                progress = (i + chunk_size) / len(combined_df)
-                                progress_bar.progress(min(progress, 1.0))
+                                if analyzer_status['ai_available']:
+                                    st.info(f"🤖 Categorizing {len(combined_df):,} returns using {analyzer_status['provider']} AI (Model: {analyzer_status['model']})...")
+                                else:
+                                    st.info(f"🔍 Categorizing {len(combined_df):,} returns using enhanced pattern matching...")
+                                    st.warning("""
+                                    💡 **Tip**: For better categorization accuracy, add an API key:
+                                    - OpenAI: Add `OPENAI_API_KEY` to Streamlit secrets
+                                    - Claude: Add `ANTHROPIC_API_KEY` to Streamlit secrets
+                                    """)
+                            else:
+                                # Fallback for older analyzer versions
+                                if st.session_state.api_keys_available:
+                                    st.info(f"🤖 Categorizing {len(combined_df):,} returns using AI...")
+                                else:
+                                    st.info(f"🔍 Categorizing {len(combined_df):,} returns using pattern matching...")
                             
-                            progress_bar.empty()
-                            processed_df = pd.concat(processed_chunks, ignore_index=True)
-                        else:
-                            processed_df = st.session_state.ai_analyzer.batch_categorize(combined_df)
-                        
-                        st.session_state.processed_data = processed_df
-                        st.session_state.categorization_complete = True
-                        
-                        # Generate FDA report
-                        fda_report = st.session_state.ai_analyzer.generate_fda_report(processed_df)
-                        st.session_state.fda_report = fda_report
-                        st.session_state.processing_complete = True
-                        
-                        # Processing stats
-                        processing_time = time.time() - start_time
-                        st.session_state.processing_stats = {
-                            'time': processing_time,
-                            'rows_per_second': len(combined_df) / processing_time,
-                            'api_calls': st.session_state.ai_analyzer.api_calls
-                        }
-                        
-                        st.success(f"""
-                        ✅ Processing Complete!
-                        - Total returns: {len(processed_df):,}
-                        - Processing time: {processing_time:.1f} seconds
-                        - Speed: {len(combined_df) / processing_time:.0f} returns/second
-                        """)
+                            # Process in chunks for large datasets
+                            if len(combined_df) > chunk_size:
+                                processed_chunks = []
+                                total_chunks = len(combined_df) // chunk_size + 1
+                                
+                                progress_bar = st.progress(0)
+                                for i in range(0, len(combined_df), chunk_size):
+                                    chunk = combined_df.iloc[i:i+chunk_size].copy()
+                                    processed_chunk = st.session_state.ai_analyzer.batch_categorize(chunk)
+                                    processed_chunks.append(processed_chunk)
+                                    
+                                    progress = (i + chunk_size) / len(combined_df)
+                                    progress_bar.progress(min(progress, 1.0))
+                                
+                                progress_bar.empty()
+                                processed_df = pd.concat(processed_chunks, ignore_index=True)
+                            else:
+                                processed_df = st.session_state.ai_analyzer.batch_categorize(combined_df.copy())
+                            
+                            st.session_state.processed_data = processed_df
+                            st.session_state.categorization_complete = True
+                            
+                            # Generate FDA report
+                            fda_report = st.session_state.ai_analyzer.generate_fda_report(processed_df)
+                            st.session_state.fda_report = fda_report
+                            st.session_state.processing_complete = True
+                            
+                            # Processing stats
+                            processing_time = time.time() - start_time
+                            st.session_state.processing_stats = {
+                                'time': processing_time,
+                                'rows_per_second': len(combined_df) / processing_time if processing_time > 0 else 0,
+                                'api_calls': getattr(st.session_state.ai_analyzer, 'api_calls', 0)
+                            }
+                            
+                            st.success(f"""
+                            ✅ Processing Complete!
+                            - Total returns: {len(processed_df):,}
+                            - Processing time: {processing_time:.1f} seconds
+                            - Speed: {len(combined_df) / processing_time:.0f} returns/second
+                            """)
+                            
+                        except Exception as e:
+                            logger.error(f"Error during categorization: {e}")
+                            st.error(f"Error during categorization: {str(e)}")
+                            st.info("Please check your data format and try again")
                     else:
                         st.error("AI analyzer not available")
+                else:
+                    st.error("No data to process. Please check your files and try again.")
     
     # Display results
     if st.session_state.processing_complete:
@@ -758,42 +873,45 @@ def main():
         with tab3:
             st.header("📋 Complete Processed Data")
             
-            # Filters
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                category_filter = st.multiselect(
-                    "Filter by Category",
-                    options=st.session_state.processed_data['category'].unique().tolist(),
-                    default=[]
-                )
-            
-            with col2:
-                if 'severity' in st.session_state.processed_data.columns:
-                    severity_filter = st.multiselect(
-                        "Filter by Severity",
-                        options=st.session_state.processed_data['severity'].dropna().unique().tolist(),
+            if st.session_state.processed_data is not None and not st.session_state.processed_data.empty:
+                # Filters
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    category_filter = st.multiselect(
+                        "Filter by Category",
+                        options=st.session_state.processed_data['category'].unique().tolist() if 'category' in st.session_state.processed_data.columns else [],
                         default=[]
                     )
-                else:
-                    severity_filter = []
-            
-            with col3:
-                show_fda_only = st.checkbox("Show FDA Reportable Only", value=False)
-            
-            # Apply filters
-            filtered_df = st.session_state.processed_data.copy()
-            
-            if category_filter:
-                filtered_df = filtered_df[filtered_df['category'].isin(category_filter)]
-            
-            if severity_filter:
-                filtered_df = filtered_df[filtered_df['severity'].isin(severity_filter)]
-            
-            if show_fda_only:
-                filtered_df = filtered_df[filtered_df['fda_reportable'] == True]
-            
-            st.dataframe(filtered_df, use_container_width=True, height=600)
+                
+                with col2:
+                    if 'severity' in st.session_state.processed_data.columns:
+                        severity_filter = st.multiselect(
+                            "Filter by Severity",
+                            options=[x for x in st.session_state.processed_data['severity'].dropna().unique().tolist() if x],
+                            default=[]
+                        )
+                    else:
+                        severity_filter = []
+                
+                with col3:
+                    show_fda_only = st.checkbox("Show FDA Reportable Only", value=False)
+                
+                # Apply filters
+                filtered_df = st.session_state.processed_data.copy()
+                
+                if category_filter and 'category' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['category'].isin(category_filter)]
+                
+                if severity_filter and 'severity' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['severity'].isin(severity_filter)]
+                
+                if show_fda_only and 'fda_reportable' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['fda_reportable'] == True]
+                
+                st.dataframe(filtered_df, use_container_width=True, height=600)
+            else:
+                st.info("No processed data available yet. Please run the analysis first.")
         
         with tab4:
             st.header("💾 Export Options")
