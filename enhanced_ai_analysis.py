@@ -323,27 +323,104 @@ class EnhancedAIAnalyzer:
             'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
             'product_name': product_name,
             'asin': asin
-        }95
-        else:
-            # Enhanced pattern matching fallback
-            category, confidence = self._pattern_match_categorize(reason, full_text)
-        
-        # Override category if injury detected
-        if fda_analysis['is_reportable'] and fda_analysis['severity'] in ['CRITICAL', 'HIGH']:
-            category = 'Injury/Adverse Event'
-            confidence = 1.0
-        
-        return {
-            'category': category,
-            'confidence': confidence,
-            'fda_reportable': fda_analysis['is_reportable'],
-            'severity': fda_analysis['severity'],
-            'event_types': fda_analysis['event_types'],
-            'requires_mdr': fda_analysis['severity'] in ['CRITICAL', 'HIGH'] if fda_analysis['severity'] else False,
-            'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
-            'product_name': product_name,
-            'asin': asin
         }
+    
+    def _ai_categorize(self, text: str, product_name: str) -> str:
+        """Use AI to categorize return reason"""
+        if not self.ai_client:
+            return 'Product Defects/Quality'
+        
+        prompt = f"""You are analyzing Amazon return reasons for medical devices. Categorize the following return into EXACTLY ONE of these categories:
+
+1. Product Defects/Quality - broken, defective, damaged, poor quality, doesn't work
+2. Size/Fit Issues - too small, too large, doesn't fit, wrong size
+3. Performance/Effectiveness - doesn't work as expected, ineffective, poor performance
+4. Injury/Adverse Event - injury, hurt, pain, hospital, medical attention
+5. Stability/Safety Issues - unstable, tips over, falls, unsafe
+6. Material/Component Failure - material defect, component broke, parts failed
+7. Comfort/Usability Issues - uncomfortable, hard to use, difficult
+8. Compatibility Issues - not compatible, doesn't fit with other products
+9. Wrong Product/Labeling - wrong item, not as described, incorrect product
+10. Missing Components - missing parts, incomplete
+11. Customer Error - user mistake, ordered wrong, misunderstood
+12. Non-Medical Issue - price, shipping, no longer needed, changed mind
+
+Product: {product_name if product_name else 'Unknown'}
+Return Reason: {text}
+
+Analyze the return reason and respond with ONLY the category name exactly as shown above. Nothing else."""
+        
+        try:
+            if isinstance(self.ai_client, openai.OpenAI):
+                response = self.ai_client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=50
+                )
+                category = response.choices[0].message.content.strip()
+            else:  # Claude
+                response = self.ai_client.messages.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=50
+                )
+                category = response.content[0].text.strip()
+            
+            self.api_calls += 1
+            
+            # Log the response for debugging
+            logger.info(f"AI categorized '{text[:50]}...' as: '{category}'")
+            
+            # Flexible matching - handle case variations and partial matches
+            category_lower = category.lower().strip()
+            
+            # Direct match check (case-insensitive)
+            for valid_category in MEDICAL_DEVICE_CATEGORIES:
+                if category_lower == valid_category.lower():
+                    return valid_category
+            
+            # Check if response contains a valid category
+            for valid_category in MEDICAL_DEVICE_CATEGORIES:
+                if valid_category.lower() in category_lower:
+                    return valid_category
+            
+            # Common variations mapping
+            category_mappings = {
+                'quality': 'Product Defects/Quality',
+                'defect': 'Product Defects/Quality',
+                'broken': 'Product Defects/Quality',
+                'size': 'Size/Fit Issues',
+                'fit': 'Size/Fit Issues',
+                'performance': 'Performance/Effectiveness',
+                'injury': 'Injury/Adverse Event',
+                'adverse': 'Injury/Adverse Event',
+                'safety': 'Stability/Safety Issues',
+                'stability': 'Stability/Safety Issues',
+                'material': 'Material/Component Failure',
+                'component': 'Material/Component Failure',
+                'comfort': 'Comfort/Usability Issues',
+                'usability': 'Comfort/Usability Issues',
+                'compatibility': 'Compatibility Issues',
+                'wrong': 'Wrong Product/Labeling',
+                'labeling': 'Wrong Product/Labeling',
+                'missing': 'Missing Components',
+                'customer error': 'Customer Error',
+                'non-medical': 'Non-Medical Issue'
+            }
+            
+            for key, mapped_category in category_mappings.items():
+                if key in category_lower:
+                    return mapped_category
+            
+            # If no match found, log warning and return default
+            logger.warning(f"AI returned unrecognized category: '{category}'. Defaulting to Product Defects/Quality")
+            return 'Product Defects/Quality'
+                
+        except Exception as e:
+            logger.error(f"AI categorization failed: {e}")
+            return 'Product Defects/Quality'
     
     def _pattern_match_categorize(self, reason: str, full_text: str) -> tuple[str, float]:
         """Enhanced pattern matching for categorization when AI is not available"""
@@ -446,140 +523,7 @@ class EnhancedAIAnalyzer:
             elif 'DAMAGED' in reason_upper:
                 return 'Product Defects/Quality', 0.7
         
-        return best_category, best_confidence95
-        else:
-            # Fallback to FBA mapping and pattern matching
-            if reason in FBA_REASON_MAP:
-                category = FBA_REASON_MAP.get(reason, 'Product Defects/Quality')
-                confidence = 0.8
-            else:
-                # Basic pattern matching fallback
-                text_lower = full_text.lower()
-                if any(keyword in text_lower for keyword in ['too small', 'too large', 'size', 'fit']):
-                    category = 'Size/Fit Issues'
-                elif any(keyword in text_lower for keyword in ['broken', 'defective', 'damaged', 'quality']):
-                    category = 'Product Defects/Quality'
-                elif any(keyword in text_lower for keyword in ['wrong', 'incorrect', 'not as described']):
-                    category = 'Wrong Product/Labeling'
-                elif any(keyword in text_lower for keyword in ['mistake', 'accident', 'error']):
-                    category = 'Customer Error'
-                else:
-                    category = 'Product Defects/Quality'
-                confidence = 0.6
-        
-        # Override category if injury detected
-        if fda_analysis['is_reportable'] and fda_analysis['severity'] in ['CRITICAL', 'HIGH']:
-            category = 'Injury/Adverse Event'
-            confidence = 1.0
-        
-        return {
-            'category': category,
-            'confidence': confidence,
-            'fda_reportable': fda_analysis['is_reportable'],
-            'severity': fda_analysis['severity'],
-            'event_types': fda_analysis['event_types'],
-            'requires_mdr': fda_analysis['severity'] in ['CRITICAL', 'HIGH'] if fda_analysis['severity'] else False,
-            'requires_immediate_review': fda_analysis.get('requires_immediate_review', False),
-            'product_name': product_name,
-            'asin': asin
-        }
-    
-    def _ai_categorize(self, text: str, product_name: str) -> str:
-        """Use AI to categorize return reason"""
-        if not self.ai_client:
-            return 'Product Defects/Quality'
-        
-        prompt = f"""You are analyzing Amazon return reasons for medical devices. Categorize the following return into EXACTLY ONE of these categories:
-
-1. Product Defects/Quality - broken, defective, damaged, poor quality, doesn't work
-2. Size/Fit Issues - too small, too large, doesn't fit, wrong size
-3. Performance/Effectiveness - doesn't work as expected, ineffective, poor performance
-4. Injury/Adverse Event - injury, hurt, pain, hospital, medical attention
-5. Stability/Safety Issues - unstable, tips over, falls, unsafe
-6. Material/Component Failure - material defect, component broke, parts failed
-7. Comfort/Usability Issues - uncomfortable, hard to use, difficult
-8. Compatibility Issues - not compatible, doesn't fit with other products
-9. Wrong Product/Labeling - wrong item, not as described, incorrect product
-10. Missing Components - missing parts, incomplete
-11. Customer Error - user mistake, ordered wrong, misunderstood
-12. Non-Medical Issue - price, shipping, no longer needed, changed mind
-
-Product: {product_name if product_name else 'Unknown'}
-Return Reason: {text}
-
-Analyze the return reason and respond with ONLY the category name exactly as shown above. Nothing else."""
-        
-        try:
-            if isinstance(self.ai_client, openai.OpenAI):
-                response = self.ai_client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    max_tokens=50
-                )
-                category = response.choices[0].message.content.strip()
-            else:  # Claude
-                response = self.ai_client.messages.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    max_tokens=50
-                )
-                category = response.content[0].text.strip()
-            
-            self.api_calls += 1
-            
-            # Log the response for debugging
-            logger.info(f"AI categorized '{text[:50]}...' as: '{category}'")
-            
-            # Flexible matching - handle case variations and partial matches
-            category_lower = category.lower().strip()
-            
-            # Direct match check (case-insensitive)
-            for valid_category in MEDICAL_DEVICE_CATEGORIES:
-                if category_lower == valid_category.lower():
-                    return valid_category
-            
-            # Check if response contains a valid category
-            for valid_category in MEDICAL_DEVICE_CATEGORIES:
-                if valid_category.lower() in category_lower:
-                    return valid_category
-            
-            # Common variations mapping
-            category_mappings = {
-                'quality': 'Product Defects/Quality',
-                'defect': 'Product Defects/Quality',
-                'broken': 'Product Defects/Quality',
-                'size': 'Size/Fit Issues',
-                'fit': 'Size/Fit Issues',
-                'performance': 'Performance/Effectiveness',
-                'injury': 'Injury/Adverse Event',
-                'adverse': 'Injury/Adverse Event',
-                'safety': 'Stability/Safety Issues',
-                'stability': 'Stability/Safety Issues',
-                'material': 'Material/Component Failure',
-                'component': 'Material/Component Failure',
-                'comfort': 'Comfort/Usability Issues',
-                'usability': 'Comfort/Usability Issues',
-                'compatibility': 'Compatibility Issues',
-                'wrong': 'Wrong Product/Labeling',
-                'labeling': 'Wrong Product/Labeling',
-                'missing': 'Missing Components',
-                'customer error': 'Customer Error',
-                'non-medical': 'Non-Medical Issue'
-            }
-            
-            for key, mapped_category in category_mappings.items():
-                if key in category_lower:
-                    return mapped_category
-            
-            # If no match found, log warning and return default
-            logger.warning(f"AI returned unrecognized category: '{category}'. Defaulting to Product Defects/Quality")
-            return 'Product Defects/Quality'
-                
-        except Exception as e:
-            logger.error(f"AI categorization failed: {e}")
-            return 'Product Defects/Quality'
+        return best_category, best_confidence
     
     def batch_categorize(self, df: pd.DataFrame, 
                         reason_col: str = 'reason',
@@ -1082,60 +1026,6 @@ class FileProcessor:
                         return result
                     else:
                         raise ValueError("Failed to extract data from PDF")
-                    
-                    # Combine all extracted data
-                    if all_data:
-                        # Concatenate DataFrames more carefully
-                        try:
-                            if len(all_data) == 1:
-                                result = all_data[0]
-                            else:
-                                # Ensure no duplicate columns before concatenation
-                                result = pd.DataFrame()
-                                for df_idx, df in enumerate(all_data):
-                                    # Make all column names unique for this dataframe
-                                    df.columns = [f"{col}_{df_idx}" if col in result.columns else col for col in df.columns]
-                                    if result.empty:
-                                        result = df
-                                    else:
-                                        result = pd.concat([result, df], axis=0, ignore_index=True, sort=False)
-                        except Exception as e:
-                            logger.warning(f"Error concatenating PDF data: {e}")
-                            # If concatenation fails, just use the first table
-                            if all_data:
-                                result = all_data[0]
-                            else:
-                                raise ValueError("Could not process PDF tables")
-                    elif text_data:
-                        # Parse text data
-                        if '\t' in text_data[0]:
-                            data_rows = []
-                            for line in text_data:
-                                data_rows.append(line.split('\t'))
-                            
-                            # Find max columns
-                            max_cols = max(len(row) for row in data_rows)
-                            
-                            # Pad rows to have same number of columns
-                            for row in data_rows:
-                                while len(row) < max_cols:
-                                    row.append('')
-                            
-                            # Create DataFrame with generic column names
-                            col_names = [f'Column_{i}' for i in range(max_cols)]
-                            result = pd.DataFrame(data_rows, columns=col_names)
-                        else:
-                            result = pd.DataFrame([line.split('|') for line in text_data])
-                    else:
-                        raise ValueError("No data could be extracted from PDF")
-                    
-                    # Clean up the dataframe
-                    result = result.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
-                    
-                    # Try to identify and standardize column names for Amazon returns
-                    result = FileProcessor._standardize_amazon_columns(result)
-                    
-                    return result
                 
                 else:  # PyPDF2
                     import PyPDF2
@@ -1262,7 +1152,6 @@ class FileProcessor:
                         file.seek(0)
                         df = pd.read_csv(file, sep='\t', encoding=encoding, low_memory=False, on_bad_lines='skip')
                         if len(df) > 0:
-                            # Standardize columns
                             df = FileProcessor._standardize_amazon_columns(df)
                             return df
                     except Exception as e:
